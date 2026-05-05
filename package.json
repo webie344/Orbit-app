@@ -1,0 +1,8 @@
+{
+  "name": "orbit",
+  "version": "1.0.0",
+  "description": "Orbit social app",
+  "dependencies": {
+    "web-push": "^3.6.7"
+  }
+}

@@ -1,0 +1,1018 @@
+/* =================================================================
+   Orbit — features.css
+   Styles for: Orbit Score · Tech Stack · Build in Public ·
+   Project Showcase · Orbit Spaces · Daily Challenges ·
+   Skill Badges · Mentorship · Constellation View · Code Snippets
+   ================================================================= */
+
+/* ── Code Snippets ──────────────────────────────────────────────── */
+.orbit-code-wrap {
+  position: relative;
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin: 10px 0;
+  border: 1px solid var(--line);
+}
+.orbit-code-wrap pre {
+  margin: 0;
+  overflow-x: auto;
+  background: #1a1b26 !important;
+  padding: 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.orbit-code-lang {
+  background: rgba(124, 92, 255, 0.18);
+  color: var(--grad-1);
+  font-size: 11px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.orbit-code-copy {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.7);
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  transition: background var(--speed);
+  z-index: 2;
+}
+.orbit-code-copy:hover { background: rgba(255, 255, 255, 0.18); color: #fff; }
+
+/* ── Orbit Score Badge ──────────────────────────────────────────── */
+.orbit-score-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  cursor: default;
+  margin-left: 8px;
+}
+.orbit-score-badge i { font-size: 14px; }
+.osb-score { font-weight: 700; color: var(--text); }
+.osb-tier  { color: var(--text-mute); font-size: 11px; }
+
+/* ── Tech Stack ─────────────────────────────────────────────────── */
+.tech-stack-section {
+  padding: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.ts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.ts-title {
+  font-weight: 700;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+}
+.ts-title i { color: var(--primary); }
+.ts-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.ts-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: rgba(124, 92, 255, 0.1);
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid rgba(124, 92, 255, 0.25);
+}
+.ts-empty { color: var(--text-mute); font-size: 13px; }
+.ts-edit-btn { margin-top: 6px; }
+
+/* Tech stack editor */
+.ts-editor-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay);
+  z-index: 300;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  animation: fadeIn 160ms var(--ease);
+}
+.ts-editor-modal {
+  width: min(520px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+  background: var(--bg-elev);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-lg);
+  animation: pop-in 200ms var(--ease);
+  display: flex;
+  flex-direction: column;
+}
+.ts-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: var(--bg-elev);
+  z-index: 1;
+}
+.ts-editor-head h3 { margin: 0; font-family: var(--font-display); }
+.ts-editor-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1;
+}
+.ts-editor-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-mute);
+  margin-bottom: 6px;
+}
+.ts-selected-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 36px;
+}
+.ts-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 600;
+}
+.ts-chip button {
+  display: grid;
+  place-items: center;
+  color: var(--text-mute);
+  font-size: 13px;
+  padding: 0;
+  line-height: 1;
+}
+.ts-chip button:hover { color: var(--danger); }
+.ts-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ts-suggest-btn {
+  padding: 5px 11px;
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 500;
+  transition: background var(--speed), border-color var(--speed), color var(--speed);
+}
+.ts-suggest-btn:hover {
+  background: rgba(124, 92, 255, 0.1);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.ts-custom-row {
+  display: flex;
+  gap: 8px;
+  padding: 0 16px 16px;
+}
+.ts-custom-row input { flex: 1; }
+.ts-save-btn {
+  margin: 0 16px 16px;
+  width: calc(100% - 32px);
+}
+
+/* ── Build in Public ────────────────────────────────────────────── */
+.build-post {
+  background: linear-gradient(135deg,
+    rgba(124, 92, 255, 0.05),
+    rgba(255, 92, 174, 0.03));
+}
+.build-post-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.build-meta { flex: 1; min-width: 0; }
+.build-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  font-size: 14px;
+}
+.build-time { color: var(--text-mute); font-size: 12px; }
+.build-label {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--text-mute);
+}
+.build-stage-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.build-title {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 16px;
+  margin-bottom: 6px;
+}
+.build-desc {
+  font-size: 14px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+.build-progress-wrap { margin-top: 10px; }
+.build-progress-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-mute);
+  margin-bottom: 6px;
+}
+.build-progress-label strong { color: var(--text); }
+.build-progress-track {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--bg-elev-2);
+  overflow: hidden;
+}
+.build-progress-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.4s var(--ease);
+}
+.build-prog-preview {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--primary);
+  width: 0%;
+  transition: width 0.2s;
+}
+
+/* Build compose form (add to your HTML) */
+.build-stage-select, .build-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.build-progress-row input[type=range] { flex: 1; }
+.build-prog-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+/* ── Project Showcase ───────────────────────────────────────────── */
+.project-post { padding: 0; }
+.project-card-inner {
+  padding: 14px 16px;
+  border-left: 3px solid var(--grad-1);
+}
+.project-post-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.project-meta { flex: 1; min-width: 0; }
+.project-author { font-weight: 700; font-size: 14px; }
+.project-time   { color: var(--text-mute); font-size: 12px; }
+.project-label {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--grad-1);
+}
+.project-title {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 17px;
+  margin-bottom: 6px;
+}
+.project-desc {
+  font-size: 14px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+.project-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 12px;
+}
+.project-links {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ── Orbit Spaces ───────────────────────────────────────────────── */
+.spaces-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  padding: 16px;
+}
+.space-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: transform var(--speed), border-color var(--speed);
+}
+.space-card:hover { transform: translateY(-2px); border-color: var(--primary); }
+.space-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  font-size: 24px;
+  color: white;
+  box-shadow: 0 6px 16px rgba(0,0,0,0.2);
+  flex-shrink: 0;
+}
+.space-icon.sm { width: 36px; height: 36px; font-size: 16px; border-radius: 10px; }
+.space-name { font-weight: 800; font-size: 15px; font-family: var(--font-display); }
+.space-topic { color: var(--text-dim); font-size: 13px; line-height: 1.4; flex: 1; }
+.space-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-mute);
+  font-size: 12px;
+}
+.space-actions { display: flex; gap: 8px; margin-top: 4px; }
+.space-icon-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+}
+.space-icon-btn {
+  aspect-ratio: 1;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  transition: background var(--speed), border-color var(--speed);
+}
+.space-icon-btn:hover { background: var(--hover); border-color: var(--primary); }
+
+/* Space chat modal */
+.space-chat-modal {
+  width: min(560px, 100%);
+  height: min(600px, 90vh);
+  background: var(--bg-elev);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  animation: pop-in 200ms var(--ease);
+  overflow: hidden;
+}
+.space-msg-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.space-msg {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: 80%;
+}
+.space-msg.mine { align-self: flex-end; flex-direction: row-reverse; }
+.space-msg-body { display: flex; flex-direction: column; gap: 2px; }
+.space-msg-name { font-size: 11px; color: var(--text-mute); padding: 0 4px; }
+.space-msg-text {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  padding: 8px 12px;
+  border-radius: 14px;
+  font-size: 14px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+.space-msg.mine .space-msg-text {
+  background: var(--primary);
+  color: white;
+  border-color: transparent;
+}
+.space-compose-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-elev);
+}
+.space-msg-input {
+  flex: 1;
+  background: var(--bg-elev-2);
+  border-radius: var(--radius-pill);
+  padding: 10px 14px;
+}
+
+/* ── Daily Challenges ───────────────────────────────────────────── */
+.challenge-wrap {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.challenge-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  position: relative;
+  overflow: hidden;
+}
+.challenge-card::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--grad-1), var(--grad-2), var(--grad-3));
+}
+.challenge-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.challenge-cat {
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  background: rgba(124,92,255,0.12);
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+.challenge-diff {
+  font-size: 12px;
+  font-weight: 700;
+}
+.challenge-date {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-mute);
+}
+.challenge-title {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+.challenge-desc {
+  font-size: 15px;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+.challenge-solution {
+  border-radius: var(--radius);
+  background: #1a1b26;
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
+}
+.challenge-done {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--good);
+  font-weight: 600;
+  padding: 10px;
+  background: rgba(63,220,160,0.1);
+  border-radius: var(--radius);
+}
+
+/* Leaderboard */
+.leaderboard-wrap {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+}
+.lb-title {
+  font-weight: 700;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.lb-title i { color: var(--warn); }
+.lb-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.lb-row:last-child { border-bottom: 0; }
+.lb-rank { font-size: 18px; min-width: 28px; text-align: center; }
+.lb-info { flex: 1; min-width: 0; }
+.lb-name { font-weight: 600; font-size: 14px; }
+.lb-score { color: var(--primary); font-size: 12px; font-weight: 600; }
+.lb-empty { color: var(--text-mute); text-align: center; padding: 20px; }
+
+/* ── Skill Badges ───────────────────────────────────────────────── */
+.skill-badges-section {
+  padding: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.sb-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text-dim);
+}
+.sb-head i { color: var(--warn); }
+.sb-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sb-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 6px 12px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  transition: border-color var(--speed);
+}
+.sb-chip:hover { border-color: var(--primary); }
+.sb-chip-info { display: flex; flex-direction: column; }
+.sb-skill { font-weight: 600; font-size: 13px; }
+.sb-level { color: var(--text-mute); font-size: 11px; }
+.sb-endorse {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--text-mute);
+  font-size: 12px;
+  transition: background var(--speed), border-color var(--speed), color var(--speed);
+}
+.sb-endorse:hover { border-color: var(--primary); color: var(--primary); }
+.sb-endorse.active { background: rgba(124,92,255,0.12); border-color: var(--primary); color: var(--primary); }
+.sb-empty { color: var(--text-mute); font-size: 13px; }
+
+/* ── Mentorship ─────────────────────────────────────────────────── */
+.mentorship-wrap {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.mentor-my-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+}
+.mentor-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  font-size: 15px;
+  margin-bottom: 14px;
+  color: var(--text-dim);
+}
+.mentor-profile-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.mp-role { display: flex; align-items: center; gap: 8px; }
+.mp-role-badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.mp-role-badge.mentor {
+  background: rgba(124,92,255,0.15);
+  color: var(--grad-1);
+}
+.mp-role-badge.mentee {
+  background: rgba(255,92,174,0.15);
+  color: var(--grad-2);
+}
+.mp-info { display: grid; grid-template-columns: 120px 1fr; gap: 6px 12px; align-items: baseline; }
+.mp-label { font-size: 12px; color: var(--text-mute); font-weight: 600; }
+.mp-val   { font-size: 14px; color: var(--text); }
+.mentor-setup-prompt {
+  text-align: center;
+  padding: 10px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.mentor-setup-prompt p { color: var(--text-dim); margin: 0; }
+.mentor-divider h3 {
+  font-family: var(--font-display);
+  font-size: 17px;
+  margin: 0;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.mentor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+.mentor-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border-color var(--speed), transform var(--speed);
+}
+.mentor-card:hover { border-color: var(--primary); transform: translateY(-2px); }
+.mentor-card-info { display: flex; flex-direction: column; gap: 5px; flex: 1; }
+.mentor-card-name { font-weight: 700; font-size: 15px; }
+.mentor-card-skills, .mentor-card-avail {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.mentor-role-section { display: flex; flex-direction: column; gap: 6px; }
+.mentor-role-toggle { margin-bottom: 4px; }
+
+/* ── Constellation View ─────────────────────────────────────────── */
+.constellation-wrap {
+  padding: 20px 16px;
+  max-width: 800px;
+  margin: 0 auto;
+}
+.constellation-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 17px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.galaxy-wrap {
+  position: relative;
+  width: 100%;
+  height: 420px;
+  background: radial-gradient(ellipse at center,
+    rgba(124,92,255,0.08) 0%,
+    rgba(11,11,16,0) 70%);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.galaxy-wrap::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle, rgba(255,255,255,0.06) 1px, transparent 1px);
+  background-size: 28px 28px;
+  pointer-events: none;
+}
+.galaxy-node {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border-radius: var(--radius-pill);
+  background: linear-gradient(135deg,
+    rgba(124,92,255,0.18),
+    rgba(255,92,174,0.12));
+  border: 1px solid rgba(124,92,255,0.3);
+  color: var(--text);
+  font-weight: 700;
+  font-family: var(--font-mono);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--speed), transform var(--speed), border-color var(--speed);
+  backdrop-filter: blur(4px);
+}
+.galaxy-node:hover {
+  background: linear-gradient(135deg,
+    rgba(124,92,255,0.35),
+    rgba(255,92,174,0.25));
+  border-color: var(--primary);
+  transform: translate(-50%, -50%) scale(1.08);
+  z-index: 2;
+}
+
+/* ── Spaces / Challenges / Mentorship nav items ─────────────────── */
+.nav-item[data-route="spaces"]     i { color: var(--grad-3); }
+.nav-item[data-route="challenges"] i { color: var(--warn); }
+.nav-item[data-route="mentorship"] i { color: var(--grad-2); }
+.nav-item[data-route="spaces"].active,
+.nav-item[data-route="challenges"].active,
+.nav-item[data-route="mentorship"].active {
+  background: var(--bg-elev-2);
+  color: var(--text);
+}
+
+/* ── Compose tab additions ──────────────────────────────────────── */
+/* Build in Public compose pane — paste into your composeModal HTML:
+
+  <button class="ct" data-ctab="build">
+    <i class="ri-hammer-line"></i> Build
+  </button>
+
+  <form id="buildForm" class="compose-pane hidden">
+    <input type="text" name="buildTitle" placeholder="What are you building?" required />
+    <textarea name="buildDesc" rows="3" placeholder="Update / milestone description…"></textarea>
+    <div class="build-stage-select">
+      <label style="flex:1">Stage
+        <select name="buildStage">
+          <option value="idea">Idea</option>
+          <option value="prototype">Prototype</option>
+          <option value="beta">Beta</option>
+          <option value="live">Live</option>
+        </select>
+      </label>
+    </div>
+    <div class="build-progress-row">
+      <span>Progress</span>
+      <input type="range" name="buildProgress" min="0" max="100" value="0" />
+    </div>
+    <div class="build-prog-track">
+      <div class="build-prog-preview"></div>
+    </div>
+    <div class="compose-actions">
+      <button type="submit" class="btn primary">Post update</button>
+    </div>
+  </form>
+
+  Project Showcase compose pane:
+
+  <button class="ct" data-ctab="project">
+    <i class="ri-folder-5-line"></i> Project
+  </button>
+
+  <form id="projectForm" class="compose-pane hidden">
+    <input type="text" name="projectTitle" placeholder="Project name" required />
+    <textarea name="projectDesc" rows="3" placeholder="What does it do?"></textarea>
+    <input type="url" name="projectGithub" placeholder="GitHub URL (optional)" />
+    <input type="url" name="projectLive"   placeholder="Live URL (optional)" />
+    <input type="text" name="projectTags"  placeholder="Tech stack tags (comma-separated)" />
+    <div class="compose-actions">
+      <button type="submit" class="btn primary">Showcase</button>
+    </div>
+  </form>
+*/
+
+/* ── Build / Project post inline extras ─────────────────────────── */
+.post-kind-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  margin: 6px 0 4px;
+}
+.post-kind-build   { background: rgba(255,160,0,.14); color: var(--warn); }
+.post-kind-project { background: rgba(124,92,255,.14); color: var(--grad-1); }
+
+.post-feat-title {
+  font-size: 16px;
+  font-weight: 700;
+  font-family: var(--font-display);
+  color: var(--text);
+  cursor: pointer;
+  line-height: 1.3;
+  padding: 2px 0 6px;
+}
+.post-feat-title:hover { color: var(--primary); }
+
+.build-extra {
+  padding: 10px 0 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.project-extra {
+  padding: 8px 0 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.project-links {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ── Go Pro banner (profile About tab) ──────────────────────────── */
+.gopro-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: linear-gradient(135deg, rgba(124,92,255,.12), rgba(255,92,166,.12));
+  border: 1px solid rgba(124,92,255,.28);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin: 16px 0;
+}
+.gopro-banner-icon {
+  font-size: 28px;
+  color: var(--grad-1);
+  flex-shrink: 0;
+}
+.gopro-banner-text { flex: 1; min-width: 0; }
+.gopro-banner-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.gopro-banner-desc {
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+/* ── Go Pro modal ───────────────────────────────────────────────── */
+.gopro-modal { max-width: 420px; }
+.gopro-modal-body { padding: 0 0 8px; }
+.gopro-features {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.gopro-feature-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--text-dim);
+}
+
+/* ── Protect avatar from compression in profile head ────────────── */
+.profile-head {
+  align-items: flex-start !important;
+}
+.profile-head img.avatar {
+  flex-shrink: 0 !important;
+  align-self: flex-start;
+}
+.name-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  row-gap: 4px;
+}
+
+/* ── Pro name badge (profile header next to name) ───────────────── */
+.pro-name-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: linear-gradient(135deg, var(--grad-1), var(--grad-2));
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  vertical-align: middle;
+  margin-left: 6px;
+  letter-spacing: .03em;
+}
+.pro-name-badge i { font-size: 12px; }
+
+/* ── Pro section below profile header ───────────────────────────── */
+.profile-pro-section {
+  padding: 0 16px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* ── Pro active badge (settings) ────────────────────────────────── */
+.pro-active-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: linear-gradient(135deg, var(--grad-1), var(--grad-2));
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+
+/* ── Responsive ─────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .spaces-grid   { grid-template-columns: 1fr 1fr; }
+  .mentor-grid   { grid-template-columns: 1fr; }
+  .galaxy-wrap   { height: 300px; }
+  .challenge-wrap { padding: 12px; }
+  .mp-info { grid-template-columns: 1fr; }
+  .ts-editor-modal { max-height: 95vh; }
+  .space-icon-grid { grid-template-columns: repeat(4, 1fr); }
+}

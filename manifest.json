@@ -1,0 +1,39 @@
+{
+  "name": "Orbit — connect, share, chat",
+  "short_name": "Orbit",
+  "description": "A new gravity for your circles.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0b10",
+  "theme_color": "#0b0b10",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["social", "lifestyle"],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "Feed",
+      "url": "/#feed",
+      "description": "Go to your feed"
+    },
+    {
+      "name": "Chats",
+      "url": "/#chats",
+      "description": "Open your chats"
+    }
+  ]
+}

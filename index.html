@@ -1,0 +1,735 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+
+    <!-- ============================================================ -->
+    <!-- PWA — Theme & manifest                                        -->
+    <!-- ============================================================ -->
+    <meta name="theme-color" content="#0b0b10" />
+    <link rel="manifest" href="/manifest.json" />
+
+    <!-- ============================================================ -->
+    <!-- PWA — iOS specific tags (REQUIRED for iOS home screen)        -->
+    <!-- ============================================================ -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Orbit" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <!-- iOS splash screens (optional but recommended) -->
+    <meta name="mobile-web-app-capable" content="yes" />
+
+    <!-- ============================================================ -->
+    <!-- SEO / Open Graph                                              -->
+    <!-- ============================================================ -->
+    <title>Orbit — connect, share, chat</title>
+    <meta name="description" content="A new gravity for your circles. Connect, share, and chat on Orbit." />
+    <meta property="og:title" content="Orbit" />
+    <meta property="og:description" content="A new gravity for your circles." />
+    <meta property="og:image" content="/icon-512.png" />
+    <meta name="twitter:card" content="summary" />
+
+    <!-- ============================================================ -->
+    <!-- Fonts & icons                                                 -->
+    <!-- ============================================================ -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/remixicon@4.5.0/fonts/remixicon.css"
+    />
+    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="chat.css" />
+    <link rel="stylesheet" href="features.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  </head>
+  <body>
+    <!-- ============================================================ -->
+    <!-- BOOT SPLASH                                                   -->
+    <!-- ============================================================ -->
+    <div id="boot" class="boot">
+      <div class="boot-logo">
+        <div class="orbit-mark"><span></span><span></span><span></span></div>
+        <div class="boot-name">Orbit</div>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- AUTH SCREEN                                                   -->
+    <!-- ============================================================ -->
+    <section id="auth" class="screen auth-screen hidden">
+      <div class="auth-bg">
+        <div class="auth-blob b1"></div>
+        <div class="auth-blob b2"></div>
+        <div class="auth-blob b3"></div>
+      </div>
+      <div class="auth-card">
+        <div class="auth-brand">
+          <div class="orbit-mark sm"><span></span><span></span><span></span></div>
+          <h1>Orbit</h1>
+        </div>
+        <p class="auth-tag">A new gravity for your circles.</p>
+
+        <div class="auth-tabs">
+          <button class="auth-tab active" data-tab="signin">Sign in</button>
+          <button class="auth-tab" data-tab="signup">Create account</button>
+        </div>
+
+        <form id="signinForm" class="auth-form">
+          <label>Email
+            <input type="email" name="email" placeholder="you@orbit.app" required autocomplete="email"/>
+          </label>
+          <label>Password
+            <input type="password" name="password" placeholder="••••••••" required autocomplete="current-password"/>
+          </label>
+          <button type="submit" class="btn primary block">Enter Orbit</button>
+        </form>
+
+        <form id="signupForm" class="auth-form hidden">
+          <label>Name
+            <input type="text" name="name" placeholder="Your name" required/>
+          </label>
+          <label>Username
+            <input type="text" name="username" placeholder="@username" pattern="[a-zA-Z0-9_]{3,20}" required/>
+          </label>
+          <label>Email
+            <input type="email" name="email" placeholder="you@orbit.app" required autocomplete="email"/>
+          </label>
+          <label>Password
+            <input type="password" name="password" placeholder="At least 8 characters" required minlength="8" autocomplete="new-password"/>
+          </label>
+          <button type="submit" class="btn primary block">Create my Orbit</button>
+        </form>
+
+        <div class="auth-divider"><span>or</span></div>
+        <button id="googleBtn" class="btn ghost block">
+          <i class="ri-google-fill"></i> Continue with Google
+        </button>
+
+        <!-- Install App button — always visible on the login screen -->
+        <button id="authInstallBtn" class="btn ghost block install-app-btn">
+          <i class="ri-download-2-line"></i> Add Orbit to Home Screen
+        </button>
+
+        <div class="auth-foot">
+          <button id="themeAuthToggle" class="link"><i class="ri-contrast-2-line"></i> Switch theme</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- MAIN APP SHELL                                                -->
+    <!-- ============================================================ -->
+    <main id="app" class="app hidden">
+      <!-- Top bar -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="icon-btn only-mobile" id="openSidebar" aria-label="menu"><i class="ri-menu-line"></i></button>
+          <div class="brand" data-route="feed">
+            <div class="orbit-mark xs"><span></span><span></span><span></span></div>
+            <span class="brand-name">Orbit</span>
+          </div>
+        </div>
+        <div class="topbar-search">
+          <i class="ri-search-line"></i>
+          <input id="globalSearch" type="text" placeholder="Search people, groups, posts" />
+        </div>
+        <div class="topbar-right">
+          <button class="icon-btn" id="themeToggle" aria-label="toggle theme"><i class="ri-sun-line"></i></button>
+          <button class="icon-btn" id="notifBtn" aria-label="notifications"><i class="ri-notification-3-line"></i><span class="pill" id="notifPill" hidden>0</span></button>
+          <button class="avatar-btn" id="meBtn" aria-label="profile"><img id="meAvatar" alt="me"/></button>
+        </div>
+      </header>
+
+      <!-- Mobile sidebar backdrop -->
+      <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+      <div class="layout">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+          <nav class="nav">
+            <button class="nav-item" data-route="feed"><i class="ri-home-5-line"></i><span>Feed</span></button>
+            <button class="nav-item" data-route="reels"><i class="ri-film-line"></i><span>Reels</span></button>
+            <button class="nav-item" data-route="chats"><i class="ri-chat-3-line"></i><span>Chats</span><span class="pill" id="chatsPill" hidden>0</span></button>
+            <button class="nav-item" data-route="groups"><i class="ri-group-2-line"></i><span>Groups</span></button>
+            <button class="nav-item" data-route="explore"><i class="ri-compass-3-line"></i><span>Explore</span></button>
+            <button class="nav-item" data-route="saved"><i class="ri-bookmark-line"></i><span>Saved</span></button>
+            <button class="nav-item" data-route="settings"><i class="ri-settings-3-line"></i><span>Settings</span></button>
+            <button class="nav-item" data-route="spaces"><i class="ri-planet-line"></i><span>Spaces</span></button>
+            <button class="nav-item" data-route="challenges"><i class="ri-trophy-line"></i><span>Challenges</span></button>
+            <button class="nav-item" data-route="mentorship"><i class="ri-user-heart-line"></i><span>Mentorship</span></button>
+          </nav>
+          <button class="btn primary block compose-btn" id="composeBtn"><i class="ri-add-line"></i> Create</button>
+          <div class="sidebar-foot">
+            <button id="sidebarInstallBtn" class="btn ghost block install-app-btn" style="margin-bottom:10px;">
+              <i class="ri-download-2-line"></i> Install App
+            </button>
+            <button class="link" id="signOutBtn"><i class="ri-logout-box-r-line"></i> Sign out</button>
+          </div>
+        </aside>
+
+        <!-- Routed content -->
+        <section class="content" id="content">
+          <!-- views injected by router -->
+        </section>
+
+        <!-- Right rail (desktop) -->
+        <aside class="rightrail" id="rightrail">
+          <div class="rail-card">
+            <div class="rail-title">Suggested for you</div>
+            <div id="suggestList" class="suggest-list"></div>
+          </div>
+          <div class="rail-card">
+            <div class="rail-title">Trending in Orbit</div>
+            <div id="trendList" class="trend-list"></div>
+          </div>
+        </aside>
+      </div>
+
+      <!-- Mobile bottom nav -->
+      <nav class="bottomnav only-mobile">
+        <button class="bn" data-route="feed"><i class="ri-home-5-line"></i></button>
+        <button class="bn" data-route="reels"><i class="ri-film-line"></i></button>
+        <button class="bn compose" id="composeBtnMobile"><i class="ri-add-line"></i></button>
+        <button class="bn" data-route="chats"><i class="ri-chat-3-line"></i></button>
+        <button class="bn" data-route="profile"><i class="ri-user-line"></i></button>
+      </nav>
+    </main>
+
+    <!-- ============================================================ -->
+    <!-- COMPOSE / CREATE MODAL                                        -->
+    <!-- ============================================================ -->
+    <div class="modal hidden" id="composeModal">
+      <div class="modal-card">
+        <div class="modal-head">
+          <h3>Create</h3>
+          <button class="icon-btn" data-close-modal><i class="ri-close-line"></i></button>
+        </div>
+        <div class="compose-tabs">
+          <button class="ct active" data-ctab="post"><i class="ri-image-line"></i> Post</button>
+          <button class="ct" data-ctab="reel"><i class="ri-film-line"></i> Reel</button>
+          <button class="ct" data-ctab="experience"><i class="ri-sparkling-line"></i> Experience</button>
+          <button class="ct" data-ctab="group"><i class="ri-group-2-line"></i> Group</button>
+          <button class="ct" data-ctab="build"><i class="ri-hammer-line"></i> Build</button>
+          <button class="ct" data-ctab="project"><i class="ri-folder-5-line"></i> Project</button>
+        </div>
+
+        <form id="postForm" class="compose-pane">
+          <textarea name="text" placeholder="What's orbiting your mind? Use #hashtags and @mentions" rows="4"></textarea>
+          <input type="file" id="postMedia" accept="image/*,video/*" multiple hidden />
+          <div class="post-preview" id="postPreview"></div>
+          <div class="compose-actions">
+            <button type="button" class="icon-btn" id="postPickMedia" title="Add up to 3 images or 1 video">
+              <i class="ri-image-add-line"></i>
+            </button>
+            <button type="button" class="icon-btn" id="postLocationBtn" title="Tag your location">
+              <i class="ri-map-pin-line"></i>
+            </button>
+            <span id="postLocationTag" style="font-size:12px;color:var(--primary);display:none;"></span>
+            <span id="postFileCount" style="font-size:12px;color:var(--text-mute);"></span>
+            <button type="submit" class="btn primary">Post</button>
+          </div>
+        </form>
+
+        <form id="reelForm" class="compose-pane hidden">
+          <input type="file" id="reelMedia" accept="video/*" required />
+          <input type="text" name="caption" placeholder="Caption (optional)" />
+          <div class="compose-actions">
+            <button type="submit" class="btn primary">Upload reel</button>
+          </div>
+        </form>
+
+        <form id="experienceForm" class="compose-pane hidden">
+          <input type="text" id="expTitle" placeholder="Experience title (e.g. Hiking Yosemite)" maxlength="80" required />
+          <textarea name="description" id="expDesc" rows="3" placeholder="Describe your experience…" maxlength="500"></textarea>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <select id="expCategory" class="exp-select">
+              <option value="travel">&#x1F30D; Travel</option>
+              <option value="food">&#x1F374; Food</option>
+              <option value="adventure">&#x26F0;&#xFE0F; Adventure</option>
+              <option value="music">&#x1F3B5; Music</option>
+              <option value="fitness">&#x1F4AA; Fitness</option>
+              <option value="art">&#x1F3A8; Art</option>
+              <option value="tech">&#x1F4BB; Tech</option>
+              <option value="life">&#x2728; Life</option>
+            </select>
+            <button type="button" class="icon-btn" id="expLocationBtn" title="Tag location">
+              <i class="ri-map-pin-line"></i>
+            </button>
+            <span id="expLocationTag" style="font-size:12px;color:var(--primary);display:none;"></span>
+          </div>
+          <input type="file" id="expMedia" accept="image/*,video/*" hidden />
+          <div class="compose-actions">
+            <button type="button" class="icon-btn" id="expPickMedia" title="Add photo/video">
+              <i class="ri-image-add-line"></i>
+            </button>
+            <span id="expMediaLabel" style="font-size:12px;color:var(--text-mute);flex:1;"></span>
+            <button type="submit" class="btn primary" style="background:linear-gradient(135deg,var(--grad-1),var(--grad-2));">
+              <i class="ri-sparkling-line"></i> Share experience
+            </button>
+          </div>
+        </form>
+
+        <form id="groupForm" class="compose-pane hidden">
+          <input type="text" name="name" placeholder="Group name" required />
+          <textarea name="about" placeholder="What's this group about?" rows="3"></textarea>
+          <label class="row gap">
+            <input type="checkbox" name="isPublic" checked /> Public group (anyone can join)
+          </label>
+          <div class="compose-actions">
+            <button type="submit" class="btn primary">Create group</button>
+          </div>
+        </form>
+        <form id="buildForm" class="compose-pane hidden">
+          <input type="text" name="buildTitle" placeholder="What are you building?" required />
+          <textarea name="buildDesc" rows="3" placeholder="Update / milestone description…"></textarea>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <label style="flex:1;margin:0;">Stage
+              <select name="buildStage" style="margin-top:6px;">
+                <option value="idea">&#x1F4A1; Idea</option>
+                <option value="prototype">&#x1F6E0;&#xFE0F; Prototype</option>
+                <option value="beta">&#x26A1; Beta</option>
+                <option value="live">&#x1F7E2; Live</option>
+              </select>
+            </label>
+          </div>
+          <div class="build-progress-row">
+            <span style="font-size:13px;color:var(--text-dim);white-space:nowrap;">Progress</span>
+            <input type="range" name="buildProgress" min="0" max="100" value="0" />
+          </div>
+          <div class="build-prog-track"><div class="build-prog-preview"></div></div>
+          <div class="compose-actions">
+            <button type="submit" class="btn primary">Post update</button>
+          </div>
+        </form>
+
+        <form id="projectForm" class="compose-pane hidden">
+          <input type="text" name="projectTitle" placeholder="Project name" required />
+          <textarea name="projectDesc" rows="3" placeholder="What does it do?"></textarea>
+          <input type="url" name="projectGithub" placeholder="GitHub URL (optional)" />
+          <input type="url" name="projectLive" placeholder="Live URL (optional)" />
+          <input type="text" name="projectTags" placeholder="Tech tags, comma-separated (e.g. React, Firebase)" />
+          <div class="compose-actions">
+            <button type="submit" class="btn primary">Showcase project</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- CHAT CUSTOMIZATION DRAWER                                     -->
+    <!-- ============================================================ -->
+    <div class="drawer hidden" id="chatCustomize">
+      <div class="drawer-card">
+        <div class="modal-head">
+          <h3>Customize chat</h3>
+          <button class="icon-btn" data-close-drawer><i class="ri-close-line"></i></button>
+        </div>
+        <div class="cust-section">
+          <div class="cust-label">Wallpaper</div>
+          <div class="wallpapers" id="wallpapers"></div>
+        </div>
+        <div class="cust-section">
+          <div class="cust-label">Bubble color</div>
+          <div class="swatches" id="bubbleSwatches"></div>
+        </div>
+        <div class="cust-section">
+          <div class="cust-label">Bubble shape</div>
+          <div class="seg" id="bubbleShape">
+            <button data-shape="rounded" class="active">Rounded</button>
+            <button data-shape="balloon">Balloon</button>
+            <button data-shape="square">Square</button>
+          </div>
+        </div>
+        <div class="cust-section">
+          <div class="cust-label">Font</div>
+          <div class="seg" id="bubbleFont">
+            <button data-font="inter" class="active">Sans</button>
+            <button data-font="jakarta">Display</button>
+            <button data-font="mono">Mono</button>
+          </div>
+        </div>
+        <div class="cust-section">
+          <div class="cust-label">Text size</div>
+          <input type="range" id="bubbleSize" min="13" max="20" value="15"/>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- PROFILE EDIT MODAL                                            -->
+    <!-- ============================================================ -->
+    <div class="modal hidden" id="profileEditModal" style="display:none;">
+      <div class="modal-card pem-card">
+        <div class="modal-head">
+          <h3>Edit profile</h3>
+          <button class="icon-btn" id="profileEditClose"><i class="ri-close-line"></i></button>
+        </div>
+        <div class="pem-body">
+          <div class="pem-avatar-row">
+            <div class="avatar-upload-wrap" id="editAvatarWrap">
+              <img id="editAvatar" class="avatar xl" src="" alt="avatar" />
+              <div class="avatar-upload-overlay"><i class="ri-camera-line"></i></div>
+            </div>
+            <input type="file" id="editAvatarInput" accept="image/*" hidden />
+          </div>
+          <label class="pem-label">Name<input id="editName" type="text" maxlength="60" /></label>
+          <label class="pem-label">Username<input id="editUsername" type="text" maxlength="30" /></label>
+          <label class="pem-label">Bio<textarea id="editBio" rows="3" maxlength="200"></textarea></label>
+          <div class="pem-actions">
+            <button class="btn ghost" id="editProfileCancel">Cancel</button>
+            <button class="btn primary" id="editProfileSave"><span id="editSaveText">Save changes</span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <!-- ============================================================ -->
+    <!-- NOTIFICATIONS ENABLE BANNER                                   -->
+    <!-- ============================================================ -->
+    <div id="notifEnableBanner" class="notif-enable-banner hidden">
+      <div class="notif-enable-inner">
+        <div class="notif-enable-icon"><i class="ri-notification-3-fill"></i></div>
+        <div class="notif-enable-text">
+          <strong>Stay in the loop</strong>
+          <span>Enable notifications for messages, likes &amp; follows</span>
+        </div>
+        <button id="notifEnableBtn" class="btn primary sm">Enable</button>
+        <button id="notifEnableDismiss" class="icon-btn" aria-label="Dismiss">
+          <i class="ri-close-line"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- PWA INSTALL BANNER                                            -->
+    <!-- ============================================================ -->
+    <div id="installBanner" class="install-banner hidden">
+      <div class="install-banner-inner">
+        <img src="/icon-192.png" class="install-banner-icon" alt="Orbit" />
+        <div class="install-banner-text">
+          <strong>Add Orbit to your home screen</strong>
+          <span>Use it like a real app, no store needed</span>
+        </div>
+        <button id="installBtn" class="btn primary sm">Install</button>
+        <button id="installDismiss" class="icon-btn install-dismiss" aria-label="Dismiss">
+          <i class="ri-close-line"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- iOS install instructions modal -->
+    <div id="iosInstallModal" class="modal hidden">
+      <div class="modal-card ios-install-card">
+        <div class="modal-head">
+          <h3>Add to Home Screen</h3>
+          <button class="icon-btn" id="iosInstallClose"><i class="ri-close-line"></i></button>
+        </div>
+        <img src="/icon-192.png" class="ios-app-icon" alt="Orbit icon" />
+        <p class="ios-install-intro">Install <strong>Orbit</strong> on your iPhone in 3 taps:</p>
+        <ol class="ios-steps">
+          <li>
+            <i class="ri-share-forward-line"></i>
+            Tap the <strong>Share</strong> button at the bottom of Safari
+          </li>
+          <li>
+            <i class="ri-add-box-line"></i>
+            Scroll down and tap <strong>"Add to Home Screen"</strong>
+          </li>
+          <li>
+            <i class="ri-check-line"></i>
+            Tap <strong>"Add"</strong> — Orbit appears on your home screen!
+          </li>
+        </ol>
+        <div class="ios-install-tip">
+          <i class="ri-information-line"></i>
+          Make sure you're using <strong>Safari</strong>, not Chrome or another browser.
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- FIREBASE + APP                                                -->
+    <!-- ============================================================ -->
+    <script src="https://unpkg.com/@lottiefiles/lottie-player@2.0.8/dist/lottie-player.js"></script>
+    <script type="module" src="app.js"></script>
+    <script type="module" src="chat.js"></script>
+    <script type="module" src="notifications.js"></script>
+    <script type="module" src="features.js"></script>
+
+    <!-- ============================================================ -->
+    <!-- PWA — Register Service Worker + Install prompt               -->
+    <!-- ============================================================ -->
+    <script>
+      // ── Service Worker ───────────────────────────────────────────
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker
+            .register("/sw.js")
+            .then((reg) => console.log("Orbit SW registered:", reg.scope))
+            .catch((err) => console.error("Orbit SW error:", err));
+        });
+      }
+
+      // ── PWA Install logic ────────────────────────────────────────
+      let _deferredPrompt = null;
+      const installBanner  = document.getElementById("installBanner");
+      const installBtn     = document.getElementById("installBtn");
+      const installDismiss = document.getElementById("installDismiss");
+      const iosModal       = document.getElementById("iosInstallModal");
+      const iosClose       = document.getElementById("iosInstallClose");
+
+      // The always-visible install buttons
+      const authInstallBtn    = document.getElementById("authInstallBtn");
+      const sidebarInstallBtn = document.getElementById("sidebarInstallBtn");
+      const allInstallBtns    = [installBtn, authInstallBtn, sidebarInstallBtn];
+
+      const isIos = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
+      const isInStandaloneMode = () =>
+        window.matchMedia("(display-mode: standalone)").matches ||
+        window.navigator.standalone === true;
+
+      // Hide install buttons if already installed
+      if (isInStandaloneMode()) {
+        authInstallBtn && authInstallBtn.classList.add("hidden");
+        sidebarInstallBtn && sidebarInstallBtn.classList.add("hidden");
+        installBanner && installBanner.classList.add("hidden");
+      }
+
+      // Shared handler — Android triggers native prompt, iOS opens modal
+      const handleInstallClick = async () => {
+        if (_deferredPrompt) {
+          _deferredPrompt.prompt();
+          const { outcome } = await _deferredPrompt.userChoice;
+          _deferredPrompt = null;
+          installBanner.classList.add("hidden");
+        } else if (isIos()) {
+          iosModal.classList.remove("hidden");
+        } else {
+          // Prompt not yet ready — show iOS-style instructions as fallback
+          iosModal.classList.remove("hidden");
+        }
+      };
+
+      allInstallBtns.forEach(btn => btn && btn.addEventListener("click", handleInstallClick));
+
+      // Android / Chrome — capture the browser's install prompt
+      window.addEventListener("beforeinstallprompt", (e) => {
+        e.preventDefault();
+        _deferredPrompt = e;
+        if (!isInStandaloneMode()) {
+          installBanner.classList.remove("hidden");
+        }
+      });
+
+      // Dismiss floating banner
+      installDismiss && installDismiss.addEventListener("click", () => {
+        installBanner.classList.add("hidden");
+      });
+
+      // Show floating banner on iOS after short delay
+      if (isIos() && !isInStandaloneMode()) {
+        setTimeout(() => installBanner.classList.remove("hidden"), 2000);
+      }
+
+      // Close iOS modal
+      iosClose && iosClose.addEventListener("click", () => {
+        iosModal.classList.add("hidden");
+      });
+
+      // Hide everything once installed
+      window.addEventListener("appinstalled", () => {
+        installBanner.classList.add("hidden");
+        authInstallBtn && authInstallBtn.classList.add("hidden");
+        sidebarInstallBtn && sidebarInstallBtn.classList.add("hidden");
+        _deferredPrompt = null;
+      });
+    </script>
+
+    <!-- ============================================================ -->
+    <!-- PWA Install — inline styles                                   -->
+    <!-- ============================================================ -->
+    <style>
+      .install-banner {
+        position: fixed;
+        bottom: 0; left: 0; right: 0;
+        z-index: 999;
+        padding: 12px 16px;
+        padding-bottom: calc(12px + env(safe-area-inset-bottom));
+        background: var(--bg-elev);
+        border-top: 1px solid var(--line);
+        box-shadow: 0 -8px 32px rgba(0,0,0,0.18);
+        animation: slideUp 0.3s ease;
+      }
+      @keyframes slideUp {
+        from { transform: translateY(100%); }
+        to   { transform: translateY(0); }
+      }
+      .install-banner-inner {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        max-width: 620px;
+        margin: 0 auto;
+      }
+      .install-banner-icon {
+        width: 48px; height: 48px;
+        border-radius: 12px;
+        flex-shrink: 0;
+      }
+      .install-banner-text {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+      }
+      .install-banner-text strong {
+        font-size: 14px;
+        color: var(--text);
+      }
+      .install-banner-text span {
+        font-size: 12px;
+        color: var(--text-mute);
+      }
+      .install-dismiss {
+        flex-shrink: 0;
+        color: var(--text-mute);
+      }
+
+      /* Notifications enable banner */
+      .notif-enable-banner {
+        position: fixed;
+        top: 0; left: 0; right: 0;
+        z-index: 1000;
+        padding: 12px 16px;
+        background: linear-gradient(135deg, var(--grad-1), var(--grad-2));
+        box-shadow: 0 4px 20px rgba(124,92,255,0.4);
+        animation: slideDown 0.35s ease;
+      }
+      @keyframes slideDown {
+        from { transform: translateY(-100%); }
+        to   { transform: translateY(0); }
+      }
+      .notif-enable-inner {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        max-width: 620px;
+        margin: 0 auto;
+      }
+      .notif-enable-icon {
+        font-size: 24px;
+        color: white;
+        flex-shrink: 0;
+      }
+      .notif-enable-text {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-width: 0;
+      }
+      .notif-enable-text strong {
+        font-size: 14px;
+        color: white;
+      }
+      .notif-enable-text span {
+        font-size: 12px;
+        color: rgba(255,255,255,0.8);
+      }
+      .notif-enable-banner .icon-btn {
+        color: white;
+        flex-shrink: 0;
+      }
+      .notif-enable-banner .btn {
+        background: white;
+        color: var(--grad-1);
+        font-weight: 700;
+        flex-shrink: 0;
+      }
+
+      /* Always-visible install button */
+      .install-app-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        border: 1px solid var(--primary) !important;
+        color: var(--primary) !important;
+        font-weight: 600;
+        margin-top: 10px;
+      }
+      .install-app-btn:hover {
+        background: rgba(124, 92, 255, 0.08) !important;
+      }
+      .install-app-btn i {
+        font-size: 18px;
+      }
+
+      /* iOS install modal */
+      .ios-install-card {
+        text-align: center;
+        padding: 24px;
+      }
+      .ios-app-icon {
+        width: 80px; height: 80px;
+        border-radius: 20px;
+        margin: 0 auto 16px;
+        box-shadow: 0 8px 24px rgba(124,92,255,0.35);
+      }
+      .ios-install-intro {
+        color: var(--text-dim);
+        margin: 0 0 16px;
+        font-size: 15px;
+      }
+      .ios-steps {
+        text-align: left;
+        padding-left: 0;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        margin: 0 0 16px;
+      }
+      .ios-steps li {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 14px;
+        color: var(--text-dim);
+      }
+      .ios-steps li i {
+        font-size: 22px;
+        color: var(--primary);
+        flex-shrink: 0;
+      }
+      .ios-install-tip {
+        background: var(--bg-elev-2);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-size: 13px;
+        color: var(--text-mute);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        text-align: left;
+      }
+      .ios-install-tip i {
+        color: var(--warn);
+        font-size: 16px;
+        flex-shrink: 0;
+      }
+    </style>
+  </body>
+</html>
