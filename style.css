@@ -1445,3 +1445,114 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .icb-info { flex: 1; min-width: 0; }
 .icb-name { font-weight: 700; font-size: 15px; color: var(--text); }
 .icb-type { font-size: 12px; color: var(--text-mute); margin-top: 2px; }
+
+/* ─── Improved Call UI ───────────────────────────────────────────────────── */
+.call-topbar {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 10;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px;
+  background: linear-gradient(rgba(0,0,0,.5), transparent);
+  color: #fff;
+}
+.call-participant-count { font-size: 13px; font-weight: 600; opacity: .9; }
+.call-timer { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.call-type-badge {
+  font-size: 12px; background: rgba(255,255,255,.15);
+  padding: 3px 10px; border-radius: 999px;
+  display: flex; align-items: center; gap: 4px;
+}
+
+.call-remote-grid {
+  flex: 1; width: 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 4px; padding: 4px;
+  align-content: start;
+  overflow-y: auto;
+}
+.call-remote-peer {
+  position: relative;
+  background: #1a1a2e;
+  border-radius: 14px; overflow: hidden;
+  aspect-ratio: 3/4;
+  display: flex; align-items: center; justify-content: center;
+  transition: box-shadow .2s;
+  min-height: 140px;
+}
+.call-remote-peer.speaking {
+  box-shadow: 0 0 0 3px #22c55e, 0 0 18px rgba(34,197,94,.4);
+}
+
+.call-tile-label {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  padding: 20px 8px 8px;
+  background: linear-gradient(transparent, rgba(0,0,0,.65));
+  display: flex; align-items: center; gap: 5px;
+  color: #fff; font-size: 12px; font-weight: 600;
+}
+.call-tile-mic { font-size: 13px; opacity: .85; }
+.call-tile-mic.muted { color: #ef4444; }
+.call-tile-name { flex: 1; }
+
+.call-audio-peer {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 10px; padding: 20px;
+}
+.call-peer-name { color: #fff; font-size: 13px; font-weight: 600; text-align: center; }
+
+.call-waiting-wrap {
+  position: relative; width: 96px; height: 96px;
+  display: flex; align-items: center; justify-content: center;
+}
+.call-waiting-av {
+  width: 80px !important; height: 80px !important;
+  border-radius: 50%; position: relative; z-index: 2;
+  border: 3px solid rgba(255,255,255,.3);
+}
+.call-ripple {
+  position: absolute; inset: -8px; border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.25);
+  animation: ripple 1.8s ease-out infinite;
+}
+@keyframes ripple {
+  0%   { transform: scale(1); opacity: .6; }
+  100% { transform: scale(1.7); opacity: 0; }
+}
+
+.call-self-tile {
+  position: absolute; bottom: 90px; right: 12px;
+  width: 90px;
+  border-radius: 12px; overflow: hidden;
+  border: 2px solid rgba(255,255,255,.25);
+  z-index: 5;
+  aspect-ratio: 3/4;
+  background: #1a1a2e;
+}
+
+.call-local-video {
+  position: absolute; bottom: 90px; right: 12px;
+  width: 90px; aspect-ratio: 3/4;
+  border-radius: 12px; object-fit: cover;
+  border: 2px solid rgba(255,255,255,.25);
+  z-index: 5;
+}
+
+.call-controls {
+  display: flex; gap: 20px; align-items: flex-end;
+  padding: 16px 20px 28px;
+  justify-content: center;
+  background: linear-gradient(transparent, rgba(0,0,0,.7));
+  position: absolute; bottom: 0; left: 0; right: 0;
+}
+.call-ctrl-group {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+}
+.call-ctrl-label { color: rgba(255,255,255,.7); font-size: 11px; font-weight: 600; }
+
+.call-status-wrap {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 16px; color: #fff; padding: 60px 20px;
+  position: absolute; inset: 0; justify-content: center;
+}
+.call-status-text { font-size: 20px; font-weight: 700; }
+.call-status-sub { font-size: 14px; opacity: .65; }

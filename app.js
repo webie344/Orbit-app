@@ -722,6 +722,16 @@ const renderPost = (p, author, opts = {}) => {
       orbits: _iOrbited ? arrayUnion(state.uid) : arrayRemove(state.uid),
       orbitCount: increment(_iOrbited ? 1 : -1),
     }).catch(() => {});
+    // Send notification to post author when orbiting (not for own posts)
+    if (_iOrbited && author?.uid && author.uid !== state.uid) {
+      writeNotif(author.uid, "orbit", {
+        postId: p.id,
+        text: `${state.me?.name || "Someone"} orbited your post`,
+      }).catch(() => {});
+      import("./notifications.js").then(({ notifyUser }) =>
+        notifyUser(author.uid, state.me?.name || "Someone", "orbited your post", "/#post/" + p.id)
+      ).catch(() => {});
+    }
   }}, orbitIcon, el("span", {}, "Orbit · "), orbitCount);
 
   const saveIcon = (state.me?.saved || []).includes(p.id) ? "ri-bookmark-fill" : "ri-bookmark-line";

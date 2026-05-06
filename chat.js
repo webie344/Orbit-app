@@ -1317,52 +1317,161 @@ const searchInChat = (chatId, isGroup) => {
 };
 
 const chatHeaderMenu = ({ isGroup, chatId, peer, group }) => {
-  const opts = [];
-  // Call options always reachable from menu (primary access on mobile)
-  opts.push({ label: "📞 Voice call", action: () =>
-    import("./additional.js").then(m => m.startCall({ peerId: isGroup ? null : peer?.uid, chatId, isGroup, type: "voice" })) });
-  opts.push({ label: "🎥 Video call", action: () =>
-    import("./additional.js").then(m => m.startCall({ peerId: isGroup ? null : peer?.uid, chatId, isGroup, type: "video" })) });
-  const muted = (state.me.mutedChats || []).includes(chatId);
-  opts.push({ label: muted ? "Unmute notifications" : "Mute notifications", action: async () =>
-    updateDoc(doc(db, "users", state.uid), { mutedChats: muted ? arrayRemove(chatId) : arrayUnion(chatId) }) });
+  const overlay = document.createElement("div");
+  overlay.className = "chat-info-overlay";
 
-  if (isGroup) {
-    opts.push({ label: "Copy invite link", action: async () => {
-      await navigator.clipboard.writeText(`${location.origin}${location.pathname}#chats/${chatId}`);
-      toast("Invite link copied");
-    }});
-    opts.push({ label: "View members", action: async () => {
-      const names = await Promise.all((group.members || []).map((u) => fetchUser(u).then((x) => x?.name || u)));
-      alert("Members:\n" + names.join("\n"));
-    }});
-    if (group.ownerUid === state.uid) {
-      opts.push({ label: "Delete group", action: async () => {
-        if (!confirm("Delete group for everyone?")) return;
-        await deleteDoc(doc(db, "groups", chatId));
-        location.hash = "#chats";
-      }});
-    } else {
-      opts.push({ label: "Leave group", action: async () => {
-        await updateDoc(doc(db, "groups", chatId), { members: arrayRemove(state.uid) });
-        location.hash = "#chats";
-      }});
-    }
-  } else {
-    opts.push({ label: "View profile", action: () => location.hash = `#profile/${peer.uid}` });
-    opts.push({ label: "Clear my history", action: async () => {
-      if (!confirm("Clear this chat from your side?")) return;
-      const qs = await getDocs(collection(db, "chats", chatId, "messages"));
-      // (Soft-clear: deletes each from server. For a true 'clear for me', a per-user clear timestamp would be used.)
-      const ops = qs.docs.map((d) => deleteDoc(d.ref));
-      await Promise.all(ops);
-      toast("Cleared");
-    }});
+  const sheet = document.createElement("div");
+  sheet.className = "chat-info-sheet";
+  overlay.appendChild(sheet);
+
+  const close = () => {
+    sheet.classList.remove("open");
+    setTimeout(() => overlay.remove(), 280);
+  };
+  overlay.addEventListener("click", e => { if (e.target === overlay) close(); });
+
+  // ── Header ──────────────────────────────────────────────────────────────
+  const hdr = document.createElement("div");
+  hdr.className = "cis-header";
+  hdr.innerHTML = `
+    <button class="icon-btn cis-close"><i class="ri-close-line"></i></button>
+    <div class="cis-avatar-wrap">
+      <img class="cis-avatar" src="${isGroup
+        ? `https://api.dicebear.com/7.x/shapes/svg?seed=${chatId}`
+        : avatarFor(peer)}" alt="" />
+    </div>
+    <div class="cis-name">
+      ${isGroup ? group.name : peer.name}
+      ${!isGroup && peer.verified ? '<span class="verified"><i class="ri-check-line"></i></span>' : ""}
+    </div>
+    <div class="cis-sub">${isGroup
+      ? `${(group.members || []).length} members`
+      : (peer.online ? '<span class="cis-online">● Online</span>' : `Last seen ${fmtTime(peer.lastSeen)}`)
+    }</div>
+    ${!isGroup && peer.bio ? `<div class="cis-bio">${peer.bio}</div>` : ""}`;
+  hdr.querySelector(".cis-close").onclick = close;
+  sheet.appendChild(hdr);
+
+  // ── Call actions row ────────────────────────────────────────────────────
+  const callRow = document.createElement("div");
+  callRow.className = "cis-call-row";
+  const mkCallBtn = (icon, label, type) => {
+    const btn = document.createElement("button");
+    btn.className = "cis-call-btn";
+    btn.innerHTML = `<span class="cis-call-icon"><i class="${icon}"></i></span><span>${label}</span>`;
+    btn.onclick = () => {
+      close();
+      import("./additional.js").then(m => m.startCall({ peerId: isGroup ? null : peer?.uid, chatId, isGroup, type }));
+    };
+    return btn;
+  };
+  callRow.appendChild(mkCallBtn("ri-phone-line", "Voice", "voice"));
+  callRow.appendChild(mkCallBtn("ri-vidicon-line", "Video", "video"));
+  sheet.appendChild(callRow);
+
+  // ── Group members preview ───────────────────────────────────────────────
+  if (isGroup && (group.members || []).length) {
+    const membersSection = document.createElement("div");
+    membersSection.className = "cis-section";
+    membersSection.innerHTML = `<div class="cis-section-title"><i class="ri-group-line"></i> Members (${group.members.length})</div>`;
+    const membersList = document.createElement("div");
+    membersList.className = "cis-members-list";
+    const preview = (group.members || []).slice(0, 8);
+    Promise.all(preview.map(uid => fetchUser(uid))).then(users => {
+      users.filter(Boolean).forEach(u => {
+        const row = document.createElement("div");
+        row.className = "cis-member-row";
+        const isOwner = u.uid === group.ownerUid;
+        row.innerHTML = `
+          <img class="avatar sm" src="${avatarFor(u)}" alt="" />
+          <div class="cis-member-info">
+            <div class="cis-member-name">${u.name || "User"}${isOwner ? ' <span class="cis-owner-badge">Admin</span>' : ""}</div>
+            <div class="cis-member-sub">@${u.username || "user"}${u.online ? " · Online" : ""}</div>
+          </div>`;
+        row.addEventListener("click", () => { close(); location.hash = `#profile/${u.uid}`; });
+        membersList.appendChild(row);
+      });
+      if ((group.members || []).length > 8) {
+        const more = document.createElement("div");
+        more.className = "cis-member-row cis-more";
+        more.innerHTML = `<div style="padding:10px 16px;color:var(--primary);font-size:14px;">+${group.members.length - 8} more members</div>`;
+        membersList.appendChild(more);
+      }
+    });
+    membersSection.appendChild(membersList);
+    sheet.appendChild(membersSection);
   }
 
-  const choice = prompt(opts.map((o, i) => `${i + 1}. ${o.label}`).join("\n") + "\n\nEnter number:");
-  const idx = parseInt(choice) - 1;
-  if (opts[idx]) opts[idx].action();
+  // ── Action rows ─────────────────────────────────────────────────────────
+  const actSection = document.createElement("div");
+  actSection.className = "cis-section cis-actions";
+
+  const muted = (state.me.mutedChats || []).includes(chatId);
+  const actions = [];
+
+  if (!isGroup) {
+    actions.push({ icon: "ri-user-line", label: "View profile", onclick: () => { close(); location.hash = `#profile/${peer.uid}`; } });
+  }
+
+  actions.push({
+    icon: muted ? "ri-notification-off-line" : "ri-notification-3-line",
+    label: muted ? "Unmute notifications" : "Mute notifications",
+    onclick: async () => {
+      await updateDoc(doc(db, "users", state.uid), { mutedChats: muted ? arrayRemove(chatId) : arrayUnion(chatId) });
+      toast(muted ? "Unmuted" : "Muted"); close();
+    },
+  });
+
+  if (isGroup) {
+    actions.push({
+      icon: "ri-links-line", label: "Copy invite link",
+      onclick: async () => {
+        await navigator.clipboard.writeText(`${location.origin}${location.pathname}#chats/${chatId}`);
+        toast("Invite link copied"); close();
+      },
+    });
+    if (group.ownerUid === state.uid) {
+      actions.push({
+        icon: "ri-delete-bin-line", label: "Delete group", danger: true,
+        onclick: async () => {
+          if (!confirm("Delete group for everyone?")) return;
+          await deleteDoc(doc(db, "groups", chatId));
+          location.hash = "#chats";
+        },
+      });
+    } else {
+      actions.push({
+        icon: "ri-logout-box-line", label: "Leave group", danger: true,
+        onclick: async () => {
+          if (!confirm("Leave this group?")) return;
+          await updateDoc(doc(db, "groups", chatId), { members: arrayRemove(state.uid) });
+          location.hash = "#chats";
+        },
+      });
+    }
+  } else {
+    actions.push({
+      icon: "ri-delete-bin-line", label: "Clear chat history", danger: true,
+      onclick: async () => {
+        if (!confirm("Clear this chat? This deletes messages for everyone.")) return;
+        const qs = await getDocs(collection(db, "chats", chatId, "messages"));
+        await Promise.all(qs.docs.map(d => deleteDoc(d.ref)));
+        toast("Cleared"); close();
+      },
+    });
+  }
+
+  actions.forEach(a => {
+    const row = document.createElement("button");
+    row.className = "cis-action-row" + (a.danger ? " danger" : "");
+    row.innerHTML = `<i class="${a.icon}"></i><span>${a.label}</span>`;
+    row.onclick = a.onclick;
+    actSection.appendChild(row);
+  });
+
+  sheet.appendChild(actSection);
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => sheet.classList.add("open"));
 };
 
 const jumpToMessage = (id) => {

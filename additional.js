@@ -492,6 +492,33 @@ export const answerCall = async (callId) => {
   if (_activeCall) _activeCall.unsubs.push(u0);
 };
 
+// Speaking detection — glows the tile border when audio is detected
+const _watchSpeaking = (stream, tileEl) => {
+  try {
+    const ctx = new AudioContext();
+    const src = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    src.connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    const check = () => {
+      if (!document.body.contains(tileEl)) { ctx.close(); return; }
+      analyser.getByteFrequencyData(data);
+      const avg = data.reduce((a, b) => a + b, 0) / data.length;
+      tileEl.classList.toggle("speaking", avg > 12);
+      requestAnimationFrame(check);
+    };
+    check();
+  } catch {}
+};
+
+const _updateParticipantCount = (overlay) => {
+  const grid = overlay.querySelector(".call-remote-grid");
+  const count = (grid ? grid.querySelectorAll(".call-remote-peer").length : 0) + 1;
+  const badge = overlay.querySelector(".call-participant-count");
+  if (badge) badge.textContent = `${count} participant${count !== 1 ? "s" : ""}`;
+};
+
 const _addRemoteStream = (overlay, peerId, stream) => {
   const grid = overlay.querySelector(".call-remote-grid");
   if (!grid) return;
@@ -507,16 +534,29 @@ const _addRemoteStream = (overlay, peerId, stream) => {
   if (hasVid) {
     const vid = document.createElement("video");
     vid.autoplay = true; vid.playsInline = true; vid.srcObject = stream;
+    vid.style.cssText = "width:100%;height:100%;object-fit:cover;border-radius:inherit;";
     peerEl.appendChild(vid);
   } else {
     const box = document.createElement("div");
     box.className = "call-audio-peer";
-    fetchUser(peerId).then(u => {
-      box.innerHTML = `<img class="avatar lg" src="${avatarFor(u)}" /><div class="call-peer-name">${u?.name || "User"}</div>`;
-    });
     peerEl.appendChild(box);
+    fetchUser(peerId).then(u => {
+      box.innerHTML = `<img class="avatar xl" src="${avatarFor(u)}" /><div class="call-peer-name">${u?.name || "User"}</div>`;
+    });
   }
+
+  // Name + mic label pinned to bottom of tile
+  const label = document.createElement("div");
+  label.className = "call-tile-label";
+  label.innerHTML = `<i class="ri-mic-line call-tile-mic"></i><span class="call-tile-name">…</span>`;
+  fetchUser(peerId).then(u => {
+    label.querySelector(".call-tile-name").textContent = (u?.name || "User").split(" ")[0];
+  });
+  peerEl.appendChild(label);
+
+  _watchSpeaking(stream, peerEl);
   grid.appendChild(peerEl);
+  _updateParticipantCount(overlay);
 };
 
 const _buildCallOverlay = ({ callId, localStream, isGroup, type, chatId, role }) => {
@@ -525,22 +565,67 @@ const _buildCallOverlay = ({ callId, localStream, isGroup, type, chatId, role })
   const hasVideo = type === "video";
   let muted = false, camOff = false;
 
+  const startTime = Date.now();
+  let timerInterval = null;
+
   overlay.innerHTML = `
     <div class="call-container">
-      <div class="call-remote-grid"></div>
-      <div class="call-status-wrap">
-        <div class="call-status-icon"><i class="ri-${hasVideo ? "vidicon" : "phone"}-fill"></i></div>
-        <div class="call-status-text">${role === "caller" ? "Calling…" : "Connecting…"}</div>
+
+      <div class="call-topbar">
+        <div class="call-participant-count">1 participant</div>
+        <div class="call-timer" id="callTimer">00:00</div>
+        <div class="call-type-badge"><i class="ri-${hasVideo ? "vidicon" : "phone"}-fill"></i> ${hasVideo ? "Video" : "Voice"}</div>
       </div>
+
+      <div class="call-remote-grid"></div>
+
+      <div class="call-status-wrap">
+        <div class="call-waiting-wrap">
+          <img class="avatar xl call-waiting-av" src="${avatarFor(state.me)}" />
+          <div class="call-ripple"></div>
+        </div>
+        <div class="call-status-text">${role === "caller" ? "Calling…" : "Connecting…"}</div>
+        ${isGroup ? `<div class="call-status-sub">Waiting for others to join</div>` : ""}
+      </div>
+
       ${hasVideo
         ? `<video id="callLocalVid" autoplay muted playsinline class="call-local-video"></video>`
-        : `<div class="call-local-audio"><img class="avatar xl" src="${avatarFor(state.me)}" /><div class="call-my-name">${state.me?.name || "Me"}</div></div>`}
+        : `<div class="call-self-tile call-remote-peer">
+             <div class="call-audio-peer">
+               <img class="avatar xl" src="${avatarFor(state.me)}" />
+               <div class="call-peer-name">${state.me?.name?.split(" ")[0] || "You"}</div>
+             </div>
+             <div class="call-tile-label">
+               <i class="ri-mic-line call-tile-mic"></i>
+               <span class="call-tile-name">You</span>
+             </div>
+           </div>`}
+
       <div class="call-controls">
-        <button class="call-ctrl" id="ccMute" title="Mute"><i class="ri-mic-line"></i></button>
-        ${hasVideo ? `<button class="call-ctrl" id="ccCam" title="Camera"><i class="ri-vidicon-line"></i></button>` : ""}
-        <button class="call-ctrl danger" id="ccEnd" title="End call"><i class="ri-phone-fill" style="transform:rotate(135deg);"></i></button>
+        <div class="call-ctrl-group">
+          <button class="call-ctrl" id="ccMute"><i class="ri-mic-line"></i></button>
+          <span class="call-ctrl-label">Mute</span>
+        </div>
+        ${hasVideo ? `
+        <div class="call-ctrl-group">
+          <button class="call-ctrl" id="ccCam"><i class="ri-vidicon-line"></i></button>
+          <span class="call-ctrl-label">Camera</span>
+        </div>` : ""}
+        <div class="call-ctrl-group">
+          <button class="call-ctrl danger" id="ccEnd">
+            <i class="ri-phone-fill" style="transform:rotate(135deg);"></i>
+          </button>
+          <span class="call-ctrl-label">End</span>
+        </div>
       </div>
+
     </div>`;
+
+  timerInterval = setInterval(() => {
+    const s = Math.floor((Date.now() - startTime) / 1000);
+    const el2 = overlay.querySelector("#callTimer");
+    if (el2) el2.textContent = `${String(Math.floor(s / 60)).padStart(2,"0")}:${String(s % 60).padStart(2,"0")}`;
+  }, 1000);
 
   if (hasVideo) {
     const lv = overlay.querySelector("#callLocalVid");
@@ -553,6 +638,8 @@ const _buildCallOverlay = ({ callId, localStream, isGroup, type, chatId, role })
     const btn = overlay.querySelector("#ccMute");
     btn.querySelector("i").className = muted ? "ri-mic-off-line" : "ri-mic-line";
     btn.classList.toggle("active", muted);
+    btn.closest(".call-ctrl-group").querySelector(".call-ctrl-label").textContent = muted ? "Unmute" : "Mute";
+    overlay.querySelector(".call-self-tile .call-tile-mic")?.classList.toggle("muted", muted);
   };
 
   if (hasVideo) {
@@ -562,10 +649,14 @@ const _buildCallOverlay = ({ callId, localStream, isGroup, type, chatId, role })
       const btn = overlay.querySelector("#ccCam");
       btn.querySelector("i").className = camOff ? "ri-vidicon-off-line" : "ri-vidicon-line";
       btn.classList.toggle("active", camOff);
+      btn.closest(".call-ctrl-group").querySelector(".call-ctrl-label").textContent = camOff ? "Show cam" : "Camera";
     };
   }
 
-  overlay.querySelector("#ccEnd").onclick = () => _endCall(callId, overlay, localStream);
+  overlay.querySelector("#ccEnd").onclick = () => {
+    clearInterval(timerInterval);
+    _endCall(callId, overlay, localStream);
+  };
 
   return overlay;
 };

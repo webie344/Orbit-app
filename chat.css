@@ -703,3 +703,113 @@ html[data-theme="light"] .bubble:not(.from-me .bubble) .reply-quote { background
   color: rgba(255,255,255,.6); font-size: 13px;
   display: flex; align-items: center; gap: 6px;
 }
+
+/* ─── Chat / Group Info Sheet (WhatsApp-style) ──────────────────────────── */
+.chat-info-overlay {
+  position: fixed; inset: 0; z-index: 3500;
+  background: rgba(0,0,0,.5);
+  display: flex; align-items: flex-end; justify-content: center;
+  animation: fade-in .2s;
+}
+.chat-info-sheet {
+  background: var(--bg);
+  border-radius: 22px 22px 0 0;
+  width: 100%; max-width: 560px;
+  max-height: 90dvh;
+  overflow-y: auto;
+  transform: translateY(100%);
+  transition: transform .28s cubic-bezier(.32,1,.32,1);
+  scrollbar-width: none;
+}
+.chat-info-sheet::-webkit-scrollbar { display: none; }
+.chat-info-sheet.open { transform: translateY(0); }
+
+.cis-header {
+  display: flex; flex-direction: column; align-items: center;
+  padding: 20px 20px 14px;
+  text-align: center;
+  border-bottom: 1px solid var(--line);
+  position: relative;
+}
+.cis-close {
+  position: absolute; top: 14px; right: 14px;
+  font-size: 20px;
+}
+.cis-avatar-wrap { margin-top: 6px; margin-bottom: 10px; }
+.cis-avatar {
+  width: 80px; height: 80px; border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid var(--line);
+}
+.cis-name {
+  font-size: 18px; font-weight: 700; color: var(--text);
+  display: flex; align-items: center; gap: 6px; justify-content: center;
+}
+.cis-sub { font-size: 13px; color: var(--text-mute); margin-top: 3px; }
+.cis-online { color: var(--good); }
+.cis-bio {
+  font-size: 14px; color: var(--text-dim); margin-top: 8px;
+  max-width: 320px; line-height: 1.5;
+}
+
+/* call quick-action row */
+.cis-call-row {
+  display: flex; justify-content: center; gap: 24px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.cis-call-btn {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  background: none; border: none; cursor: pointer; color: var(--text);
+  font-size: 12px; font-weight: 600;
+}
+.cis-call-icon {
+  width: 50px; height: 50px; border-radius: 50%;
+  background: rgba(124,92,255,.12);
+  display: grid; place-items: center;
+  font-size: 22px; color: var(--primary);
+  transition: background .15s;
+}
+.cis-call-btn:hover .cis-call-icon { background: rgba(124,92,255,.22); }
+
+/* section title */
+.cis-section { border-bottom: 1px solid var(--line); }
+.cis-section-title {
+  font-size: 12px; font-weight: 700; letter-spacing: .06em;
+  color: var(--text-mute); text-transform: uppercase;
+  padding: 14px 20px 6px;
+  display: flex; align-items: center; gap: 6px;
+}
+
+/* members list */
+.cis-members-list { padding: 0 0 8px; }
+.cis-member-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 20px; cursor: pointer;
+  transition: background .15s;
+}
+.cis-member-row:hover { background: var(--hover); }
+.cis-member-info { flex: 1; min-width: 0; }
+.cis-member-name {
+  font-size: 14px; font-weight: 600; color: var(--text);
+  display: flex; align-items: center; gap: 6px;
+}
+.cis-member-sub { font-size: 12px; color: var(--text-mute); }
+.cis-owner-badge {
+  font-size: 10px; background: var(--primary); color: #fff;
+  padding: 1px 6px; border-radius: 999px; font-weight: 700;
+}
+.cis-more { cursor: pointer; }
+
+/* action rows */
+.cis-actions { padding: 8px 0 24px; }
+.cis-action-row {
+  width: 100%; display: flex; align-items: center; gap: 14px;
+  padding: 14px 20px; background: none; border: none;
+  color: var(--text); font-size: 15px; cursor: pointer;
+  text-align: left; transition: background .15s;
+}
+.cis-action-row:hover { background: var(--hover); }
+.cis-action-row i { font-size: 20px; color: var(--text-mute); width: 24px; }
+.cis-action-row.danger { color: var(--danger); }
+.cis-action-row.danger i { color: var(--danger); }
