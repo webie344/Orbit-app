@@ -501,6 +501,12 @@ const renderChatView = ({ isGroup, chatId, peer, group }) => {
           (peer.online ? "online" : (peer.lastSeen ? `last seen ${fmtTime(peer.lastSeen)}` : ""))),
     ),
     el("div", { class: "right" },
+      el("button", { class: "icon-btn call-btn-desktop", title: "Voice call",
+        onclick: () => import("./additional.js").then(m => m.startCall({ peerId: isGroup ? null : peer?.uid, chatId, isGroup, type: "voice" })) },
+        el("i", { class: "ri-phone-line" })),
+      el("button", { class: "icon-btn call-btn-desktop", title: "Video call",
+        onclick: () => import("./additional.js").then(m => m.startCall({ peerId: isGroup ? null : peer?.uid, chatId, isGroup, type: "video" })) },
+        el("i", { class: "ri-vidicon-line" })),
       el("button", { class: "icon-btn", title: "Search in chat", onclick: () => searchInChat(chatId, isGroup) },
         el("i", { class: "ri-search-line" })),
       el("button", { class: "btn ghost", style: "padding:6px 12px;font-size:13px;gap:6px;", title: "Customize", onclick: () => openCustomize(chatId) },
@@ -869,15 +875,31 @@ const renderMessages = async (root, snap, { isGroup, chatId, peer }) => {
             el("i", { class: "ri-eye-line" }),
             el("span", {}, " Tap to view"));
           _cover.addEventListener("click", async () => {
-            const _rm = m.media.type === "video"
-              ? buildVideoPlayer(m.media.url)
-              : el("img", { src: m.media.url });
-            // Replace the cover with the raw media element inside the same .b-media wrapper
-            _cover.replaceWith(_rm);
+            // Show in fullscreen overlay so onSnapshot re-render doesn't cut off viewing
+            const _vOverlay = document.createElement("div");
+            _vOverlay.className = "view-once-overlay";
+            const _closeBtn = document.createElement("button");
+            _closeBtn.className = "view-once-close icon-btn";
+            _closeBtn.innerHTML = '<i class="ri-close-line"></i>';
+            const _mediaEl = m.media.type === "video"
+              ? Object.assign(document.createElement("video"), { src: m.media.url, controls: true, autoplay: true, playsInline: true })
+              : Object.assign(document.createElement("img"), { src: m.media.url });
+            _mediaEl.style.cssText = "max-width:100%;max-height:90dvh;border-radius:12px;object-fit:contain;";
+            const _note = document.createElement("div");
+            _note.className = "view-once-note";
+            _note.innerHTML = '<i class="ri-eye-line"></i> View once — disappears after closing';
+            _vOverlay.appendChild(_closeBtn);
+            _vOverlay.appendChild(_mediaEl);
+            _vOverlay.appendChild(_note);
+            document.body.appendChild(_vOverlay);
+            // Mark viewed immediately (overlay is already showing)
             const _vp = isGroup
               ? ["groups", chatId, "messages", m.id]
               : ["chats", chatId, "messages", m.id];
             updateDoc(doc(db, ..._vp), { viewedBy: arrayUnion(state.uid) }).catch(() => {});
+            const _dismiss = () => _vOverlay.remove();
+            _closeBtn.addEventListener("click", _dismiss);
+            _vOverlay.addEventListener("click", e => { if (e.target === _vOverlay) _dismiss(); });
           });
           bubble.appendChild(el("div", { class: "b-media" }, _cover));
         }
@@ -1296,6 +1318,11 @@ const searchInChat = (chatId, isGroup) => {
 
 const chatHeaderMenu = ({ isGroup, chatId, peer, group }) => {
   const opts = [];
+  // Call options always reachable from menu (primary access on mobile)
+  opts.push({ label: "📞 Voice call", action: () =>
+    import("./additional.js").then(m => m.startCall({ peerId: isGroup ? null : peer?.uid, chatId, isGroup, type: "voice" })) });
+  opts.push({ label: "🎥 Video call", action: () =>
+    import("./additional.js").then(m => m.startCall({ peerId: isGroup ? null : peer?.uid, chatId, isGroup, type: "video" })) });
   const muted = (state.me.mutedChats || []).includes(chatId);
   opts.push({ label: muted ? "Unmute notifications" : "Mute notifications", action: async () =>
     updateDoc(doc(db, "users", state.uid), { mutedChats: muted ? arrayRemove(chatId) : arrayUnion(chatId) }) });

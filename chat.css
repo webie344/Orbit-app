@@ -668,3 +668,38 @@ html[data-theme="light"] .bubble:not(.from-me .bubble) .reply-quote { background
 .vd-label { flex: 1; font-size: 13px; color: var(--text-dim); }
 .vd-send i { color: var(--primary); }
 .vd-delete i { color: var(--danger, #ff5c5c); }
+
+/* ─── Call buttons in chat head ──────────────────────────────────────────── */
+.chat-head .right .icon-btn[title="Voice call"],
+.chat-head .right .icon-btn[title="Video call"] {
+  color: var(--primary);
+}
+.chat-head .right .icon-btn[title="Voice call"]:hover,
+.chat-head .right .icon-btn[title="Video call"]:hover {
+  background: rgba(124,92,255,.12);
+}
+
+/* ─── Hide call buttons in header on mobile; accessible via More options menu ── */
+@media (max-width: 640px) {
+  .call-btn-desktop { display: none !important; }
+}
+
+/* ─── View-once fullscreen overlay ─────────────────────────────────────────── */
+.view-once-overlay {
+  position: fixed; inset: 0; z-index: 6000;
+  background: rgba(0,0,0,.92);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 14px; padding: 16px;
+  animation: fade-in .2s;
+}
+.view-once-close {
+  position: absolute; top: 16px; right: 16px;
+  color: #fff; font-size: 24px;
+  background: rgba(255,255,255,.15); border-radius: 50%;
+  width: 40px; height: 40px;
+}
+.view-once-note {
+  color: rgba(255,255,255,.6); font-size: 13px;
+  display: flex; align-items: center; gap: 6px;
+}

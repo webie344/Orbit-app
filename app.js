@@ -387,12 +387,12 @@ const toggleNotifPanel = () => {
     else document.addEventListener("click", once, { once: true });
   }, { once: true }), 50);
 };
-$("#notifBtn").addEventListener("click", (e) => { e.stopPropagation(); toggleNotifPanel(); });
+$("#notifBtn").addEventListener("click", () => { location.hash = "#notifications"; });
 
 // =========================================================================
 // 7. ROUTER
 // =========================================================================
-const routes = ["feed", "reels", "chats", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship"];
+const routes = ["feed", "reels", "chats", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications"];
 
 // Track feed scroll so "back from post" returns to same position
 let _feedScrollY = 0;
@@ -423,9 +423,10 @@ const router = () => {
     case "profile":    renderProfile(content, rest[0] || state.uid); break;
     case "profile-u":  renderProfileByUsername(content, rest[0]); break;
     case "post":       renderPostDetail(content, rest[0]); break;
-    case "spaces":     import("./features.js").then(m => m.renderSpaces(content)); break;
-    case "challenges": import("./features.js").then(m => m.renderChallenges(content)); break;
-    case "mentorship": import("./features.js").then(m => m.renderMentorship(content)); break;
+    case "spaces":         import("./features.js").then(m => m.renderSpaces(content)); break;
+    case "challenges":     import("./features.js").then(m => m.renderChallenges(content)); break;
+    case "mentorship":     import("./features.js").then(m => m.renderMentorship(content)); break;
+    case "notifications":  import("./additional.js").then(m => m.renderNotifications(content)); break;
   }
 };
 window.addEventListener("hashchange", router);
