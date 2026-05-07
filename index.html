@@ -413,6 +413,14 @@
     <!-- ============================================================ -->
     <!-- PWA INSTALL BANNER                                            -->
     <!-- ============================================================ -->
+    <!-- PWA Update banner -->
+    <div id="updateBanner" class="update-banner hidden">
+      <i class="ri-refresh-line update-banner-icon"></i>
+      <span class="update-banner-text">New version of Orbit available</span>
+      <button id="updateNowBtn" class="btn primary" style="padding:6px 18px;font-size:13px;flex-shrink:0;">Update now</button>
+      <button id="updateDismissBtn" class="icon-btn" style="flex-shrink:0;opacity:.6;"><i class="ri-close-line"></i></button>
+    </div>
+
     <div id="installBanner" class="install-banner hidden">
       <div class="install-banner-inner">
         <img src="/icon-192.png" class="install-banner-icon" alt="Orbit" />
@@ -474,10 +482,42 @@
       // ── Service Worker ───────────────────────────────────────────
       if ("serviceWorker" in navigator) {
         window.addEventListener("load", () => {
-          navigator.serviceWorker
-            .register("/sw.js")
-            .then((reg) => console.log("Orbit SW registered:", reg.scope))
-            .catch((err) => console.error("Orbit SW error:", err));
+          navigator.serviceWorker.register("/sw.js").then((reg) => {
+
+            // ── Detect updates ─────────────────────────────────────
+            const showUpdateBanner = (worker) => {
+              const banner = document.getElementById("updateBanner");
+              if (banner) banner.classList.remove("hidden");
+              document.getElementById("updateNowBtn")?.addEventListener("click", () => {
+                worker.postMessage({ type: "SKIP_WAITING" });
+              }, { once: true });
+              document.getElementById("updateDismissBtn")?.addEventListener("click", () => {
+                banner.classList.add("hidden");
+              }, { once: true });
+            };
+
+            // Check worker that is already waiting (e.g. tab was open during deploy)
+            if (reg.waiting) { showUpdateBanner(reg.waiting); }
+
+            reg.onupdatefound = () => {
+              const newWorker = reg.installing;
+              newWorker.onstatechange = () => {
+                if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
+                  showUpdateBanner(newWorker);
+                }
+              };
+            };
+
+            // Reload page once new SW takes over
+            let refreshing = false;
+            navigator.serviceWorker.addEventListener("controllerchange", () => {
+              if (!refreshing) { refreshing = true; window.location.reload(); }
+            });
+
+            // Silently poll for updates every 60 s (catches GitHub-deployed changes)
+            setInterval(() => reg.update().catch(() => {}), 60_000);
+
+          }).catch((err) => console.error("Orbit SW error:", err));
         });
       }
 
@@ -554,6 +594,16 @@
         sidebarInstallBtn && sidebarInstallBtn.classList.add("hidden");
         _deferredPrompt = null;
       });
+
+      // ── Disable browser context menu & text-selection defaults ───
+      // Block right-click / long-press menu everywhere except text inputs
+      document.addEventListener("contextmenu", (e) => {
+        const tag = e.target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || e.target.closest("[contenteditable]")) return;
+        e.preventDefault();
+      });
+      // Prevent iOS callout tooltip on long-press (images / links)
+      document.addEventListener("touchstart", () => {}, { passive: true });
     </script>
 
     <!-- ============================================================ -->
@@ -606,6 +656,45 @@
         flex-shrink: 0;
         color: var(--text-mute);
       }
+
+      /* ── Global: disable text-selection & image context menu ── */
+      * {
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none; /* iOS long-press callout */
+      }
+      input, textarea, [contenteditable="true"], .allow-select {
+        -webkit-user-select: text;
+        user-select: text;
+      }
+      img, video {
+        -webkit-user-drag: none;
+        pointer-events: auto;
+      }
+
+      /* ── PWA Update banner ──────────────────────────────────── */
+      .update-banner {
+        position: fixed;
+        top: 0; left: 0; right: 0;
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 16px;
+        padding-top: calc(12px + env(safe-area-inset-top));
+        background: linear-gradient(135deg, #7c5cfc, #b45cf4);
+        color: #fff;
+        font-size: 14px;
+        font-weight: 600;
+        box-shadow: 0 4px 24px rgba(124, 92, 252, 0.45);
+        animation: slideDown 0.35s cubic-bezier(.32,1,.32,1);
+      }
+      @keyframes slideDown {
+        from { transform: translateY(-100%); opacity: 0; }
+        to   { transform: translateY(0);    opacity: 1; }
+      }
+      .update-banner-icon { font-size: 18px; flex-shrink: 0; }
+      .update-banner-text { flex: 1; min-width: 0; }
 
       /* Notifications enable banner */
       .notif-enable-banner {

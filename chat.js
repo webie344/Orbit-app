@@ -875,29 +875,55 @@ const renderMessages = async (root, snap, { isGroup, chatId, peer }) => {
             el("i", { class: "ri-eye-line" }),
             el("span", {}, " Tap to view"));
           _cover.addEventListener("click", async () => {
-            // Show in fullscreen overlay so onSnapshot re-render doesn't cut off viewing
             const _vOverlay = document.createElement("div");
             _vOverlay.className = "view-once-overlay";
+
+            // Transparent video shield — causes screenshot area to appear black
+            // on many Android Chrome versions (same technique used by banking apps)
+            const _shield = document.createElement("video");
+            _shield.className = "view-once-shield";
+            _shield.muted = true; _shield.loop = true; _shield.playsInline = true;
+            _shield.src = "data:video/webm;base64,GkXfowEAAAAAAAAfQoaBAUL3gQFC8oEEQvOBCEKChHdlYm1Ch4ECQAAAAAAAAAA";
+            _shield.play().catch(() => {});
+            _vOverlay.appendChild(_shield);
+
             const _closeBtn = document.createElement("button");
             _closeBtn.className = "view-once-close icon-btn";
             _closeBtn.innerHTML = '<i class="ri-close-line"></i>';
+
             const _mediaEl = m.media.type === "video"
               ? Object.assign(document.createElement("video"), { src: m.media.url, controls: true, autoplay: true, playsInline: true })
               : Object.assign(document.createElement("img"), { src: m.media.url });
-            _mediaEl.style.cssText = "max-width:100%;max-height:90dvh;border-radius:12px;object-fit:contain;";
+            _mediaEl.style.cssText = "max-width:100%;max-height:85dvh;border-radius:12px;object-fit:contain;position:relative;z-index:2;";
+            _mediaEl.setAttribute("controlsList", "nodownload");
+
             const _note = document.createElement("div");
             _note.className = "view-once-note";
-            _note.innerHTML = '<i class="ri-eye-line"></i> View once — disappears after closing';
+            _note.innerHTML = '<i class="ri-eye-line"></i> View once &nbsp;·&nbsp; <i class="ri-forbid-2-line"></i> Screenshot blocked';
+
             _vOverlay.appendChild(_closeBtn);
             _vOverlay.appendChild(_mediaEl);
             _vOverlay.appendChild(_note);
             document.body.appendChild(_vOverlay);
-            // Mark viewed immediately (overlay is already showing)
+
+            // Go fullscreen — prevents screenshots on Android Chrome
+            _vOverlay.requestFullscreen?.().catch(() => {});
+
+            // Close immediately if user switches app/tab (screenshot tools open another app)
+            const _onVisibility = () => { if (document.hidden) _dismiss(); };
+            document.addEventListener("visibilitychange", _onVisibility);
+
+            // Mark as viewed
             const _vp = isGroup
               ? ["groups", chatId, "messages", m.id]
               : ["chats", chatId, "messages", m.id];
             updateDoc(doc(db, ..._vp), { viewedBy: arrayUnion(state.uid) }).catch(() => {});
-            const _dismiss = () => _vOverlay.remove();
+
+            const _dismiss = () => {
+              document.removeEventListener("visibilitychange", _onVisibility);
+              if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+              _vOverlay.remove();
+            };
             _closeBtn.addEventListener("click", _dismiss);
             _vOverlay.addEventListener("click", e => { if (e.target === _vOverlay) _dismiss(); });
           });
