@@ -4,7 +4,9 @@
 // Place this file at the ROOT of your site (same level as index.html).
 // =========================================================================
 
-const CACHE_NAME = "orbit-v2";
+// ⚠️  Bump this string every time you deploy — it's what triggers the
+//     "New version available" update banner in the app.
+const CACHE_NAME = "orbit-v3";
 
 // Files that make up the app shell — always available offline
 const SHELL_FILES = [
@@ -14,11 +16,27 @@ const SHELL_FILES = [
   "/chat.css",
   "/app.js",
   "/chat.js",
+  "/additional.js",
+  "/notifications.js",
   "/icon-192.png",
   "/icon-512.png",
   "/apple-touch-icon.png",
-  "/notifications.js",
 ];
+
+// ── Message: allow the page to trigger skipWaiting on demand ─────────────
+//
+//  This is what makes the "Update now" banner work.
+//  index.html calls: worker.postMessage({ type: "SKIP_WAITING" })
+//  which lands here and activates the waiting SW immediately.
+//
+//  ⚠️  Do NOT call self.skipWaiting() inside the install handler —
+//      that bypasses the waiting state and the update banner never shows.
+//
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "SKIP_WAITING") {
+    self.skipWaiting();
+  }
+});
 
 // ── Push: receive and display notification ────────────────────────────────
 self.addEventListener("push", (event) => {
@@ -44,7 +62,6 @@ self.addEventListener("notificationclick", (event) => {
   const url = event.notification.data?.url || "/";
   event.waitUntil(
     clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
-      // If app is already open, focus it and navigate
       for (const client of list) {
         if ("focus" in client) {
           client.focus();
@@ -52,18 +69,20 @@ self.addEventListener("notificationclick", (event) => {
           return;
         }
       }
-      // Otherwise open a new window
       if (clients.openWindow) return clients.openWindow(url);
     })
   );
 });
 
 // ── Install: cache the shell ─────────────────────────────────────────────
+//
+//  No self.skipWaiting() here — the new SW stays in "waiting" state so
+//  the update banner in index.html can prompt the user before taking over.
+//
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_FILES))
   );
-  self.skipWaiting();
 });
 
 // ── Activate: remove old caches ──────────────────────────────────────────
@@ -108,7 +127,6 @@ self.addEventListener("fetch", (event) => {
 
       return fetch(request)
         .then((response) => {
-          // Only cache valid same-origin responses
           if (
             !response ||
             response.status !== 200 ||
@@ -121,7 +139,6 @@ self.addEventListener("fetch", (event) => {
           return response;
         })
         .catch(() => {
-          // Offline fallback: serve index.html for navigation requests
           if (request.mode === "navigate") {
             return caches.match("/index.html");
           }
