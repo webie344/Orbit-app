@@ -583,7 +583,7 @@ const renderMediaCarousel = (mediaRaw) => {
     }
     return el("div", { class: "post-media" }, el("img", { src: m.url, loading: "lazy" }));
   }
-  // Multiple — simple slider
+  // Multiple — swipeable slider (no arrows)
   let cur = 0;
   const slides = items.map((m, i) => {
     const slide = el("div", { class: "carousel-slide", style: i === 0 ? "" : "display:none;" });
@@ -605,11 +605,37 @@ const renderMediaCarousel = (mediaRaw) => {
     cur = (n + items.length) % items.length;
     slides[cur].style.display = ""; dots[cur].classList.add("active");
   };
-  const prev = el("button", { class: "carousel-arrow left", onclick: (e) => { e.stopPropagation(); go(cur - 1); }},
-    el("i", { class: "ri-arrow-left-s-line" }));
-  const next = el("button", { class: "carousel-arrow right", onclick: (e) => { e.stopPropagation(); go(cur + 1); }},
-    el("i", { class: "ri-arrow-right-s-line" }));
-  const wrap = el("div", { class: "post-media carousel" }, ...slides, prev, next, dotsWrap);
+  const wrap = el("div", { class: "post-media carousel" }, ...slides, dotsWrap);
+
+  // Touch swipe support
+  let _swipeStartX = 0;
+  let _swipeStartY = 0;
+  wrap.addEventListener("touchstart", (e) => {
+    _swipeStartX = e.touches[0].clientX;
+    _swipeStartY = e.touches[0].clientY;
+  }, { passive: true });
+  wrap.addEventListener("touchend", (e) => {
+    const dx = e.changedTouches[0].clientX - _swipeStartX;
+    const dy = e.changedTouches[0].clientY - _swipeStartY;
+    // Only act if horizontal swipe is dominant and at least 40px
+    if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
+      e.stopPropagation();
+      go(dx < 0 ? cur + 1 : cur - 1);
+    }
+  }, { passive: true });
+
+  // Mouse drag support (desktop)
+  let _mouseStartX = 0;
+  let _mouseDragging = false;
+  wrap.addEventListener("mousedown", (e) => { _mouseStartX = e.clientX; _mouseDragging = true; });
+  wrap.addEventListener("mouseup", (e) => {
+    if (!_mouseDragging) return;
+    _mouseDragging = false;
+    const dx = e.clientX - _mouseStartX;
+    if (Math.abs(dx) > 40) { e.stopPropagation(); go(dx < 0 ? cur + 1 : cur - 1); }
+  });
+  wrap.addEventListener("mouseleave", () => { _mouseDragging = false; });
+
   return wrap;
 };
 
@@ -758,9 +784,23 @@ const renderPost = (p, author, opts = {}) => {
   post.appendChild(actions);
 
   if (!hideComments) {
-    // Comments preview (top 2)
+    // Comments preview (top 5)
     const cBox = el("div", { class: "comments hidden" });
     post.appendChild(cBox);
+
+    // Track reply state
+    let _replyTo = null; // { uid, name }
+
+    const replyBanner = el("div", { class: "reply-banner hidden" },
+      el("span", { class: "reply-banner-text" }, ""),
+      el("button", { class: "reply-cancel-btn", onclick: () => {
+        _replyTo = null;
+        replyBanner.classList.add("hidden");
+        cForm.querySelector("input").placeholder = "Write a comment…";
+        cForm.querySelector("input").value = "";
+      }}, el("i", { class: "ri-close-line" })),
+    );
+    post.appendChild(replyBanner);
 
     const cForm = el("form", { class: "comment-form" },
       el("img", { class: "avatar xs", src: avatarFor(state.me) }),
@@ -772,24 +812,66 @@ const renderPost = (p, author, opts = {}) => {
       const input = cForm.querySelector("input");
       const text = input.value.trim();
       if (!text) return;
+      const commentData = {
+        text, authorUid: state.uid, createdAt: serverTimestamp(), likes: [],
+        ..._replyTo ? { replyToUid: _replyTo.uid, replyToName: _replyTo.name } : {},
+      };
       input.value = "";
-      // Optimistic UI — show comment instantly without waiting for Firestore
+      _replyTo = null;
+      replyBanner.classList.add("hidden");
+      input.placeholder = "Write a comment…";
+      // Optimistic UI
       cBox.classList.remove("hidden");
       cBox.appendChild(el("div", { class: "comment" },
         el("img", { class: "avatar xs", src: avatarFor(state.me) }),
         el("div", { class: "body" },
           el("div", { class: "name" }, state.me?.name || "User"),
-          el("div", { class: "text", text }),
+          el("div", { class: "text", text: commentData.text }),
         ),
       ));
-      await addDoc(collection(db, "posts", p.id, "comments"), {
-        text, authorUid: state.uid, createdAt: serverTimestamp(),
-      });
+      await addDoc(collection(db, "posts", p.id, "comments"), commentData);
       await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
     });
     post.appendChild(cForm);
 
-    onSnapshot(query(collection(db, "posts", p.id, "comments"), orderBy("createdAt", "desc"), limit(3)),
+    const renderFeedComment = (c, a) => {
+      const isLiked = (c.likes || []).includes(state.uid);
+      const likeCountEl = el("span", { text: String((c.likes || []).length || "") });
+      const likeIconEl = el("i", { class: isLiked ? "ri-heart-fill" : "ri-heart-line", style: isLiked ? "color:var(--danger);" : "" });
+      let _liked = isLiked;
+      const likeBtn = el("button", { class: "cmt-like-btn", onclick: async (e) => {
+        e.stopPropagation();
+        _liked = !_liked;
+        likeIconEl.className = _liked ? "ri-heart-fill" : "ri-heart-line";
+        likeIconEl.style.color = _liked ? "var(--danger)" : "";
+        const newCount = (c.likes?.length || 0) + (_liked ? 1 : -1);
+        likeCountEl.textContent = newCount > 0 ? String(newCount) : "";
+        await updateDoc(doc(db, "posts", p.id, "comments", c.id), {
+          likes: _liked ? arrayUnion(state.uid) : arrayRemove(state.uid),
+        }).catch(() => {});
+      }}, likeIconEl, likeCountEl);
+
+      const replyBtn = el("button", { class: "cmt-reply-btn", onclick: () => {
+        _replyTo = { uid: a?.uid, name: a?.name || "user" };
+        replyBanner.querySelector(".reply-banner-text").textContent = `Replying to ${a?.name || "user"}`;
+        replyBanner.classList.remove("hidden");
+        cForm.querySelector("input").placeholder = `Reply to ${a?.name || "user"}…`;
+        cForm.querySelector("input").focus();
+      }}, "Reply");
+
+      return el("div", { class: "comment" },
+        el("img", { class: "avatar xs", src: avatarFor(a) }),
+        el("div", { class: "body" },
+          el("div", { class: "name" }, a?.name || "User",
+            a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null),
+          c.replyToName ? el("div", { class: "reply-to-label" }, el("i", { class: "ri-corner-down-right-line" }), ` ${c.replyToName}`) : null,
+          el("div", { class: "text", text: c.text }),
+          el("div", { class: "cmt-meta-row" }, replyBtn, likeBtn),
+        ),
+      );
+    };
+
+    onSnapshot(query(collection(db, "posts", p.id, "comments"), orderBy("createdAt", "desc"), limit(5)),
       async (snap) => {
         cBox.innerHTML = "";
         if (snap.empty) { cBox.classList.add("hidden"); return; }
@@ -797,17 +879,7 @@ const renderPost = (p, author, opts = {}) => {
         const comments = snap.docs.map((d) => ({ id: d.id, ...d.data() })).reverse();
         const authors = await Promise.all([...new Set(comments.map((c) => c.authorUid))].map(fetchUser));
         const map = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
-        comments.forEach((c) => {
-          const a = map[c.authorUid];
-          cBox.appendChild(el("div", { class: "comment" },
-            el("img", { class: "avatar xs", src: avatarFor(a) }),
-            el("div", { class: "body" },
-              el("div", { class: "name" }, a?.name || "User",
-                a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null),
-              el("div", { class: "text", text: c.text }),
-            ),
-          ));
-        });
+        comments.forEach((c) => cBox.appendChild(renderFeedComment(c, map[c.authorUid])));
       });
 
     post._focusComment = () => cForm.querySelector("input").focus();
@@ -852,8 +924,68 @@ const renderPostDetail = async (root, postId) => {
   const cList = el("div", { class: "detail-cmt-list" });
   cmtSection.appendChild(cList);
 
-  onSnapshot(query(collection(db, "posts", p.id, "comments"), orderBy("createdAt", "asc"), limit(100)),
-    async (snap) => {
+  // Track reply state for detail view
+  let _detailReplyTo = null;
+  const detailReplyBanner = el("div", { class: "reply-banner hidden" },
+    el("span", { class: "reply-banner-text" }, ""),
+    el("button", { class: "reply-cancel-btn", onclick: () => {
+      _detailReplyTo = null;
+      detailReplyBanner.classList.add("hidden");
+      cmtSection.querySelector("input").placeholder = "Write a comment…";
+      cmtSection.querySelector("input").value = "";
+    }}, el("i", { class: "ri-close-line" })),
+  );
+  cmtSection.appendChild(detailReplyBanner);
+
+  const renderDetailComment = (c, a) => {
+    const isLiked = (c.likes || []).includes(state.uid);
+    const likeCountEl = el("span", { text: String((c.likes || []).length || "") });
+    const likeIconEl = el("i", { class: isLiked ? "ri-heart-fill" : "ri-heart-line", style: isLiked ? "color:var(--danger);" : "" });
+    let _liked = isLiked;
+    const likeBtn = el("button", { class: "cmt-like-btn", onclick: async (ev) => {
+      ev.stopPropagation();
+      _liked = !_liked;
+      likeIconEl.className = _liked ? "ri-heart-fill" : "ri-heart-line";
+      likeIconEl.style.color = _liked ? "var(--danger)" : "";
+      const newCount = (c.likes?.length || 0) + (_liked ? 1 : -1);
+      likeCountEl.textContent = newCount > 0 ? String(newCount) : "";
+      await updateDoc(doc(db, "posts", p.id, "comments", c.id), {
+        likes: _liked ? arrayUnion(state.uid) : arrayRemove(state.uid),
+      }).catch(() => {});
+    }}, likeIconEl, likeCountEl);
+
+    const replyBtn = el("button", { class: "cmt-reply-btn", onclick: () => {
+      _detailReplyTo = { uid: a?.uid, name: a?.name || "user" };
+      detailReplyBanner.querySelector(".reply-banner-text").textContent = `Replying to ${a?.name || "user"}`;
+      detailReplyBanner.classList.remove("hidden");
+      const inp = cmtSection.querySelector("input");
+      inp.placeholder = `Reply to ${a?.name || "user"}…`;
+      inp.focus();
+    }}, "Reply");
+
+    return el("div", { class: "comment detail-cmt" },
+      el("img", { class: "avatar xs", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
+      el("div", { class: "body" },
+        el("div", { class: "name" }, a?.name || "User",
+          a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
+          el("span", { class: "cmt-time" }, fmtTime(c.createdAt)),
+        ),
+        c.replyToName ? el("div", { class: "reply-to-label" }, el("i", { class: "ri-corner-down-right-line" }), ` ${c.replyToName}`) : null,
+        el("div", { class: "text", text: c.text }),
+        el("div", { class: "cmt-meta-row" }, replyBtn, likeBtn),
+      ),
+    );
+  };
+
+  const DETAIL_CMT_PAGE = 5;
+  let _detailCmtSnap = null;
+
+  const loadDetailComments = async (showAll = false) => {
+    const q = showAll
+      ? query(collection(db, "posts", p.id, "comments"), orderBy("createdAt", "asc"), limit(200))
+      : query(collection(db, "posts", p.id, "comments"), orderBy("createdAt", "asc"), limit(DETAIL_CMT_PAGE));
+    if (_detailCmtSnap) _detailCmtSnap();
+    _detailCmtSnap = onSnapshot(q, async (snap) => {
       cList.innerHTML = "";
       if (snap.empty) {
         cList.appendChild(el("div", { class: "reel-cmt-empty" }, "No comments yet. Be the first!"));
@@ -862,20 +994,22 @@ const renderPostDetail = async (root, postId) => {
       const comments = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       const auths = await Promise.all([...new Set(comments.map((c) => c.authorUid))].map(fetchUser));
       const map = Object.fromEntries(auths.filter(Boolean).map((u) => [u.uid, u]));
-      comments.forEach((c) => {
-        const a = map[c.authorUid];
-        cList.appendChild(el("div", { class: "comment detail-cmt" },
-          el("img", { class: "avatar xs", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
-          el("div", { class: "body" },
-            el("div", { class: "name" }, a?.name || "User",
-              a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
-              el("span", { class: "cmt-time" }, fmtTime(c.createdAt)),
-            ),
-            el("div", { class: "text", text: c.text }),
-          ),
-        ));
-      });
+      comments.forEach((c) => cList.appendChild(renderDetailComment(c, map[c.authorUid])));
+
+      // Show "Load more" button only if we might have more and haven't loaded all yet
+      if (!showAll && snap.docs.length >= DETAIL_CMT_PAGE) {
+        const total = p.commentCount || 0;
+        const remaining = total - snap.docs.length;
+        const loadMoreBtn = el("button", { class: "load-more-cmts-btn", onclick: () => loadDetailComments(true) },
+          el("i", { class: "ri-arrow-down-s-line" }),
+          remaining > 0 ? ` View ${remaining} more comment${remaining !== 1 ? "s" : ""}` : " View all comments",
+        );
+        cList.appendChild(loadMoreBtn);
+      }
     });
+  };
+
+  loadDetailComments(false);
 
   const cForm = el("form", { class: "comment-form detail-cmt-form" },
     el("img", { class: "avatar xs", src: avatarFor(state.me) }),
@@ -887,10 +1021,15 @@ const renderPostDetail = async (root, postId) => {
     const input = cForm.querySelector("input");
     const text = input.value.trim();
     if (!text) return;
+    const commentData = {
+      text, authorUid: state.uid, createdAt: serverTimestamp(), likes: [],
+      ..._detailReplyTo ? { replyToUid: _detailReplyTo.uid, replyToName: _detailReplyTo.name } : {},
+    };
     input.value = "";
-    await addDoc(collection(db, "posts", p.id, "comments"), {
-      text, authorUid: state.uid, createdAt: serverTimestamp(),
-    });
+    _detailReplyTo = null;
+    detailReplyBanner.classList.add("hidden");
+    input.placeholder = "Write a comment…";
+    await addDoc(collection(db, "posts", p.id, "comments"), commentData);
     await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
   });
   cmtSection.appendChild(cForm);
@@ -992,9 +1131,50 @@ const renderReel = (r, author) => {
     }
   }, el("i", { class: "ri-share-forward-line" }), el("span", { text: "Share" }));
 
-  const video = el("video", { src: r.media.url, poster: _cloudPoster(r.media.url), loop: true, playsinline: "", muted: "",
-    "webkit-playsinline": "",
-    onclick: (e) => { e.stopPropagation(); e.target.muted = !e.target.muted; }
+  const video = el("video", { src: r.media.url, poster: _cloudPoster(r.media.url), loop: true, playsinline: "", muted: "", "webkit-playsinline": "" });
+
+  // TikTok-style seekable progress bar
+  const _progFill = el("div", { style: "height:100%;width:0%;background:rgba(255,255,255,0.9);border-radius:2px;transition:none;pointer-events:none;" });
+  const _progBar  = el("div", { style: "position:absolute;bottom:0;left:0;right:0;height:12px;cursor:pointer;z-index:10;display:flex;align-items:flex-end;" },
+    el("div", { style: "position:absolute;bottom:0;left:0;right:0;height:3px;background:rgba(255,255,255,0.25);border-radius:2px;" }),
+    _progFill,
+  );
+  video.addEventListener("timeupdate", () => {
+    if (video.duration) _progFill.style.width = (video.currentTime / video.duration * 100) + "%";
+  });
+
+  // Seek on tap/drag along the bar
+  const _seekTo = (e) => {
+    if (!video.duration) return;
+    const rect = _progBar.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    video.currentTime = pct * video.duration;
+    _progFill.style.width = (pct * 100) + "%";
+  };
+  let _seekDragging = false;
+  _progBar.addEventListener("mousedown",  (e) => { e.stopPropagation(); _seekDragging = true; _seekTo(e); });
+  _progBar.addEventListener("touchstart", (e) => { e.stopPropagation(); _seekDragging = true; _seekTo(e); }, { passive: true });
+  window.addEventListener("mousemove",  (e) => { if (_seekDragging) _seekTo(e); });
+  window.addEventListener("touchmove",  (e) => { if (_seekDragging) _seekTo(e); }, { passive: true });
+  window.addEventListener("mouseup",   () => { _seekDragging = false; });
+  window.addEventListener("touchend",  () => { _seekDragging = false; });
+
+  // Tap to play/pause with flash icon
+  const _tapIcon = el("div", { style: "position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:56px;color:white;opacity:0;transition:opacity 0.2s ease;pointer-events:none;z-index:9;filter:drop-shadow(0 2px 12px rgba(0,0,0,0.6));" },
+    el("i", { class: "ri-play-fill" }));
+  video.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (video.paused) {
+      video.play().catch(() => {});
+      _tapIcon.querySelector("i").className = "ri-play-fill";
+    } else {
+      video.pause();
+      _tapIcon.querySelector("i").className = "ri-pause-fill";
+    }
+    _tapIcon.style.opacity = "1";
+    clearTimeout(_tapIcon._t);
+    _tapIcon._t = setTimeout(() => { _tapIcon.style.opacity = "0"; }, 650);
   });
 
   // Follow button for reel author
@@ -1022,6 +1202,7 @@ const renderReel = (r, author) => {
 
   const node = el("div", { class: "reel" },
     video,
+    _tapIcon,
     el("div", { class: "reel-overlay" }),
     el("div", { class: "reel-info" },
       el("div", { class: "name", onclick: () => location.hash = `#profile/${author?.uid}` },
@@ -1033,6 +1214,7 @@ const renderReel = (r, author) => {
         r.caption ? el("div", { class: "caption", text: r.caption }) : null,
     ),
     el("div", { class: "reel-actions" }, likeBtn, cmtBtn, shareBtn),
+    _progBar,
   );
   return node;
 };
