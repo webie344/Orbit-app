@@ -154,18 +154,84 @@
       <div class="layout">
         <!-- Sidebar -->
         <aside class="sidebar" id="sidebar">
-          <nav class="nav">
-            <button class="nav-item" data-route="feed"><i class="ri-home-5-line"></i><span>Feed</span></button>
-            <button class="nav-item" data-route="reels"><i class="ri-film-line"></i><span>Reels</span></button>
-            <button class="nav-item" data-route="chats"><i class="ri-chat-3-line"></i><span>Chats</span><span class="pill" id="chatsPill" hidden>0</span></button>
-            <button class="nav-item" data-route="groups"><i class="ri-group-2-line"></i><span>Groups</span></button>
-            <button class="nav-item" data-route="explore"><i class="ri-compass-3-line"></i><span>Explore</span></button>
-            <button class="nav-item" data-route="saved"><i class="ri-bookmark-line"></i><span>Saved</span></button>
-            <button class="nav-item" data-route="settings"><i class="ri-settings-3-line"></i><span>Settings</span></button>
-            <button class="nav-item" data-route="spaces"><i class="ri-planet-line"></i><span>Spaces</span></button>
-            <button class="nav-item" data-route="challenges"><i class="ri-trophy-line"></i><span>Challenges</span></button>
-            <button class="nav-item" data-route="mentorship"><i class="ri-user-heart-line"></i><span>Mentorship</span></button>
+
+          <!-- ═══════════════════════════════════════════════════════ -->
+          <!-- SIDEBAR NAV — animated icons + descriptions            -->
+          <!-- ═══════════════════════════════════════════════════════ -->
+          <nav class="nav dl-nav">
+            <button class="nav-item dl-nav-item" data-route="feed">
+              <span class="dl-nav-icon"><i class="ri-home-5-line"></i></span>
+              <span class="dl-nav-text">
+                <span class="dl-nav-label">Feed</span>
+                <small class="dl-nav-desc">Posts &amp; updates from your circles</small>
+              </span>
+            </button>
+            <button class="nav-item dl-nav-item" data-route="reels">
+              <span class="dl-nav-icon"><i class="ri-film-line"></i></span>
+              <span class="dl-nav-text">
+                <span class="dl-nav-label">Reels</span>
+                <small class="dl-nav-desc">Short videos from people you follow</small>
+              </span>
+            </button>
+            <button class="nav-item dl-nav-item" data-route="chats">
+              <span class="dl-nav-icon"><i class="ri-chat-3-line"></i></span>
+              <span class="dl-nav-text">
+                <span class="dl-nav-label">Chats</span>
+                <small class="dl-nav-desc">Direct messages &amp; conversations</small>
+              </span>
+              <span class="pill" id="chatsPill" hidden>0</span>
+            </button>
+            <button class="nav-item dl-nav-item" data-route="groups">
+              <span class="dl-nav-icon"><i class="ri-group-2-line"></i></span>
+              <span class="dl-nav-text">
+                <span class="dl-nav-label">Groups</span>
+                <small class="dl-nav-desc">Join &amp; chat in group rooms</small>
+              </span>
+            </button>
+            <button class="nav-item dl-nav-item" data-route="explore">
+              <span class="dl-nav-icon"><i class="ri-compass-3-line"></i></span>
+              <span class="dl-nav-text">
+                <span class="dl-nav-label">Explore</span>
+                <small class="dl-nav-desc">Discover trending posts &amp; hashtags</small>
+              </span>
+            </button>
+            <button class="nav-item dl-nav-item" data-route="saved">
+              <span class="dl-nav-icon"><i class="ri-bookmark-line"></i></span>
+              <span class="dl-nav-text">
+                <span class="dl-nav-label">Saved</span>
+                <small class="dl-nav-desc">Posts you bookmarked for later</small>
+              </span>
+            </button>
+            <button class="nav-item dl-nav-item" data-route="spaces">
+              <span class="dl-nav-icon"><i class="ri-planet-line"></i></span>
+              <span class="dl-nav-text">
+                <span class="dl-nav-label">Spaces</span>
+                <small class="dl-nav-desc">Live audio rooms &amp; events</small>
+              </span>
+            </button>
+            <button class="nav-item dl-nav-item" data-route="challenges">
+              <span class="dl-nav-icon"><i class="ri-trophy-line"></i></span>
+              <span class="dl-nav-text">
+                <span class="dl-nav-label">Challenges</span>
+                <small class="dl-nav-desc">Community challenges &amp; contests</small>
+              </span>
+            </button>
+            <button class="nav-item dl-nav-item" data-route="mentorship">
+              <span class="dl-nav-icon"><i class="ri-user-heart-line"></i></span>
+              <span class="dl-nav-text">
+                <span class="dl-nav-label">Mentorship</span>
+                <small class="dl-nav-desc">Find or become a mentor</small>
+              </span>
+            </button>
+            <button class="nav-item dl-nav-item" data-route="settings">
+              <span class="dl-nav-icon"><i class="ri-settings-3-line"></i></span>
+              <span class="dl-nav-text">
+                <span class="dl-nav-label">Settings</span>
+                <small class="dl-nav-desc">Account, privacy &amp; preferences</small>
+              </span>
+            </button>
           </nav>
+
           <button class="btn primary block compose-btn" id="composeBtn"><i class="ri-add-line"></i> Create</button>
           <div class="sidebar-foot">
             <button id="sidebarInstallBtn" class="btn ghost block install-app-btn" style="margin-bottom:10px;">
@@ -820,6 +886,145 @@
         font-size: 16px;
         flex-shrink: 0;
       }
+
+      /* ═══════════════════════════════════════════════════════════ */
+      /* SIDEBAR NAV — override original style.css + animations      */
+      /* ═══════════════════════════════════════════════════════════ */
+
+      /* Widen sidebar so text fits */
+      .sidebar { min-width: 220px !important; width: 220px !important; }
+
+      .dl-nav { display: flex !important; flex-direction: column !important; gap: 2px !important; width: 100% !important; }
+
+      /* Reset everything from original style.css on nav-item */
+      .nav.dl-nav .nav-item,
+      .dl-nav-item {
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        gap: 10px !important;
+        padding: 9px 10px !important;
+        border-radius: 12px !important;
+        width: 100% !important;
+        min-height: unset !important;
+        height: auto !important;
+        text-align: left !important;
+        background: transparent !important;
+        border: none !important;
+        cursor: pointer !important;
+        position: relative !important;
+        overflow: hidden !important;
+        transition: background 0.2s ease, transform 0.18s ease !important;
+        box-sizing: border-box !important;
+      }
+
+      /* Kill any existing icon/span rules from original CSS */
+      .dl-nav-item i { display: none !important; }
+
+      .dl-nav-item::before {
+        content: "" !important;
+        position: absolute !important;
+        inset: 0 !important;
+        background: linear-gradient(135deg, rgba(124,92,252,0.09), rgba(180,92,244,0.04)) !important;
+        opacity: 0 !important;
+        transition: opacity 0.2s ease !important;
+        border-radius: 12px !important;
+      }
+      .dl-nav-item:hover::before { opacity: 1 !important; }
+      .dl-nav-item:hover { transform: translateX(4px) !important; }
+      .dl-nav-item:hover .dl-nav-icon i {
+        transform: scale(1.2) rotate(-8deg) !important;
+        color: var(--primary, #7c5cfc) !important;
+      }
+      .dl-nav-item.active {
+        background: linear-gradient(135deg, rgba(124,92,252,0.14), rgba(180,92,244,0.07)) !important;
+      }
+      .dl-nav-item.active::after {
+        content: "" !important;
+        position: absolute !important;
+        left: 0 !important; top: 18% !important; bottom: 18% !important;
+        width: 3px !important;
+        border-radius: 0 3px 3px 0 !important;
+        background: linear-gradient(180deg, #7c5cfc, #b45cf4) !important;
+      }
+      .dl-nav-item.active .dl-nav-icon i {
+        color: var(--primary, #7c5cfc) !important;
+        filter: drop-shadow(0 0 6px rgba(124,92,252,0.5)) !important;
+      }
+      .dl-nav-item.active .dl-nav-label {
+        color: var(--primary, #7c5cfc) !important;
+        font-weight: 700 !important;
+      }
+      .dl-nav-item:active { transform: translateX(1px) scale(0.98) !important; }
+
+      /* Icon box */
+      .dl-nav-icon {
+        width: 34px !important; height: 34px !important;
+        min-width: 34px !important;
+        border-radius: 10px !important;
+        background: rgba(255,255,255,0.05) !important;
+        display: flex !important; align-items: center !important; justify-content: center !important;
+        flex-shrink: 0 !important;
+        transition: background 0.2s ease !important;
+      }
+      .dl-nav-item:hover .dl-nav-icon { background: rgba(124,92,252,0.14) !important; }
+      .dl-nav-icon i {
+        display: flex !important;
+        font-size: 17px !important;
+        color: var(--text-mute, #94a3b8) !important;
+        transition: transform 0.25s cubic-bezier(.34,1.56,.64,1), color 0.2s ease, filter 0.2s ease !important;
+      }
+
+      /* Text stack */
+      .dl-nav-text {
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 1px !important;
+        min-width: 0 !important;
+        flex: 1 !important;
+        overflow: hidden !important;
+      }
+      .dl-nav-label {
+        display: block !important;
+        font-size: 13px !important;
+        font-weight: 600 !important;
+        color: var(--text, #e2e8f0) !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        transition: color 0.2s ease !important;
+        line-height: 1.4 !important;
+      }
+      .dl-nav-desc {
+        display: block !important;
+        font-size: 10.5px !important;
+        color: var(--text-mute, #64748b) !important;
+        font-weight: 400 !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        line-height: 1.3 !important;
+        transition: color 0.2s ease !important;
+      }
+      .dl-nav-item:hover .dl-nav-desc { color: var(--text-dim, #94a3b8) !important; }
+
+      /* Staggered slide-in entrance */
+      @keyframes navIn {
+        from { opacity: 0; transform: translateX(-12px); }
+        to   { opacity: 1; transform: translateX(0); }
+      }
+      .dl-nav-item { animation: navIn 0.32s ease both !important; }
+      .dl-nav-item:nth-child(1)  { animation-delay: 0.04s !important; }
+      .dl-nav-item:nth-child(2)  { animation-delay: 0.08s !important; }
+      .dl-nav-item:nth-child(3)  { animation-delay: 0.12s !important; }
+      .dl-nav-item:nth-child(4)  { animation-delay: 0.16s !important; }
+      .dl-nav-item:nth-child(5)  { animation-delay: 0.20s !important; }
+      .dl-nav-item:nth-child(6)  { animation-delay: 0.24s !important; }
+      .dl-nav-item:nth-child(7)  { animation-delay: 0.28s !important; }
+      .dl-nav-item:nth-child(8)  { animation-delay: 0.32s !important; }
+      .dl-nav-item:nth-child(9)  { animation-delay: 0.36s !important; }
+      .dl-nav-item:nth-child(10) { animation-delay: 0.40s !important; }
     </style>
   </body>
 </html>
