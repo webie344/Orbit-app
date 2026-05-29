@@ -423,7 +423,7 @@ const router = () => {
     case "profile":    renderProfile(content, rest[0] || state.uid); break;
     case "profile-u":  renderProfileByUsername(content, rest[0]); break;
     case "post":       renderPostDetail(content, rest[0]); break;
-    case "spaces":         import("./features.js").then(m => m.renderSpaces(content)); break;
+    case "spaces":         import("./features.js").then(m => rest[0] ? m.renderSpacePage(content, rest[0]) : m.renderSpaces(content)); break;
     case "challenges":     import("./features.js").then(m => m.renderChallenges(content)); break;
     case "mentorship":     import("./features.js").then(m => m.renderMentorship(content)); break;
     case "notifications":  import("./additional.js").then(m => m.renderNotifications(content)); break;
@@ -459,7 +459,7 @@ const renderFeed = (root, restoreScrollY = 0) => {
 
   const stub = el("div", { class: "composer-stub" },
     el("img", { class: "avatar sm", src: avatarFor(state.me) }),
-    el("button", { onclick: () => openCompose("post") }, `What's orbiting your mind, ${state.me.name.split(" ")[0]}?`)
+    el("button", { onclick: () => openCompose("post") }, `What's orbiting your mind, ${(state.me?.name || "there").split(" ")[0]}?`)
   );
   wrap.appendChild(stub);
 

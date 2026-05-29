@@ -452,7 +452,7 @@ export const renderSpaces = (root) => {
               }
             },
           }, joined ? "Leave" : "Join"),
-          joined ? el("button", { class: "btn ghost sm", onclick: () => openSpaceChat(s) },
+          joined ? el("button", { class: "btn ghost sm", onclick: () => { location.hash = "#spaces/" + s.id; } },
             el("i", { class: "ri-chat-3-line" }), "Open") : null,
         ),
       );
@@ -487,6 +487,15 @@ const openCreateSpace = () => {
     el("div", { style: "display:flex;justify-content:center;margin-bottom:16px;" }, preview),
     el("label", {}, "Space name", el("input", { type: "text", id: "spaceNameInp", placeholder: "e.g. AI Builders" })),
     el("label", {}, "Topic / description", el("input", { type: "text", id: "spaceTopicInp", placeholder: "e.g. Discuss AI tools & projects" })),
+    el("label", { class: "space-api-label" }, 
+      el("span", { class: "space-api-label-text" },
+        el("i", { class: "ri-rss-line" }),
+        " AI Feed URL ",
+        el("span", { class: "space-api-optional" }, "(optional)"),
+      ),
+      el("input", { type: "url", id: "spaceApiInp", class: "space-api-inp", placeholder: "https://api.example.com/posts" }),
+      el("div", { class: "space-api-hint" }, "Fetches 5 items every 5 hours and posts them as Ai messages"),
+    ),
     el("div", { class: "ts-editor-label" }, "Icon"),
     (() => {
       const g = el("div", { class: "space-icon-grid" });
@@ -515,8 +524,9 @@ const openCreateSpace = () => {
   ));
 
   modal.appendChild(el("button", { class: "btn primary ts-save-btn", onclick: async () => {
-    const name  = (document.getElementById("spaceNameInp")?.value  || "").trim();
-    const topic = (document.getElementById("spaceTopicInp")?.value || "").trim();
+    const name   = (document.getElementById("spaceNameInp")?.value  || "").trim();
+    const topic  = (document.getElementById("spaceTopicInp")?.value || "").trim();
+    const apiUrl = (document.getElementById("spaceApiInp")?.value   || "").trim();
     if (!name) { toast("Give the space a name"); return; }
     await addDoc(collection(db, "spaces"), {
       name, topic,
@@ -524,6 +534,8 @@ const openCreateSpace = () => {
       ownerUid: state.uid,
       members: [state.uid],
       memberCount: 1,
+      apiUrl: apiUrl || null,
+      lastAiFetch: null,
       createdAt: serverTimestamp(),
     });
     toast("Space created!");
@@ -535,64 +547,216 @@ const openCreateSpace = () => {
   document.body.appendChild(overlay);
 };
 
-const openSpaceChat = (space) => {
-  const overlay = el("div", { class: "ts-editor-overlay" });
-  const modal   = el("div", { class: "space-chat-modal" });
+// =========================================================================
+// AI FETCH HELPER — runs when a space with an apiUrl is opened
+// Checks if 5 hours have passed since last fetch; posts up to 5 items as Ai
+// =========================================================================
+const checkAndRunAiFetch = async (space) => {
+  if (!space.apiUrl) return;
+  const now = Date.now();
+  const lastFetch = space.lastAiFetch?.toMillis?.() || 0;
+  if (now - lastFetch < 5 * 60 * 60 * 1000) return; // < 5 hours — skip
 
-  modal.appendChild(el("div", { class: "ts-editor-head" },
-    el("div", { style: "display:flex;align-items:center;gap:10px;" },
-      el("div", { class: "space-icon sm", style: `background:${space.color}` }, el("i", { class: space.icon })),
-      el("h3", { style: "margin:0" }, space.name),
-    ),
-    el("button", { class: "icon-btn", onclick: () => overlay.remove() }, el("i", { class: "ri-close-line" })),
-  ));
+  // Stamp immediately to prevent duplicate fetches across sessions
+  await updateDoc(doc(db, "spaces", space.id), { lastAiFetch: serverTimestamp() }).catch(() => {});
 
-  const msgList = el("div", { class: "space-msg-list" });
-  modal.appendChild(msgList);
+  try {
+    const res = await fetch(space.apiUrl);
+    if (!res.ok) return;
+    const data = await res.json();
 
-  const composeRow = el("div", { class: "space-compose-row" });
-  const input = el("input", { type: "text", placeholder: `Message #${space.name}…`, class: "space-msg-input" });
-  const sendBtn = el("button", { class: "icon-btn", onclick: sendMsg }, el("i", { class: "ri-send-plane-fill", style: "color:var(--primary)" }));
-  input.addEventListener("keydown", (e) => { if (e.key === "Enter") sendMsg(); });
-  composeRow.appendChild(el("img", { class: "avatar xs", src: avatarFor(state.me) }));
-  composeRow.appendChild(input);
-  composeRow.appendChild(sendBtn);
-  modal.appendChild(composeRow);
+    // Support common API shapes: array, or object with items/articles/posts/results/data
+    const items = Array.isArray(data)
+      ? data
+      : data.articles || data.items || data.posts || data.results || data.data || [];
 
-  async function sendMsg() {
-    const text = input.value.trim();
-    if (!text) return;
-    input.value = "";
-    await addDoc(collection(db, "spaces", space.id, "messages"), {
-      authorUid: state.uid,
-      fromName: state.me?.name || "User",
-      fromAvatar: state.me?.photoURL || "",
-      text,
-      createdAt: serverTimestamp(),
-    });
+    const toSend = items.slice(0, 5);
+    for (const item of toSend) {
+      const title  = item.title  || item.name     || item.headline || "";
+      const desc   = item.description || item.summary || item.body || item.content || item.text || "";
+      const url    = item.url    || item.link      || item.href    || "";
+      const image  = item.image  || item.urlToImage || item.thumbnail || item.imageUrl || item.cover_image || "";
+
+      let text = title ? `*${title}*` : "";
+      if (desc)  text += (text ? "\n" : "") + String(desc).slice(0, 300);
+      if (url)   text += (text ? "\n" : "") + url;
+      if (!text.trim()) continue;
+
+      await addDoc(collection(db, "spaces", space.id, "messages"), {
+        authorUid:  "ai",
+        fromName:   "Ai",
+        fromAvatar: "",
+        isAi:       true,
+        text:       text.trim(),
+        imageUrl:   image || null,
+        createdAt:  serverTimestamp(),
+      });
+    }
+  } catch (err) {
+    console.warn("Orbit AI fetch failed:", err);
+  }
+};
+
+// =========================================================================
+// FULL-PAGE SPACE VIEW — replaces the old modal
+// Route: #spaces/{spaceId}
+// =========================================================================
+export const renderSpacePage = async (root, spaceId) => {
+  root.innerHTML = "";
+  root.classList.add("chat-active"); // locks root scroll so .space-page owns it
+
+  // Load space doc
+  let space;
+  try {
+    const snap = await getDoc(doc(db, "spaces", spaceId));
+    if (!snap.exists()) {
+      root.classList.remove("chat-active");
+      root.appendChild(el("div", { class: "empty" },
+        el("i", { class: "ri-planet-line" }),
+        el("div", { class: "t" }, "Space not found"),
+      ));
+      return;
+    }
+    space = { id: snap.id, ...snap.data() };
+  } catch {
+    root.classList.remove("chat-active");
+    root.appendChild(el("div", { class: "empty" },
+      el("i", { class: "ri-error-warning-line" }),
+      el("div", { class: "t" }, "Could not load space"),
+    ));
+    return;
   }
 
+  const joined = (space.members || []).includes(state.uid);
+
+  // Wrapper — flex column, full height, owns scroll
+  const page = el("div", { class: "space-page" });
+  root.appendChild(page);
+
+  // ── Header ──
+  const header = el("div", { class: "space-page-head" },
+    el("button", { class: "icon-btn", onclick: () => history.back() },
+      el("i", { class: "ri-arrow-left-line" })),
+    el("div", { class: "space-icon sm", style: `background:${space.color || "var(--grad-1)"}` },
+      el("i", { class: space.icon || "ri-planet-line" })),
+    el("div", { class: "space-page-title" },
+      el("div", { class: "space-page-name" }, space.name),
+      el("div", { class: "space-page-meta" }, `${space.memberCount || 0} members${space.topic ? " · " + space.topic : ""}`),
+    ),
+    !joined ? el("button", { class: "btn primary sm", onclick: async () => {
+      await updateDoc(doc(db, "spaces", space.id), { members: arrayUnion(state.uid), memberCount: increment(1) });
+      toast("Joined! Now you can send messages.");
+      location.reload();
+    }}, "Join") : null,
+  );
+  page.appendChild(header);
+
+  // ── Message list ──
+  const msgList = el("div", { class: "space-page-msgs" });
+  page.appendChild(msgList);
+
+  // ── Compose row (only if joined) ──
+  if (joined) {
+    const composeRow = el("div", { class: "space-page-compose" });
+    const input = el("input", {
+      type: "text",
+      placeholder: `Message #${space.name}…`,
+      class: "space-page-input",
+    });
+    const sendBtn = el("button", { class: "icon-btn" },
+      el("i", { class: "ri-send-plane-fill", style: "color:var(--primary)" }));
+
+    const sendMsg = async () => {
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = "";
+      await addDoc(collection(db, "spaces", space.id, "messages"), {
+        authorUid:  state.uid,
+        fromName:   state.me?.name   || "User",
+        fromAvatar: state.me?.photoURL || "",
+        isAi:       false,
+        text,
+        imageUrl:   null,
+        createdAt:  serverTimestamp(),
+      });
+    };
+
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") sendMsg(); });
+    sendBtn.addEventListener("click", sendMsg);
+
+    composeRow.appendChild(el("img", { class: "avatar xs", src: avatarFor(state.me) }));
+    composeRow.appendChild(input);
+    composeRow.appendChild(sendBtn);
+    page.appendChild(composeRow);
+  }
+
+  // ── Live messages ──
+  const renderMsg = (m) => {
+    const isMe = m.authorUid === state.uid;
+    const isAi = m.isAi === true || m.authorUid === "ai";
+
+    if (isAi) {
+      // WhatsApp-channel style AI message
+      const body = el("div", { class: "space-ai-msg" },
+        el("div", { class: "space-ai-avatar" }, "Ai"),
+        el("div", {},
+          el("div", { class: "space-ai-label" }, "Ai"),
+          el("div", { class: "space-ai-msg-body" },
+            (() => {
+              const wrap = el("div");
+              // Bold *title*
+              const rendered = m.text.replace(/\*(.*?)\*/g, "<strong>$1</strong>")
+                .replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+              wrap.innerHTML = rendered;
+              if (m.imageUrl) {
+                const img = el("img", { src: m.imageUrl, alt: "", loading: "lazy" });
+                wrap.appendChild(img);
+              }
+              return wrap;
+            })(),
+          ),
+        ),
+      );
+      return body;
+    }
+
+    return el("div", { class: `space-msg${isMe ? " mine" : ""}` },
+      !isMe ? el("img", { class: "avatar xs", src: m.fromAvatar || avatarFor({ uid: m.authorUid }) }) : null,
+      el("div", { class: "space-msg-body" },
+        !isMe ? el("div", { class: "space-msg-name" }, m.fromName || "User") : null,
+        el("div", { class: "space-msg-text" }, m.text),
+      ),
+    );
+  };
+
   const unsub = onSnapshot(
-    query(collection(db, "spaces", space.id, "messages"), orderBy("createdAt", "asc"), limit(80)),
+    query(collection(db, "spaces", space.id, "messages"), orderBy("createdAt", "asc"), limit(120)),
     (snap) => {
       msgList.innerHTML = "";
-      snap.docs.forEach((d) => {
-        const m = d.data();
-        const isMe = m.authorUid === state.uid;
-        msgList.appendChild(el("div", { class: `space-msg${isMe ? " mine" : ""}` },
-          !isMe ? el("img", { class: "avatar xs", src: m.fromAvatar || avatarFor({ uid: m.authorUid }) }) : null,
-          el("div", { class: "space-msg-body" },
-            !isMe ? el("div", { class: "space-msg-name" }, m.fromName) : null,
-            el("div", { class: "space-msg-text" }, m.text),
-          ),
+      if (snap.empty) {
+        msgList.appendChild(el("div", { class: "empty", style: "padding:40px 0" },
+          el("i", { class: "ri-chat-3-line" }),
+          el("div", { class: "t" }, "No messages yet"),
+          el("div", {}, "Be the first to say something!"),
         ));
-      });
+        return;
+      }
+      snap.docs.forEach((d) => msgList.appendChild(renderMsg(d.data())));
       msgList.scrollTop = msgList.scrollHeight;
     });
 
-  overlay.appendChild(modal);
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) { unsub(); overlay.remove(); } });
-  document.body.appendChild(overlay);
+  // Clean up listener on navigation (page div is removed when router clears root.innerHTML)
+  const mo = new MutationObserver(() => {
+    if (!page.isConnected) {
+      unsub();
+      mo.disconnect();
+      root.classList.remove("chat-active");
+    }
+  });
+  mo.observe(document.body, { childList: true, subtree: true });
+
+  // ── Trigger AI fetch if needed ──
+  if (space.apiUrl) checkAndRunAiFetch(space);
 };
 
 // =========================================================================
@@ -936,7 +1100,7 @@ const loadMentorMatches = async (wrap, myProfile) => {
     snap.docs.forEach((d) => {
       const m = d.data();
       if (m.uid === state.uid) return;
-      grid.appendChild(el("div", { class: "mentor-card" },
+      const mentorCard = el("div", { class: "mentor-card" },
         el("img", { class: "avatar md", src: m.photoURL || avatarFor({ uid: m.uid }) }),
         el("div", { class: "mentor-card-info" },
           el("div", { class: "mentor-card-name" }, m.name || "User"),
@@ -952,7 +1116,33 @@ const loadMentorMatches = async (wrap, myProfile) => {
           await writeNotif(m.uid, "message", { text: "I'd like to connect for mentorship!" }).catch(() => {});
           location.hash = `#chats/${m.uid}`;
         }}, el("i", { class: "ri-chat-3-line" }), "Message"),
-      ));
+      );
+
+      // Load and show this mentor's created spaces
+      getDocs(query(collection(db, "spaces"), where("ownerUid", "==", m.uid), limit(5)))
+        .then((spacesSnap) => {
+          if (spacesSnap.empty) return;
+          const spacesRow = el("div", { class: "mentor-spaces-row" },
+            el("div", { class: "mentor-spaces-label" },
+              el("i", { class: "ri-planet-line" }), " Spaces"),
+          );
+          spacesSnap.docs.forEach((sd) => {
+            const s = { id: sd.id, ...sd.data() };
+            const chip = el("button", {
+              class: "mentor-space-chip",
+              title: s.topic || s.name,
+              onclick: () => { location.hash = "#spaces/" + s.id; },
+            },
+              el("span", { class: "mentor-space-icon", style: `background:${s.color || "var(--grad-1)"}` },
+                el("i", { class: s.icon || "ri-planet-line" })),
+              s.name,
+            );
+            spacesRow.appendChild(chip);
+          });
+          mentorCard.appendChild(spacesRow);
+        }).catch(() => {});
+
+      grid.appendChild(mentorCard);
     });
     wrap.appendChild(grid);
   } catch (err) {

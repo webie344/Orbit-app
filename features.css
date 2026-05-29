@@ -1016,3 +1016,244 @@
   .ts-editor-modal { max-height: 95vh; }
   .space-icon-grid { grid-template-columns: repeat(4, 1fr); }
 }
+
+
+/* ── Create Space — AI Feed URL field ──────────────────────────── */
+.space-api-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  background: linear-gradient(135deg, rgba(124,92,255,0.06), rgba(255,92,174,0.04));
+  border: 1px solid rgba(124,92,255,0.2);
+  border-radius: var(--radius);
+  margin-top: 2px;
+}
+.space-api-label-text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.space-api-label-text i {
+  color: var(--grad-1);
+  font-size: 15px;
+}
+.space-api-optional {
+  font-weight: 500;
+  color: var(--text-mute);
+  font-size: 12px;
+}
+.space-api-inp {
+  background: var(--bg) !important;
+  border: 1px solid rgba(124,92,255,0.25) !important;
+  border-radius: var(--radius) !important;
+  padding: 9px 12px !important;
+  font-size: 13px !important;
+  color: var(--text) !important;
+  width: 100%;
+  font-family: var(--font-mono);
+  transition: border-color var(--speed), box-shadow var(--speed);
+}
+.space-api-inp:focus {
+  border-color: var(--primary) !important;
+  box-shadow: 0 0 0 3px rgba(124,92,255,0.15) !important;
+  outline: none;
+}
+.space-api-inp::placeholder {
+  color: var(--text-mute);
+  font-family: var(--font-sans, inherit);
+}
+.space-api-hint {
+  font-size: 11px;
+  color: var(--text-mute);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-top: 2px;
+}
+.space-api-hint::before {
+  content: "\f05a";
+  font-family: "remixicon";
+  font-size: 12px;
+  color: var(--grad-1);
+  opacity: 0.7;
+}
+
+/* ── Full-Page Space View ───────────────────────────────────────── */
+.space-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  position: relative;
+}
+.space-page-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-elev);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  flex-shrink: 0;
+}
+.space-page-title {
+  flex: 1;
+  min-width: 0;
+}
+.space-page-name {
+  font-weight: 800;
+  font-size: 16px;
+  font-family: var(--font-display);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.space-page-meta {
+  font-size: 12px;
+  color: var(--text-mute);
+  margin-top: 1px;
+}
+.space-page-msgs {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+.space-page-compose {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-elev);
+  flex-shrink: 0;
+  padding-bottom: calc(10px + env(safe-area-inset-bottom));
+}
+.space-page-input {
+  flex: 1;
+  background: var(--bg-elev-2);
+  border-radius: var(--radius-pill);
+  padding: 10px 14px;
+}
+
+/* ── Ai (bot) messages in spaces ───────────────────────────────── */
+.space-ai-msg {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  max-width: 88%;
+}
+.space-ai-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--grad-1), var(--grad-3));
+  display: grid;
+  place-items: center;
+  color: white;
+  font-size: 11px;
+  font-weight: 800;
+  flex-shrink: 0;
+  box-shadow: 0 4px 10px rgba(124, 92, 255, 0.35);
+  letter-spacing: -.02em;
+}
+.space-ai-label {
+  font-size: 11px;
+  color: var(--grad-1);
+  font-weight: 700;
+  margin-bottom: 3px;
+  letter-spacing: .02em;
+}
+.space-ai-msg-body {
+  background: var(--bg-elev-2);
+  border: 1px solid rgba(124, 92, 255, 0.22);
+  padding: 10px 14px;
+  border-radius: 4px 14px 14px 14px;
+  font-size: 14px;
+  line-height: 1.55;
+  word-break: break-word;
+  max-width: 100%;
+}
+.space-ai-msg-body strong { color: var(--text); }
+.space-ai-msg-body a {
+  color: var(--primary);
+  word-break: break-all;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.space-ai-msg-body img {
+  display: block;
+  max-width: 100%;
+  border-radius: var(--radius);
+  margin-top: 8px;
+  border: 1px solid var(--line);
+}
+
+/* ── Mentor card spaces section ────────────────────────────────── */
+.mentor-spaces-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+  margin-top: 2px;
+}
+.mentor-spaces-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-mute);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+.mentor-space-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px 4px 4px;
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  transition: border-color var(--speed), background var(--speed), color var(--speed);
+}
+.mentor-space-chip:hover {
+  border-color: var(--primary);
+  color: var(--text);
+  background: var(--hover);
+}
+.mentor-space-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  color: white;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+/* Responsive adjustments for space page */
+@media (max-width: 640px) {
+  .space-page-head { padding: 10px 12px; }
+  .space-page-msgs  { padding: 10px 12px; }
+  .space-page-compose { padding: 8px 12px; padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
+  .space-ai-msg { max-width: 96%; }
+}
