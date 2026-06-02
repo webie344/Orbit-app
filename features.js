@@ -26,6 +26,7 @@
 // =========================================================================
 
 import { db, state, $, $$, el, toast, avatarFor, fetchUser, fmtTime, writeNotif, escapeHtml } from "./app.js";
+import { COURSES, getCourse, getChapter, getNextChapter } from "./courses.js";
 
 import {
   doc, setDoc, getDoc, updateDoc, addDoc, deleteDoc,
@@ -487,7 +488,7 @@ const openCreateSpace = () => {
     el("div", { style: "display:flex;justify-content:center;margin-bottom:16px;" }, preview),
     el("label", {}, "Space name", el("input", { type: "text", id: "spaceNameInp", placeholder: "e.g. AI Builders" })),
     el("label", {}, "Topic / description", el("input", { type: "text", id: "spaceTopicInp", placeholder: "e.g. Discuss AI tools & projects" })),
-    el("label", { class: "space-api-label" }, 
+    el("label", { class: "space-api-label" },
       el("span", { class: "space-api-label-text" },
         el("i", { class: "ri-rss-line" }),
         " AI Feed URL ",
@@ -1317,3 +1318,320 @@ document.addEventListener("orbit:auth-ready", () => {
   initBuildCompose();
   initProjectCompose();
 });
+
+// =========================================================================
+// ORBIT ACADEMY — Full Learning Feature
+// =========================================================================
+
+// ── Load progress for current user ─────────────────────────────────────────
+const loadProgress = async () => {
+  if (!state.uid) return {};
+  try {
+    const snap = await getDoc(doc(db, "users", state.uid));
+    return snap.exists() ? (snap.data().learnProgress || {}) : {};
+  } catch { return {}; }
+};
+
+// ── Mark chapter complete, post achievement, add badge ──────────────────────
+export const completeChapter = async (courseId, chapterId) => {
+  if (!state.uid) return;
+  const course  = getCourse(courseId);
+  const chapter = getChapter(courseId, chapterId);
+  if (!course || !chapter) return;
+
+  const progressKey = `learnProgress.${courseId}.${chapterId}`;
+  const badgeEntry  = `${course.emoji} ${course.title}`;
+
+  try {
+    // 1. Mark progress on user doc
+    await updateDoc(doc(db, "users", state.uid), {
+      [progressKey]: true,
+      learnBadges: arrayUnion(badgeEntry),
+    });
+
+    // 2. Post achievement to feed
+    await addDoc(collection(db, "posts"), {
+      uid:       state.uid,
+      authorName:  state.me?.name || "Someone",
+      authorAvatar: state.me?.photoURL || "",
+      kind:      "achievement",
+      text:      `🏆 Just completed "${chapter.title}" in the ${course.emoji} ${course.title} track on Orbit Academy!`,
+      course:    course.title,
+      chapter:   chapter.title,
+      emoji:     course.emoji,
+      likes:     [],
+      comments:  0,
+      createdAt: serverTimestamp(),
+    });
+
+    toast(`🏆 Chapter complete! Achievement posted to your feed.`);
+  } catch (e) {
+    console.error("completeChapter error:", e);
+    toast("Progress saved!");
+  }
+};
+
+// ── Helper: build progress bar ──────────────────────────────────────────────
+const buildProgressBar = (done, total, color) => {
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  const bar = el("div", { class: "acad-prog-bar" });
+  const fill = el("div", { class: "acad-prog-fill", style: `width:${pct}%;background:${color};` });
+  bar.appendChild(fill);
+  return { bar, pct };
+};
+
+// =========================================================================
+// renderLearn — track grid
+// =========================================================================
+export const renderLearn = async (root) => {
+  root.innerHTML = "";
+  const progress = await loadProgress();
+
+  const wrap = el("div", { class: "acad-wrap" });
+
+  // Header
+  wrap.appendChild(el("div", { class: "acad-header" },
+    el("div", { class: "acad-header-text" },
+      el("h1", {}, el("span", { class: "acad-logo" }, "🚀"), " Orbit Academy"),
+      el("p", { class: "acad-subtitle" }, "Learn real tech skills, step by step. Complete chapters to earn badges and post achievements.")
+    )
+  ));
+
+  // Stats row
+  const totalChapters = COURSES.reduce((a, c) => a + c.chapters.length, 0);
+  const doneChapters  = COURSES.reduce((a, c) =>
+    a + c.chapters.filter(ch => progress[c.id]?.[ch.id]).length, 0);
+  const activeTracks  = COURSES.filter(c => c.chapters.some(ch => progress[c.id]?.[ch.id])).length;
+
+  wrap.appendChild(el("div", { class: "acad-stats" },
+    el("div", { class: "acad-stat" }, el("div", { class: "acad-stat-n" }, String(doneChapters)), el("div", { class: "acad-stat-l" }, "Chapters Done")),
+    el("div", { class: "acad-stat" }, el("div", { class: "acad-stat-n" }, String(activeTracks)), el("div", { class: "acad-stat-l" }, "Tracks Started")),
+    el("div", { class: "acad-stat" }, el("div", { class: "acad-stat-n" }, String(COURSES.length)), el("div", { class: "acad-stat-l" }, "Total Tracks")),
+  ));
+
+  // Grid
+  const grid = el("div", { class: "acad-grid" });
+  COURSES.forEach(course => {
+    const courseDone  = course.chapters.filter(ch => progress[course.id]?.[ch.id]).length;
+    const courseTotal = course.chapters.length;
+    const { bar, pct } = buildProgressBar(courseDone, courseTotal, "white");
+
+    const card = el("div", { class: "acad-card", style: `background:${course.color};`, onclick: () => { location.hash = `#learn/${course.id}`; } },
+      el("div", { class: "acad-card-emoji" }, course.emoji),
+      el("div", { class: "acad-card-title" }, course.title),
+      el("div", { class: "acad-card-desc" }, course.desc),
+      el("div", { class: "acad-card-meta" },
+        el("span", {}, `${courseTotal} chapters`),
+        el("span", {}, `${pct}% done`)
+      ),
+      bar,
+      pct === 100 ? el("div", { class: "acad-card-complete" }, "✅ Completed!") : null,
+    );
+    grid.appendChild(card);
+  });
+  wrap.appendChild(grid);
+  root.appendChild(wrap);
+};
+
+// =========================================================================
+// renderTrackPage — chapter list for one track
+// =========================================================================
+export const renderTrackPage = async (root, courseId) => {
+  root.innerHTML = "";
+  const course = getCourse(courseId);
+  if (!course) { root.appendChild(el("div", { class: "empty" }, "Track not found.")); return; }
+  const progress = await loadProgress();
+
+  const wrap = el("div", { class: "acad-wrap" });
+
+  // Back button + hero
+  wrap.appendChild(el("div", { class: "acad-track-hero", style: `background:${course.color};` },
+    el("button", { class: "acad-back-btn", onclick: () => { location.hash = "#learn"; } },
+      el("i", { class: "ri-arrow-left-line" }), " All Tracks"),
+    el("div", { class: "acad-track-hero-emoji" }, course.emoji),
+    el("h2", { class: "acad-track-title" }, course.title),
+    el("p",  { class: "acad-track-desc" }, course.desc),
+  ));
+
+  // Progress summary
+  const done  = course.chapters.filter(ch => progress[courseId]?.[ch.id]).length;
+  const total = course.chapters.length;
+  const { bar, pct } = buildProgressBar(done, total, "#fff");
+  const progSec = el("div", { class: "acad-track-prog-sec" },
+    el("div", { class: "acad-track-prog-label" },
+      el("span", {}, `${done} of ${total} chapters complete`),
+      el("span", {}, `${pct}%`),
+    ),
+    bar,
+  );
+  wrap.appendChild(progSec);
+
+  // Chapter list
+  const list = el("div", { class: "acad-chapter-list" });
+  let unlocked = true; // first chapter always unlocked
+  course.chapters.forEach((ch, idx) => {
+    const isDone   = !!progress[courseId]?.[ch.id];
+    const prevDone = idx === 0 || !!progress[courseId]?.[course.chapters[idx - 1].id];
+    const isLocked = !isDone && !prevDone && idx > 0;
+
+    const item = el("div", {
+      class: `acad-chapter-item${isDone ? " done" : ""}${isLocked ? " locked" : ""}`,
+      onclick: isLocked ? () => toast("Complete the previous chapter first!") :
+               () => { location.hash = `#learn/${courseId}/${ch.id}`; },
+    },
+      el("div", { class: "acad-chapter-num" }, isDone ? el("i", { class: "ri-check-fill" }) : String(idx + 1)),
+      el("div", { class: "acad-chapter-info" },
+        el("div", { class: "acad-chapter-name" }, ch.title),
+        el("div", { class: "acad-chapter-meta" }, el("i", { class: "ri-time-line" }), " " + ch.duration),
+      ),
+      isLocked ? el("i", { class: "ri-lock-2-line acad-lock-icon" }) :
+      isDone   ? el("div", { class: "acad-done-badge" }, "Done") :
+                 el("i", { class: "ri-arrow-right-line acad-arrow-icon" }),
+    );
+    list.appendChild(item);
+  });
+  wrap.appendChild(list);
+  root.appendChild(wrap);
+};
+
+// =========================================================================
+// renderChapterPage — lesson content + quiz
+// =========================================================================
+export const renderChapterPage = async (root, courseId, chapterId) => {
+  root.innerHTML = "";
+  const course  = getCourse(courseId);
+  const chapter = getChapter(courseId, chapterId);
+  if (!course || !chapter) { root.appendChild(el("div", { class: "empty" }, "Chapter not found.")); return; }
+
+  const progress = await loadProgress();
+  const alreadyDone = !!progress[courseId]?.[chapterId];
+
+  const wrap = el("div", { class: "acad-chapter-wrap" });
+
+  // Top bar
+  wrap.appendChild(el("div", { class: "acad-chapter-topbar" },
+    el("button", { class: "acad-back-btn", onclick: () => { location.hash = `#learn/${courseId}`; } },
+      el("i", { class: "ri-arrow-left-line" }), ` ${course.emoji} ${course.title}`),
+    alreadyDone ? el("div", { class: "acad-done-chip" }, "✅ Completed") : el("div", {}),
+  ));
+
+  // Chapter title card
+  wrap.appendChild(el("div", { class: "acad-chapter-header", style: `background:${course.color};` },
+    el("div", { class: "acad-chapter-num-lg" }, course.emoji),
+    el("h2", { class: "acad-chapter-title-lg" }, chapter.title),
+    el("div", { class: "acad-chapter-duration" }, el("i", { class: "ri-time-line" }), " " + chapter.duration),
+  ));
+
+  // Lesson content (HTML from courses.js)
+  const contentBox = el("div", { class: "acad-content-box" });
+  contentBox.innerHTML = chapter.content;
+  wrap.appendChild(contentBox);
+
+  // Code example
+  if (chapter.code) {
+    const codeBox = el("div", { class: "acad-code-box" });
+    codeBox.appendChild(el("div", { class: "acad-code-header" },
+      el("div", { class: "acad-code-dots" },
+        el("span", {}), el("span", {}), el("span", {})),
+      el("span", { class: "acad-code-label" }, "Example Code"),
+      el("button", { class: "acad-code-copy", onclick: () => {
+        navigator.clipboard.writeText(chapter.code).then(() => toast("Copied!"));
+      }}, el("i", { class: "ri-file-copy-line" }), " Copy"),
+    ));
+    const pre  = el("pre", { class: "acad-pre" });
+    const code = el("code", { class: "language-javascript" });
+    code.textContent = chapter.code;
+    pre.appendChild(code);
+    codeBox.appendChild(pre);
+    if (window.hljs) window.hljs.highlightElement(code);
+    wrap.appendChild(codeBox);
+  }
+
+  // Quiz
+  const quiz = chapter.quiz;
+  let quizPassed = alreadyDone;
+
+  if (quiz) {
+    const quizBox  = el("div", { class: "acad-quiz-box" });
+    const quizHead = el("div", { class: "acad-quiz-head" },
+      el("i", { class: "ri-question-line" }),
+      el("span", {}, "Quick Check"),
+    );
+    const qText = el("div", { class: "acad-quiz-question" }, quiz.q);
+    quizBox.appendChild(quizHead);
+    quizBox.appendChild(qText);
+
+    const opts = el("div", { class: "acad-quiz-opts" });
+    let answered = alreadyDone;
+
+    quiz.opts.forEach((opt, idx) => {
+      const btn = el("button", {
+        class: "acad-quiz-opt" + (alreadyDone && idx === quiz.a ? " correct" : ""),
+        onclick: () => {
+          if (answered) return;
+          answered = true;
+          const isCorrect = idx === quiz.a;
+          opts.querySelectorAll(".acad-quiz-opt").forEach((b, i) => {
+            b.classList.add(i === quiz.a ? "correct" : "wrong-dim");
+          });
+          btn.classList.add(isCorrect ? "correct" : "wrong");
+          if (isCorrect) {
+            quizPassed = true;
+            resultMsg.textContent = "✅ Correct! Keep going.";
+            resultMsg.className = "acad-quiz-result success";
+            completeBtn.classList.remove("hidden");
+          } else {
+            resultMsg.textContent = `❌ Not quite — the correct answer is highlighted.`;
+            resultMsg.className = "acad-quiz-result fail";
+            // allow retry after 1.5s
+            setTimeout(() => {
+              answered = false;
+              opts.querySelectorAll(".acad-quiz-opt").forEach(b => {
+                b.className = "acad-quiz-opt";
+              });
+              resultMsg.textContent = "";
+            }, 1800);
+          }
+        }
+      }, opt);
+      opts.appendChild(btn);
+    });
+
+    const resultMsg = el("div", { class: "acad-quiz-result" });
+    quizBox.appendChild(opts);
+    quizBox.appendChild(resultMsg);
+    wrap.appendChild(quizBox);
+  }
+
+  // Complete button
+  const nextCh = getNextChapter(courseId, chapterId);
+  const completeBtn = el("div", { class: `acad-complete-section${alreadyDone ? "" : " hidden"}` },
+    el("div", { class: "acad-complete-card" },
+      el("div", { class: "acad-complete-icon" }, "🏆"),
+      el("div", { class: "acad-complete-text" },
+        el("div", { class: "acad-complete-title" }, alreadyDone ? "Chapter Complete!" : "Mark as Complete"),
+        el("div", { class: "acad-complete-sub" }, "Your achievement will be posted to your feed and a badge added to your profile."),
+      ),
+      el("button", {
+        class: "btn primary acad-complete-btn",
+        onclick: async (e) => {
+          e.currentTarget.disabled = true;
+          e.currentTarget.textContent = "Saving...";
+          await completeChapter(courseId, chapterId);
+          if (nextCh) {
+            setTimeout(() => { location.hash = `#learn/${courseId}/${nextCh.id}`; }, 800);
+          } else {
+            setTimeout(() => { location.hash = `#learn/${courseId}`; }, 800);
+          }
+        }
+      }, alreadyDone ? (nextCh ? "▶ Next Chapter" : "✅ Back to Track") :
+                       "🏆 Complete & Post Achievement"),
+    )
+  );
+
+  // Show complete button immediately if already done
+  if (alreadyDone) completeBtn.classList.remove("hidden");
+
+  wrap.appendChild(completeBtn);
+  root.appendChild(wrap);
+};

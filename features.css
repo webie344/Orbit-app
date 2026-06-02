@@ -1257,3 +1257,520 @@
   .space-page-compose { padding: 8px 12px; padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
   .space-ai-msg { max-width: 96%; }
 }
+
+/* =========================================================================
+   ORBIT ACADEMY — Learning Feature Styles
+   ========================================================================= */
+
+/* ── Wrap & Header ────────────────────────────────────────────────────────── */
+.acad-wrap {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 24px 20px 60px;
+}
+.acad-header {
+  margin-bottom: 28px;
+}
+.acad-logo {
+  font-size: 32px;
+}
+.acad-header h1 {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.acad-subtitle {
+  color: var(--text-dim);
+  font-size: 15px;
+  max-width: 520px;
+}
+
+/* ── Stats row ───────────────────────────────────────────────────────────── */
+.acad-stats {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 32px;
+  flex-wrap: wrap;
+}
+.acad-stat {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px 24px;
+  text-align: center;
+  flex: 1;
+  min-width: 100px;
+}
+.acad-stat-n {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--primary);
+}
+.acad-stat-l {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+/* ── Track grid ──────────────────────────────────────────────────────────── */
+.acad-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 18px;
+}
+.acad-card {
+  border-radius: 18px;
+  padding: 24px;
+  cursor: pointer;
+  transition: transform 0.18s, box-shadow 0.18s;
+  color: #fff;
+  position: relative;
+  overflow: hidden;
+}
+.acad-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.15);
+  opacity: 0;
+  transition: opacity 0.18s;
+  border-radius: 18px;
+}
+.acad-card:hover { transform: translateY(-4px); box-shadow: 0 16px 40px rgba(0,0,0,0.35); }
+.acad-card:hover::before { opacity: 1; }
+.acad-card-emoji {
+  font-size: 38px;
+  margin-bottom: 12px;
+  display: block;
+}
+.acad-card-title {
+  font-size: 18px;
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+.acad-card-desc {
+  font-size: 13px;
+  opacity: 0.88;
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+.acad-card-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  opacity: 0.8;
+  margin-bottom: 10px;
+}
+.acad-card-complete {
+  font-size: 13px;
+  font-weight: 700;
+  margin-top: 10px;
+  background: rgba(255,255,255,0.2);
+  border-radius: 8px;
+  padding: 6px 12px;
+  display: inline-block;
+}
+
+/* ── Progress bar ────────────────────────────────────────────────────────── */
+.acad-prog-bar {
+  height: 6px;
+  border-radius: 99px;
+  background: rgba(255,255,255,0.25);
+  overflow: hidden;
+}
+.acad-prog-fill {
+  height: 100%;
+  border-radius: 99px;
+  transition: width 0.4s ease;
+  min-width: 0;
+}
+
+/* ── Track hero page ─────────────────────────────────────────────────────── */
+.acad-track-hero {
+  border-radius: 18px;
+  padding: 28px 24px 24px;
+  color: #fff;
+  margin-bottom: 20px;
+  position: relative;
+}
+.acad-back-btn {
+  background: rgba(255,255,255,0.18);
+  border: none;
+  color: #fff;
+  border-radius: 10px;
+  padding: 8px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 20px;
+  transition: background 0.15s;
+  width: fit-content;
+}
+.acad-back-btn:hover { background: rgba(255,255,255,0.3); }
+.acad-track-hero-emoji { font-size: 52px; margin-bottom: 12px; display: block; }
+.acad-track-title { font-size: 26px; font-weight: 800; margin-bottom: 8px; }
+.acad-track-desc  { font-size: 14px; opacity: 0.88; }
+
+.acad-track-prog-sec {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px 20px;
+  margin-bottom: 20px;
+}
+.acad-track-prog-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+}
+
+/* ── Chapter list ────────────────────────────────────────────────────────── */
+.acad-chapter-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.acad-chapter-item {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px 18px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.acad-chapter-item:hover:not(.locked) {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 6%, var(--card));
+}
+.acad-chapter-item.done {
+  border-color: var(--good);
+  background: color-mix(in srgb, var(--good) 5%, var(--card));
+}
+.acad-chapter-item.locked {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.acad-chapter-num {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--bg);
+  border: 2px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 700;
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+.acad-chapter-item.done .acad-chapter-num {
+  background: var(--good);
+  border-color: var(--good);
+  color: #fff;
+}
+.acad-chapter-info { flex: 1; min-width: 0; }
+.acad-chapter-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.acad-chapter-meta {
+  font-size: 12px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.acad-done-badge {
+  background: var(--good);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 8px;
+  padding: 4px 10px;
+}
+.acad-lock-icon { color: var(--text-dim); font-size: 18px; }
+.acad-arrow-icon { color: var(--primary); font-size: 20px; }
+
+/* ── Chapter page ────────────────────────────────────────────────────────── */
+.acad-chapter-wrap {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 20px 20px 80px;
+}
+.acad-chapter-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  gap: 12px;
+}
+.acad-done-chip {
+  background: var(--good);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  border-radius: 10px;
+  padding: 6px 14px;
+  white-space: nowrap;
+}
+
+.acad-chapter-header {
+  border-radius: 18px;
+  padding: 28px 24px;
+  color: #fff;
+  margin-bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.acad-chapter-num-lg { font-size: 44px; }
+.acad-chapter-title-lg { font-size: 24px; font-weight: 800; }
+.acad-chapter-duration {
+  font-size: 13px;
+  opacity: 0.85;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* ── Lesson content ──────────────────────────────────────────────────────── */
+.acad-content-box {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 28px 28px;
+  margin-bottom: 20px;
+  line-height: 1.7;
+  color: var(--text);
+}
+.acad-content-box h3 {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--text);
+  margin: 0 0 14px;
+}
+.acad-content-box h4 {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--primary);
+  margin: 20px 0 8px;
+}
+.acad-content-box p {
+  color: var(--text-dim);
+  margin-bottom: 12px;
+  font-size: 15px;
+}
+.acad-content-box ul, .acad-content-box ol {
+  padding-left: 22px;
+  margin-bottom: 14px;
+}
+.acad-content-box li {
+  color: var(--text-dim);
+  margin-bottom: 6px;
+  font-size: 15px;
+}
+.acad-content-box code {
+  background: rgba(124,92,252,0.15);
+  color: var(--primary);
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  padding: 2px 7px;
+  border-radius: 5px;
+}
+.acad-content-box strong { color: var(--text); }
+.acad-content-box a { color: var(--primary); }
+
+/* ── Code box ────────────────────────────────────────────────────────────── */
+.acad-code-box {
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  margin-bottom: 20px;
+}
+.acad-code-header {
+  background: #1a1b26;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.acad-code-dots {
+  display: flex;
+  gap: 6px;
+}
+.acad-code-dots span {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.acad-code-dots span:nth-child(1) { background: #ff5f57; }
+.acad-code-dots span:nth-child(2) { background: #febc2e; }
+.acad-code-dots span:nth-child(3) { background: #28c840; }
+.acad-code-label {
+  flex: 1;
+  font-size: 12px;
+  color: rgba(255,255,255,0.45);
+  font-family: var(--font-mono, monospace);
+}
+.acad-code-copy {
+  background: rgba(255,255,255,0.08);
+  border: none;
+  color: rgba(255,255,255,0.6);
+  border-radius: 7px;
+  padding: 5px 11px;
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  transition: background 0.15s;
+}
+.acad-code-copy:hover { background: rgba(255,255,255,0.15); color: #fff; }
+.acad-pre {
+  margin: 0;
+  overflow-x: auto;
+  background: #1a1b26 !important;
+  padding: 20px;
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+/* ── Quiz ────────────────────────────────────────────────────────────────── */
+.acad-quiz-box {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 22px;
+  margin-bottom: 20px;
+}
+.acad-quiz-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--primary);
+  margin-bottom: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.acad-quiz-question {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+.acad-quiz-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.acad-quiz-opt {
+  background: var(--bg);
+  border: 2px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 18px;
+  text-align: left;
+  font-size: 14px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+  font-family: inherit;
+}
+.acad-quiz-opt:hover:not(:disabled) {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, var(--bg));
+  color: var(--text);
+}
+.acad-quiz-opt.correct {
+  border-color: var(--good);
+  background: color-mix(in srgb, var(--good) 12%, var(--bg));
+  color: var(--good);
+  font-weight: 600;
+}
+.acad-quiz-opt.wrong {
+  border-color: var(--bad, #ff4d6d);
+  background: color-mix(in srgb, #ff4d6d 10%, var(--bg));
+  color: #ff4d6d;
+}
+.acad-quiz-opt.wrong-dim { opacity: 0.4; }
+.acad-quiz-result {
+  margin-top: 14px;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 14px;
+  border-radius: 10px;
+  min-height: 0;
+  transition: all 0.2s;
+}
+.acad-quiz-result.success {
+  background: color-mix(in srgb, var(--good) 12%, var(--bg));
+  color: var(--good);
+}
+.acad-quiz-result.fail {
+  background: color-mix(in srgb, #ff4d6d 10%, var(--bg));
+  color: #ff4d6d;
+}
+
+/* ── Complete section ────────────────────────────────────────────────────── */
+.acad-complete-section { margin-top: 8px; }
+.acad-complete-section.hidden { display: none; }
+.acad-complete-card {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 15%, var(--card)), var(--card));
+  border: 1px solid var(--primary);
+  border-radius: 18px;
+  padding: 24px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.acad-complete-icon { font-size: 42px; flex-shrink: 0; }
+.acad-complete-text { flex: 1; min-width: 180px; }
+.acad-complete-title {
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.acad-complete-sub {
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.acad-complete-btn {
+  white-space: nowrap;
+  padding: 12px 22px;
+  font-size: 14px;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .acad-wrap, .acad-chapter-wrap { padding: 14px 12px 60px; }
+  .acad-grid { grid-template-columns: 1fr; }
+  .acad-header h1 { font-size: 22px; }
+  .acad-stats { gap: 10px; }
+  .acad-stat { padding: 12px 14px; }
+  .acad-stat-n { font-size: 22px; }
+  .acad-content-box { padding: 18px 16px; }
+  .acad-complete-card { flex-direction: column; text-align: center; }
+  .acad-chapter-topbar { flex-wrap: wrap; }
+}

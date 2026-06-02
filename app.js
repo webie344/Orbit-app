@@ -392,7 +392,7 @@ $("#notifBtn").addEventListener("click", () => { location.hash = "#notifications
 // =========================================================================
 // 7. ROUTER
 // =========================================================================
-const routes = ["feed", "reels", "chats", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications"];
+const routes = ["feed", "reels", "chats", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn"];
 
 // Track feed scroll so "back from post" returns to same position
 let _feedScrollY = 0;
@@ -427,6 +427,12 @@ const router = () => {
     case "challenges":     import("./features.js").then(m => m.renderChallenges(content)); break;
     case "mentorship":     import("./features.js").then(m => m.renderMentorship(content)); break;
     case "notifications":  import("./additional.js").then(m => m.renderNotifications(content)); break;
+    case "learn":
+      import("./features.js").then(m => {
+        if (rest[0] && rest[1]) m.renderChapterPage(content, rest[0], rest[1]);
+        else if (rest[0])       m.renderTrackPage(content, rest[0]);
+        else                    m.renderLearn(content);
+      }); break;
   }
 };
 window.addEventListener("hashchange", router);
