@@ -1538,6 +1538,8 @@ const renderProfile = async (root, uid) => {
     } else if (isMe) {
       m.renderGoProBanner(proSection);
     }
+    // Academy badges — visible to all users who earned them
+    m.renderLearnBadges(proSection, uid);
   }).catch(() => {});
 
   const tabs = el("div", { class: "profile-tabs" },
