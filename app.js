@@ -240,7 +240,14 @@ const ensureUserDoc = async (user, extras = {}) => {
       createdAt: serverTimestamp(),
     };
     await setDoc(ref, profile);
-    return profile;
+    // Welcome notification for new users
+    await addDoc(collection(db, "notifications", user.uid, "items"), {
+      type: "welcome",
+      text: `Welcome to Orbit, ${profile.name.split(" ")[0]}! 👋 Explore groups, join spaces, and connect with people who share your interests.`,
+      read: false,
+      createdAt: serverTimestamp(),
+    }).catch(() => {});
+    return { ...profile, _isNew: true };
   }
   // mark online + lastSeen
   await updateDoc(ref, { online: true, lastSeen: serverTimestamp() });
@@ -262,6 +269,9 @@ onAuthStateChanged(auth, async (user) => {
   startSuggestions();
   router(); // initial route
   watchOfflineOnUnload();
+  startNewsBot(); // kick off official news/sport/social bot (throttled to every 5 h)
+  // Show onboarding modal for brand-new users
+  if (state.me._isNew) showOnboardingModal();
   // Notify chat module
   document.dispatchEvent(new CustomEvent("orbit:auth-ready", { detail: state.me }));
 });
@@ -525,6 +535,7 @@ const renderFeed = (root, restoreScrollY = 0) => {
       _inlineReels = _rs.docs.map((d) => ({ id: d.id, ...d.data() }));
     } catch {}
     // Algorithm: score posts by affinity (following > hashtag match > engagement > recency)
+    // A small random component (+0–15) keeps the feed feeling fresh on every load
     const _following = state.me?.following || [];
     const _interests = state.me?.interests || [];
     const _scored = posts.map((p) => {
@@ -533,14 +544,26 @@ const renderFeed = (root, restoreScrollY = 0) => {
       if (_interests.some((tag) => (p.hashtags || []).includes(tag))) score += 30;
       score += Math.min((p.orbitCount || 0) * 2 + (p.commentCount || 0), 30);
       score += Math.max(0, 20 - Math.floor(((Date.now() - (p.createdAt?.toMillis?.() || Date.now())) / 3600000)));
+      score += Math.random() * 15; // freshness jitter — varies order each load
       return { p, score };
     });
     _scored.sort((a, b) => b.score - a.score);
+    const _suggTypes = ["people", "groups", "spaces"];
+    let _suggShown = 0;
     _scored.forEach(({ p }, idx) => {
       list.appendChild(renderPost(p, byUid[p.authorUid]));
+      // Reel card every 5 posts
       if ((idx + 1) % 5 === 0 && _inlineReels.length) {
         const _r = _inlineReels.shift();
         if (_r) list.appendChild(renderFeedReelCard(_r));
+      }
+      // Suggestion card at post 4, then every 7 after that
+      if (idx === 4 || (idx > 4 && (idx - 4) % 7 === 0)) {
+        const type = _suggTypes[_suggShown % 3];
+        _suggShown++;
+        if (type === "people") list.appendChild(renderInlinePeopleSuggestion());
+        else if (type === "groups") list.appendChild(renderInlineGroupSuggestion());
+        else list.appendChild(renderInlineSpaceSuggestion());
       }
     });
 
@@ -2036,16 +2059,405 @@ document.getElementById("experienceForm")?.addEventListener("submit", async (e) 
 });
 
 // =========================================================================
+// =========================================================================
+// 14b. INLINE FEED SUGGESTION CARDS (People / Groups / Spaces)
+// =========================================================================
+
+const renderInlinePeopleSuggestion = () => {
+  const scroller = el("div", { class: "feed-sugg-scroller" });
+  const card = el("div", { class: "feed-suggestion-card" },
+    el("div", { class: "feed-sugg-head" },
+      el("span", {}, el("i", { class: "ri-user-add-line" }), " People you may know"),
+      el("span", { class: "feed-sugg-see-all", onclick: () => location.hash = "#explore" }, "See all")
+    ),
+    scroller
+  );
+  getDocs(query(collection(db, "users"), orderBy("createdAt", "desc"), limit(30))).then((snap) => {
+    // Shuffle so a different set appears each time
+    const _all = snap.docs.map(d => ({ uid: d.id, ...d.data() }))
+      .filter(u => u.uid !== state.uid && !u.isBot);
+    for (let i = _all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [_all[i], _all[j]] = [_all[j], _all[i]]; }
+    let added = 0;
+    _all.forEach((u) => {
+      if (added >= 6) return;
+      added++;
+      let iFollow = (state.me?.following || []).includes(u.uid);
+      const btn = el("button", {
+        class: `btn sm ${iFollow ? "ghost" : "primary"}`,
+        onclick: async (e) => {
+          const meRef = doc(db, "users", state.uid);
+          const themRef = doc(db, "users", u.uid);
+          const batch = writeBatch(db);
+          if (iFollow) {
+            batch.update(meRef, { following: arrayRemove(u.uid) });
+            batch.update(themRef, { followers: arrayRemove(state.uid) });
+          } else {
+            batch.update(meRef, { following: arrayUnion(u.uid) });
+            batch.update(themRef, { followers: arrayUnion(state.uid) });
+          }
+          await batch.commit();
+          iFollow = !iFollow;
+          btn.textContent = iFollow ? "Following" : "Follow";
+          btn.className = `btn sm ${iFollow ? "ghost" : "primary"}`;
+        }
+      }, iFollow ? "Following" : "Follow");
+      scroller.appendChild(el("div", { class: "feed-sugg-person" },
+        el("img", { class: "avatar md", src: avatarFor(u), onclick: () => location.hash = `#profile/${u.uid}` }),
+        el("div", { class: "feed-sugg-name" }, u.name || "User"),
+        el("div", { class: "feed-sugg-meta" }, "@" + (u.username || "")),
+        btn
+      ));
+    });
+    if (added === 0) card.remove();
+  }).catch(() => card.remove());
+  return card;
+};
+
+const renderInlineGroupSuggestion = () => {
+  const scroller = el("div", { class: "feed-sugg-scroller" });
+  const card = el("div", { class: "feed-suggestion-card" },
+    el("div", { class: "feed-sugg-head" },
+      el("span", {}, el("i", { class: "ri-group-2-line" }), " Groups you might like"),
+      el("span", { class: "feed-sugg-see-all", onclick: () => location.hash = "#groups" }, "See all")
+    ),
+    scroller
+  );
+  getDocs(query(collection(db, "groups"), orderBy("createdAt", "desc"), limit(24))).then((snap) => {
+    if (snap.empty) { card.remove(); return; }
+    const _all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    for (let i = _all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [_all[i], _all[j]] = [_all[j], _all[i]]; }
+    _all.slice(0, 6).forEach((g) => {
+      let member = (g.members || []).includes(state.uid);
+      const btn = el("button", {
+        class: `btn sm ${member ? "ghost" : "primary"}`,
+        onclick: async () => {
+          const ref = doc(db, "groups", g.id);
+          if (member) {
+            await updateDoc(ref, { members: arrayRemove(state.uid) });
+          } else {
+            await updateDoc(ref, { members: arrayUnion(state.uid) });
+          }
+          member = !member;
+          btn.textContent = member ? "Joined" : "Join";
+          btn.className = `btn sm ${member ? "ghost" : "primary"}`;
+        }
+      }, member ? "Joined" : "Join");
+      scroller.appendChild(el("div", { class: "feed-sugg-group" },
+        el("div", { class: "feed-sugg-group-cover" }, (g.name || "?")[0].toUpperCase()),
+        el("div", { class: "feed-sugg-name" }, g.name),
+        el("div", { class: "feed-sugg-meta" }, `${(g.members || []).length} member${(g.members || []).length !== 1 ? "s" : ""}`),
+        btn
+      ));
+    });
+  }).catch(() => card.remove());
+  return card;
+};
+
+const renderInlineSpaceSuggestion = () => {
+  const scroller = el("div", { class: "feed-sugg-scroller" });
+  const card = el("div", { class: "feed-suggestion-card" },
+    el("div", { class: "feed-sugg-head" },
+      el("span", {}, el("i", { class: "ri-planet-line" }), " Spaces for you"),
+      el("span", { class: "feed-sugg-see-all", onclick: () => location.hash = "#spaces" }, "See all")
+    ),
+    scroller
+  );
+  getDocs(query(collection(db, "spaces"), orderBy("memberCount", "desc"), limit(24))).then((snap) => {
+    if (snap.empty) { card.remove(); return; }
+    const _all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    for (let i = _all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [_all[i], _all[j]] = [_all[j], _all[i]]; }
+    _all.slice(0, 6).forEach((s) => {
+      let joined = (s.members || []).includes(state.uid);
+      const btn = el("button", {
+        class: `btn sm ${joined ? "ghost" : "primary"}`,
+        onclick: async () => {
+          const ref = doc(db, "spaces", s.id);
+          if (joined) {
+            await updateDoc(ref, { members: arrayRemove(state.uid), memberCount: increment(-1) });
+          } else {
+            await updateDoc(ref, { members: arrayUnion(state.uid), memberCount: increment(1) });
+          }
+          joined = !joined;
+          btn.textContent = joined ? "Joined" : "Join";
+          btn.className = `btn sm ${joined ? "ghost" : "primary"}`;
+        }
+      }, joined ? "Joined" : "Join");
+      scroller.appendChild(el("div", { class: "feed-sugg-space" },
+        el("div", { class: "feed-sugg-space-icon", style: `background:${s.color || "var(--grad-1)"}` },
+          el("i", { class: s.icon || "ri-planet-line" })),
+        el("div", { class: "feed-sugg-name" }, s.name),
+        el("div", { class: "feed-sugg-meta" }, `${s.memberCount || 0} member${(s.memberCount || 0) !== 1 ? "s" : ""}`),
+        btn
+      ));
+    });
+  }).catch(() => card.remove());
+  return card;
+};
+
+// =========================================================================
+// 14c. NEW USER ONBOARDING MODAL
+// =========================================================================
+
+const showOnboardingModal = () => {
+  const overlay = el("div", { class: "onboard-overlay" });
+  const modal   = el("div", { class: "onboard-modal" });
+
+  const close = () => overlay.remove();
+
+  // Header
+  modal.appendChild(el("div", { class: "onboard-header" },
+    el("div", { class: "onboard-logo" }, el("i", { class: "ri-planet-fill" })),
+    el("h2", {}, `Welcome to Orbit, ${(state.me?.name || "there").split(" ")[0]}! 🚀`),
+    el("p", {}, "Follow people, join groups, and discover spaces to get started.")
+  ));
+
+  // ── People section ──────────────────────────────────────────────────────
+  const peopleList = el("div", { class: "onboard-section-list" });
+  modal.appendChild(el("div", { class: "onboard-section" },
+    el("div", { class: "onboard-section-title" }, el("i", { class: "ri-user-add-line" }), " Suggested people"),
+    peopleList
+  ));
+  getDocs(query(collection(db, "users"), orderBy("createdAt", "desc"), limit(8))).then((snap) => {
+    let added = 0;
+    snap.docs.forEach((d) => {
+      const u = { uid: d.id, ...d.data() };
+      if (u.uid === state.uid || added >= 5) return;
+      added++;
+      let iFollow = false;
+      const btn = el("button", {
+        class: "btn sm primary",
+        onclick: async () => {
+          const meRef = doc(db, "users", state.uid);
+          const themRef = doc(db, "users", u.uid);
+          const batch = writeBatch(db);
+          if (iFollow) {
+            batch.update(meRef, { following: arrayRemove(u.uid) });
+            batch.update(themRef, { followers: arrayRemove(state.uid) });
+          } else {
+            batch.update(meRef, { following: arrayUnion(u.uid) });
+            batch.update(themRef, { followers: arrayUnion(state.uid) });
+          }
+          await batch.commit();
+          iFollow = !iFollow;
+          btn.textContent = iFollow ? "✓ Following" : "Follow";
+          btn.className = `btn sm ${iFollow ? "ghost" : "primary"}`;
+        }
+      }, "Follow");
+      peopleList.appendChild(el("div", { class: "onboard-row" },
+        el("img", { class: "avatar sm", src: avatarFor(u) }),
+        el("div", { class: "onboard-row-meta" },
+          el("div", { class: "onboard-row-name" }, u.name || "User"),
+          el("div", { class: "onboard-row-sub" }, "@" + (u.username || ""))
+        ),
+        btn
+      ));
+    });
+  }).catch(() => {});
+
+  // ── Groups section ──────────────────────────────────────────────────────
+  const groupList = el("div", { class: "onboard-section-list" });
+  modal.appendChild(el("div", { class: "onboard-section" },
+    el("div", { class: "onboard-section-title" }, el("i", { class: "ri-group-2-line" }), " Groups to join"),
+    groupList
+  ));
+  getDocs(query(collection(db, "groups"), orderBy("createdAt", "desc"), limit(4))).then((snap) => {
+    if (snap.empty) return;
+    snap.docs.forEach((d) => {
+      const g = { id: d.id, ...d.data() };
+      let member = false;
+      const btn = el("button", {
+        class: "btn sm primary",
+        onclick: async () => {
+          const ref = doc(db, "groups", g.id);
+          if (member) {
+            await updateDoc(ref, { members: arrayRemove(state.uid) });
+          } else {
+            await updateDoc(ref, { members: arrayUnion(state.uid) });
+          }
+          member = !member;
+          btn.textContent = member ? "✓ Joined" : "Join";
+          btn.className = `btn sm ${member ? "ghost" : "primary"}`;
+        }
+      }, "Join");
+      groupList.appendChild(el("div", { class: "onboard-row" },
+        el("div", { class: "onboard-group-icon" }, (g.name || "?")[0].toUpperCase()),
+        el("div", { class: "onboard-row-meta" },
+          el("div", { class: "onboard-row-name" }, g.name),
+          el("div", { class: "onboard-row-sub" }, `${(g.members || []).length} members`)
+        ),
+        btn
+      ));
+    });
+  }).catch(() => {});
+
+  // ── Spaces section ──────────────────────────────────────────────────────
+  const spaceList = el("div", { class: "onboard-section-list" });
+  modal.appendChild(el("div", { class: "onboard-section" },
+    el("div", { class: "onboard-section-title" }, el("i", { class: "ri-planet-line" }), " Spaces to explore"),
+    spaceList
+  ));
+  getDocs(query(collection(db, "spaces"), orderBy("memberCount", "desc"), limit(4))).then((snap) => {
+    if (snap.empty) return;
+    snap.docs.forEach((d) => {
+      const s = { id: d.id, ...d.data() };
+      let joined = false;
+      const btn = el("button", {
+        class: "btn sm primary",
+        onclick: async () => {
+          const ref = doc(db, "spaces", s.id);
+          if (joined) {
+            await updateDoc(ref, { members: arrayRemove(state.uid), memberCount: increment(-1) });
+          } else {
+            await updateDoc(ref, { members: arrayUnion(state.uid), memberCount: increment(1) });
+          }
+          joined = !joined;
+          btn.textContent = joined ? "✓ Joined" : "Join";
+          btn.className = `btn sm ${joined ? "ghost" : "primary"}`;
+        }
+      }, "Join");
+      spaceList.appendChild(el("div", { class: "onboard-row" },
+        el("div", { class: "onboard-space-icon", style: `background:${s.color || "var(--grad-1)"}` },
+          el("i", { class: s.icon || "ri-planet-line" })),
+        el("div", { class: "onboard-row-meta" },
+          el("div", { class: "onboard-row-name" }, s.name),
+          el("div", { class: "onboard-row-sub" }, `${s.memberCount || 0} members`)
+        ),
+        btn
+      ));
+    });
+  }).catch(() => {});
+
+  // ── Footer ──────────────────────────────────────────────────────────────
+  modal.appendChild(el("div", { class: "onboard-footer" },
+    el("button", { class: "btn primary full-width", onclick: close }, "🚀 Let's go!")
+  ));
+
+  overlay.appendChild(modal);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  document.body.appendChild(overlay);
+};
+
+// =========================================================================
+// 14d. NEWS / SPORTS / SOCIAL BOT  — posts every 5 hours under official accounts
+// =========================================================================
+
+const NEWS_BOTS = [
+  {
+    uid:      "orbit-news-official",
+    name:     "Orbit News Official",
+    username: "orbit_news",
+    emoji:    "📰",
+    badge:    "ri-newspaper-line",
+    rss:      "https://feeds.bbci.co.uk/news/rss.xml",
+    tag:      "news",
+  },
+  {
+    uid:      "orbit-sport-official",
+    name:     "Orbit Sport Official",
+    username: "orbit_sport",
+    emoji:    "⚽",
+    badge:    "ri-football-line",
+    rss:      "https://www.espn.com/espn/rss/news",
+    tag:      "sports",
+  },
+  {
+    uid:      "orbit-social-official",
+    name:     "Orbit Social Official",
+    username: "orbit_social",
+    emoji:    "🌐",
+    badge:    "ri-global-line",
+    rss:      "https://techcrunch.com/feed/",
+    tag:      "social",
+  },
+];
+
+const _BOT_INTERVAL = 5 * 60 * 60 * 1000; // 5 hours in ms
+const _RSS2JSON     = "https://api.rss2json.com/v1/api.json?count=6&rss_url=";
+
+const startNewsBot = async () => {
+  for (const bot of NEWS_BOTS) {
+    try {
+      // 1. Ensure bot user doc exists in Firestore
+      const botRef  = doc(db, "users", bot.uid);
+      const botSnap = await getDoc(botRef);
+      if (!botSnap.exists()) {
+        await setDoc(botRef, {
+          uid:       bot.uid,
+          name:      bot.name,
+          username:  bot.username,
+          photoURL:  `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(bot.name)}&backgroundColor=6c63ff`,
+          bio:       `Official ${bot.tag} updates curated by Orbit. Refreshed every 5 hours.`,
+          verified:  true,
+          isBot:     true,
+          followers: [],
+          following: [],
+          online:    false,
+          createdAt: serverTimestamp(),
+        });
+      }
+
+      // 2. Check when the bot last posted — skip if < 5 hours ago
+      const lastSnap = await getDocs(
+        query(collection(db, "posts"),
+          where("authorUid", "==", bot.uid),
+          orderBy("createdAt", "desc"),
+          limit(1)
+        )
+      );
+      if (!lastSnap.empty) {
+        const lastMs = lastSnap.docs[0].data().createdAt?.toMillis?.() || 0;
+        if (Date.now() - lastMs < _BOT_INTERVAL) continue;
+      }
+
+      // 3. Fetch RSS via rss2json (free, no key needed)
+      const res = await fetch(`${_RSS2JSON}${encodeURIComponent(bot.rss)}`);
+      if (!res.ok) continue;
+      const feed  = await res.json();
+      const items = (feed.items || []).slice(0, 3);
+      if (!items.length) continue;
+
+      // 4. Post each headline to the feed
+      const avatar = botSnap.exists()
+        ? botSnap.data().photoURL
+        : `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(bot.name)}&backgroundColor=6c63ff`;
+
+      for (const item of items) {
+        const clean = (item.description || "")
+          .replace(/<[^>]*>/g, "")
+          .trim()
+          .slice(0, 220);
+        await addDoc(collection(db, "posts"), {
+          authorUid:    bot.uid,
+          authorName:   bot.name,
+          authorAvatar: avatar,
+          kind:         "news",
+          text:         `${bot.emoji} *${item.title.trim()}*\n\n${clean}${clean.length >= 220 ? "…" : ""}`,
+          link:         item.link || "",
+          hashtags:     [bot.tag],
+          orbitCount:   0,
+          commentCount: 0,
+          likes:        [],
+          createdAt:    serverTimestamp(),
+        });
+      }
+    } catch (e) {
+      // Silently skip — bot failure should never break the app
+    }
+  }
+};
+
+// =========================================================================
 // 15. SUGGESTIONS + TRENDING right rail
 // =========================================================================
 const startSuggestions = () => {
-  // Suggested users (latest accounts I don't follow)
-  onSnapshot(query(collection(db, "users"), orderBy("createdAt", "desc"), limit(8)), (snap) => {
+  // Suggested users — fetch more then shuffle so the rail feels different each session
+  onSnapshot(query(collection(db, "users"), orderBy("createdAt", "desc"), limit(20)), (snap) => {
     const list = $("#suggestList"); if (!list) return;
     list.innerHTML = "";
-    snap.docs.forEach((d) => {
-      const u = { uid: d.id, ...d.data() };
-      if (u.uid === state.uid) return;
+    const _all = snap.docs.map(d => ({ uid: d.id, ...d.data() }))
+      .filter(u => u.uid !== state.uid && !u.isBot);
+    for (let i = _all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [_all[i], _all[j]] = [_all[j], _all[i]]; }
+    _all.slice(0, 5).forEach((u) => {
       const iFollow = (state.me.following || []).includes(u.uid);
       list.appendChild(el("div", { class: "suggest-row" },
         el("img", { class: "avatar sm", src: avatarFor(u), onclick: () => location.hash = `#profile/${u.uid}` }),
