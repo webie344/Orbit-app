@@ -1,6 +1,6 @@
 // =========================================================================
 // Orbit — app.js
-// Firebase init + Auth + Cloudinary + Router + Feed + Reels + Groups +
+// Firebase init + Auth + Cloudinary + Router + Feed + Groups +
 // Profile + Settings + Theme + Verified-by-location.
 // Chat + DM logic lives in chat.js (it imports state from this file).
 // =========================================================================
@@ -402,29 +402,69 @@ $("#notifBtn").addEventListener("click", () => { location.hash = "#notifications
 // =========================================================================
 // 7. ROUTER
 // =========================================================================
-const routes = ["feed", "reels", "chats", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn"];
+// "reels" removed — videos live in the feed as regular posts
+const routes = ["feed", "chats", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn"];
 
-// Track feed scroll so "back from post" returns to same position
+// Feed DOM caching — lets us restore the feed instantly when navigating
+// back from a post without re-rendering or re-shuffling.
 let _feedScrollY = 0;
+let _feedCachedNode = null; // detached feed DOM preserved during post visit
+let _feedUnsub = null;      // kept alive so the cached node stays fresh
 
 const router = () => {
   const hash = (location.hash || "#feed").replace(/^#/, "");
   const [route, ...rest] = hash.split("/");
   const target = routes.includes(route) ? route : "feed";
+  const prevRoute = content._currentRoute;
 
   $$(".nav-item, .bn").forEach((b) => b.classList.toggle("active", b.dataset.route === target));
 
-  const content = $("#content");
-  // Save scroll before leaving feed
-  if (content._currentRoute === "feed") {
-    _feedScrollY = content.querySelector(".feed-wrap")?.parentElement?.scrollTop || 0;
+  // ── Leaving the feed ──────────────────────────────────────────────────
+  if (prevRoute === "feed") {
+    // Save scroll position
+    _feedScrollY = content.scrollTop || 0;
+    // Detach the feed node before clearing innerHTML so we don't destroy it
+    const feedNode = content.firstElementChild;
+    if (feedNode) {
+      content.removeChild(feedNode);
+      _feedCachedNode = feedNode;
+    }
+    // Only keep unsub alive when going to a post (might come back)
+    // Kill it when navigating elsewhere (fresh feed on return)
+    if (target !== "post") {
+      if (_feedUnsub) { _feedUnsub(); _feedUnsub = null; }
+      _feedCachedNode = null;
+    }
   }
+
+  // Cancel previous non-feed route unsub
+  if (prevRoute !== "feed" && content._unsub) {
+    content._unsub();
+    content._unsub = null;
+  }
+
   content.innerHTML = "";
   content._currentRoute = target;
 
+  // ── Entering the feed ─────────────────────────────────────────────────
+  if (target === "feed") {
+    if (prevRoute === "post" && _feedCachedNode) {
+      // Restore cached feed without re-rendering (preserves shuffle order)
+      content.appendChild(_feedCachedNode);
+      content._unsub = _feedUnsub;
+      const sy = _feedScrollY;
+      requestAnimationFrame(() => { content.scrollTop = sy; });
+      _feedCachedNode = null;
+    } else {
+      // Fresh navigation — discard old cache, re-render with new shuffle
+      if (_feedUnsub) { _feedUnsub(); _feedUnsub = null; }
+      _feedCachedNode = null;
+      renderFeed(content);
+    }
+    return;
+  }
+
   switch (target) {
-    case "feed":       renderFeed(content, _feedScrollY); _feedScrollY = 0; break;
-    case "reels":      renderReels(content); break;
     case "chats":      document.dispatchEvent(new CustomEvent("orbit:open-chats", { detail: { peerUid: rest[0] || null } })); break;
     case "groups":     renderGroups(content); break;
     case "explore":    renderExplore(content, rest[0] === "tag" ? rest[1] : null); break;
@@ -469,8 +509,10 @@ $$(".nav-item, .sidebar-foot .link").forEach((b) =>
 
 // =========================================================================
 // 8. FEED — flat IG/FB style with separator lines + Trending lane
+// Videos posted are regular posts — no separate Reels section.
+// Feed shuffles on every fresh visit via scored + random jitter sort.
 // =========================================================================
-const renderFeed = (root, restoreScrollY = 0) => {
+const renderFeed = (root) => {
   const wrap = el("div", { class: "feed-wrap" });
 
   const stub = el("div", { class: "composer-stub" },
@@ -529,13 +571,8 @@ const renderFeed = (root, restoreScrollY = 0) => {
       trendingLane.classList.add("hidden");
     }
 
-    let _inlineReels = [];
-    try {
-      const _rs = await getDocs(query(collection(db, "reels"), orderBy("createdAt", "desc"), limit(6)));
-      _inlineReels = _rs.docs.map((d) => ({ id: d.id, ...d.data() }));
-    } catch {}
     // Algorithm: score posts by affinity (following > hashtag match > engagement > recency)
-    // A small random component (+0–15) keeps the feed feeling fresh on every load
+    // A random component (+0–15) shuffles the feed differently on each fresh load
     const _following = state.me?.following || [];
     const _interests = state.me?.interests || [];
     const _scored = posts.map((p) => {
@@ -544,7 +581,7 @@ const renderFeed = (root, restoreScrollY = 0) => {
       if (_interests.some((tag) => (p.hashtags || []).includes(tag))) score += 30;
       score += Math.min((p.orbitCount || 0) * 2 + (p.commentCount || 0), 30);
       score += Math.max(0, 20 - Math.floor(((Date.now() - (p.createdAt?.toMillis?.() || Date.now())) / 3600000)));
-      score += Math.random() * 15; // freshness jitter — varies order each load
+      score += Math.random() * 15; // freshness jitter — varies order each fresh load
       return { p, score };
     });
     _scored.sort((a, b) => b.score - a.score);
@@ -552,11 +589,6 @@ const renderFeed = (root, restoreScrollY = 0) => {
     let _suggShown = 0;
     _scored.forEach(({ p }, idx) => {
       list.appendChild(renderPost(p, byUid[p.authorUid]));
-      // Reel card every 5 posts
-      if ((idx + 1) % 5 === 0 && _inlineReels.length) {
-        const _r = _inlineReels.shift();
-        if (_r) list.appendChild(renderFeedReelCard(_r));
-      }
       // Suggestion card at post 4, then every 7 after that
       if (idx === 4 || (idx > 4 && (idx - 4) % 7 === 0)) {
         const type = _suggTypes[_suggShown % 3];
@@ -566,11 +598,6 @@ const renderFeed = (root, restoreScrollY = 0) => {
         else list.appendChild(renderInlineSpaceSuggestion());
       }
     });
-
-    // Restore scroll position after coming back from a post
-    if (restoreScrollY > 0) {
-      requestAnimationFrame(() => { root.scrollTop = restoreScrollY; restoreScrollY = 0; });
-    }
   });
 
   getDocs(query(collection(db, "experiences"), orderBy("createdAt", "desc"), limit(3))).then(async (snap) => {
@@ -583,7 +610,9 @@ const renderFeed = (root, restoreScrollY = 0) => {
     snap.docs.forEach((d) => { const ex = { id: d.id, ...d.data() }; _sc.appendChild(renderExperienceMiniCard(ex, _em[ex.authorUid])); });
     wrap.insertBefore(_eb, list);
   }).catch(() => {});
-  // store unsub on root so route changes clean up
+
+  // store unsub globally and on root so route changes can clean up
+  _feedUnsub = unsub;
   root._unsub = unsub;
 };
 
@@ -601,10 +630,51 @@ const renderTrendingCard = (p, author) => {
   );
 };
 
-// Build a media carousel node for an array of media objects (or single obj)
+// =========================================================================
+// 8a. MEDIA CAROUSEL / GRID
+// 1 item  → single full-width image or video player
+// 2 items → side-by-side grid (Facebook-style)
+// 3 items → 1 large left + 2 stacked right (Facebook-style)
+// 4+      → swipeable carousel
+// =========================================================================
+const _makeGridCell = (m, spanRows = false) => {
+  const cellStyle = [
+    "position:relative;overflow:hidden;",
+    spanRows ? "grid-row:1/3;" : "",
+  ].join("");
+  const cell = el("div", { style: cellStyle });
+
+  if (m.type === "video") {
+    const vid = el("video", {
+      src: m.url,
+      poster: _cloudPoster(m.url),
+      preload: "metadata",
+      playsinline: "",
+      style: "width:100%;height:100%;object-fit:cover;display:block;cursor:pointer;",
+    });
+    const overlay = el("div", {
+      class: "media-grid-play",
+      style: "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.18);pointer-events:none;",
+    }, el("i", { class: "ri-play-circle-fill", style: "font-size:44px;color:#fff;filter:drop-shadow(0 2px 10px rgba(0,0,0,0.5));" }));
+    vid.addEventListener("click", (e) => {
+      e.stopPropagation();
+      vid.muted = false;
+      if (vid.paused) { vid.play(); overlay.style.display = "none"; }
+      else { vid.pause(); overlay.style.display = "flex"; }
+    });
+    cell.appendChild(vid);
+    cell.appendChild(overlay);
+  } else {
+    cell.appendChild(el("img", { src: m.url, loading: "lazy", style: "width:100%;height:100%;object-fit:cover;display:block;" }));
+  }
+  return cell;
+};
+
 const renderMediaCarousel = (mediaRaw) => {
   const items = Array.isArray(mediaRaw) ? mediaRaw : (mediaRaw ? [mediaRaw] : []);
   if (!items.length) return null;
+
+  // ── Single item ────────────────────────────────────────────────
   if (items.length === 1) {
     const m = items[0];
     if (m.type === "video") {
@@ -612,7 +682,28 @@ const renderMediaCarousel = (mediaRaw) => {
     }
     return el("div", { class: "post-media" }, el("img", { src: m.url, loading: "lazy" }));
   }
-  // Multiple — swipeable slider (no arrows)
+
+  // ── 2 items: side-by-side ──────────────────────────────────────
+  if (items.length === 2) {
+    const grid = el("div", {
+      class: "post-media",
+      style: "display:grid;grid-template-columns:1fr 1fr;gap:2px;border-radius:12px;overflow:hidden;height:280px;",
+    });
+    items.forEach((m) => grid.appendChild(_makeGridCell(m)));
+    return grid;
+  }
+
+  // ── 3 items: 1 large left + 2 stacked right ────────────────────
+  if (items.length === 3) {
+    const grid = el("div", {
+      class: "post-media",
+      style: "display:grid;grid-template-columns:2fr 1fr;grid-template-rows:140px 140px;gap:2px;border-radius:12px;overflow:hidden;",
+    });
+    items.forEach((m, i) => grid.appendChild(_makeGridCell(m, i === 0)));
+    return grid;
+  }
+
+  // ── 4+ items: swipeable carousel ──────────────────────────────
   let cur = 0;
   const slides = items.map((m, i) => {
     const slide = el("div", { class: "carousel-slide", style: i === 0 ? "" : "display:none;" });
@@ -646,7 +737,6 @@ const renderMediaCarousel = (mediaRaw) => {
   wrap.addEventListener("touchend", (e) => {
     const dx = e.changedTouches[0].clientX - _swipeStartX;
     const dy = e.changedTouches[0].clientY - _swipeStartY;
-    // Only act if horizontal swipe is dominant and at least 40px
     if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
       e.stopPropagation();
       go(dx < 0 ? cur + 1 : cur - 1);
@@ -750,7 +840,7 @@ const renderPost = (p, author, opts = {}) => {
     }
   }
 
-  // Media (single or carousel)
+  // Media (single, grid, or carousel)
   const carousel = renderMediaCarousel(p.media);
   if (carousel) post.appendChild(carousel);
 
@@ -1072,296 +1162,6 @@ const toggleSave = async (postId) => {
 };
 
 // =========================================================================
-// 9. REELS — load once (no snapshot re-render), in-place DOM updates,
-//            TikTok-style comments slide-up, intersection autoplay
-// =========================================================================
-const renderReels = async (root) => {
-  const wrap = el("div", { class: "reels-wrap" });
-  root.appendChild(wrap);
-
-  wrap.appendChild(el("div", { class: "reel-loading" },
-    el("i", { class: "ri-loader-4-line", style: "font-size:36px;color:white;animation:spin 1s linear infinite;" })));
-
-  let reels = [];
-  try {
-    const snap = await getDocs(query(collection(db, "reels"), orderBy("createdAt", "desc"), limit(30)));
-    if (snap.empty) {
-      wrap.innerHTML = "";
-      wrap.appendChild(el("div", { class: "empty reel-empty-msg" },
-        el("i", { class: "ri-film-line" }),
-        el("div", { class: "t" }, "No reels yet"),
-        el("div", {}, "Tap Create → Reel to upload one."),
-      ));
-      return;
-    }
-    reels = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  } catch (err) {
-    wrap.innerHTML = "";
-    wrap.appendChild(el("div", { class: "empty reel-empty-msg" },
-      el("i", { class: "ri-error-warning-line" }),
-      el("div", { class: "t" }, "Couldn't load reels"),
-    ));
-    return;
-  }
-
-  const authors = await Promise.all([...new Set(reels.map((r) => r.authorUid))].map(fetchUser));
-  const map = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
-
-  wrap.innerHTML = "";
-  reels.forEach((r) => wrap.appendChild(renderReel(r, map[r.authorUid])));
-
-  const io = new IntersectionObserver((entries) => {
-    entries.forEach((e) => {
-      const v = e.target;
-      if (e.intersectionRatio >= 0.6) {
-        if (v.paused) v.play().catch(() => {});
-      } else {
-        if (!v.paused) v.pause();
-      }
-    });
-  }, { threshold: [0, 0.6, 1] });
-  wrap.querySelectorAll("video").forEach((v) => io.observe(v));
-};
-
-const renderReel = (r, author) => {
-  // Track liked state client-side to avoid re-render
-  let liked = (r.likes || []).includes(state.uid);
-  let likeCount = r.likeCount || 0;
-  let commentCount = r.commentCount || 0;
-
-  const likeIcon = el("i", { class: liked ? "ri-heart-fill" : "ri-heart-line" });
-  const likeNum  = el("span", { text: String(likeCount) });
-  const cmtNum   = el("span", { text: String(commentCount) });
-
-  const likeBtn = el("button", { class: `reel-act${liked ? " active" : ""}`,
-    onclick: async (e) => {
-      e.stopPropagation();
-      liked = !liked;
-      likeCount += liked ? 1 : -1;
-      likeIcon.className = liked ? "ri-heart-fill" : "ri-heart-line";
-      likeNum.textContent = String(likeCount);
-      likeBtn.classList.toggle("active", liked);
-      await updateDoc(doc(db, "reels", r.id), {
-        likes: liked ? arrayUnion(state.uid) : arrayRemove(state.uid),
-        likeCount: increment(liked ? 1 : -1),
-      }).catch(() => {});
-    }
-  }, likeIcon, likeNum);
-
-  const cmtBtn = el("button", { class: "reel-act",
-    onclick: (e) => { e.stopPropagation(); openReelComments(r.id, cmtNum); }
-  }, el("i", { class: "ri-chat-bubble-line" }), cmtNum);
-
-  const shareBtn = el("button", { class: "reel-act",
-    onclick: async (e) => {
-      e.stopPropagation();
-      try { await navigator.share?.({ title: "Reel on Orbit", url: r.media.url }); }
-      catch { await navigator.clipboard.writeText(r.media.url); toast("Link copied"); }
-    }
-  }, el("i", { class: "ri-share-forward-line" }), el("span", { text: "Share" }));
-
-  const video = el("video", { src: r.media.url, poster: _cloudPoster(r.media.url), loop: true, playsinline: "", muted: "", "webkit-playsinline": "" });
-
-  // TikTok-style seekable progress bar
-  const _progFill = el("div", { style: "height:100%;width:0%;background:rgba(255,255,255,0.9);border-radius:2px;transition:none;pointer-events:none;" });
-  const _progBar  = el("div", { style: "position:absolute;bottom:0;left:0;right:0;height:12px;cursor:pointer;z-index:10;display:flex;align-items:flex-end;" },
-    el("div", { style: "position:absolute;bottom:0;left:0;right:0;height:3px;background:rgba(255,255,255,0.25);border-radius:2px;" }),
-    _progFill,
-  );
-  video.addEventListener("timeupdate", () => {
-    if (video.duration) _progFill.style.width = (video.currentTime / video.duration * 100) + "%";
-  });
-
-  // Seek on tap/drag along the bar
-  const _seekTo = (e) => {
-    if (!video.duration) return;
-    const rect = _progBar.getBoundingClientRect();
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    video.currentTime = pct * video.duration;
-    _progFill.style.width = (pct * 100) + "%";
-  };
-  let _seekDragging = false;
-  _progBar.addEventListener("mousedown",  (e) => { e.stopPropagation(); _seekDragging = true; _seekTo(e); });
-  _progBar.addEventListener("touchstart", (e) => { e.stopPropagation(); _seekDragging = true; _seekTo(e); }, { passive: true });
-  window.addEventListener("mousemove",  (e) => { if (_seekDragging) _seekTo(e); });
-  window.addEventListener("touchmove",  (e) => { if (_seekDragging) _seekTo(e); }, { passive: true });
-  window.addEventListener("mouseup",   () => { _seekDragging = false; });
-  window.addEventListener("touchend",  () => { _seekDragging = false; });
-
-  // Tap to play/pause with flash icon
-  const _tapIcon = el("div", { style: "position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:56px;color:white;opacity:0;transition:opacity 0.2s ease;pointer-events:none;z-index:9;filter:drop-shadow(0 2px 12px rgba(0,0,0,0.6));" },
-    el("i", { class: "ri-play-fill" }));
-  video.addEventListener("click", (e) => {
-    e.stopPropagation();
-    if (video.paused) {
-      video.play().catch(() => {});
-      _tapIcon.querySelector("i").className = "ri-play-fill";
-    } else {
-      video.pause();
-      _tapIcon.querySelector("i").className = "ri-pause-fill";
-    }
-    _tapIcon.style.opacity = "1";
-    clearTimeout(_tapIcon._t);
-    _tapIcon._t = setTimeout(() => { _tapIcon.style.opacity = "0"; }, 650);
-  });
-
-  // Follow button for reel author
-  let _reelFollowing = (state.me?.following || []).includes(author?.uid);
-  const reelFollowBtn = r.authorUid !== state.uid ? (() => {
-    const btn = el("button", { class: `reel-follow-btn${_reelFollowing ? " following" : ""}` },
-      _reelFollowing ? "Following" : "+ Follow");
-    btn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      _reelFollowing = !_reelFollowing;
-      btn.textContent = _reelFollowing ? "Following" : "+ Follow";
-      btn.classList.toggle("following", _reelFollowing);
-      await updateDoc(doc(db, "users", state.uid), { following: _reelFollowing ? arrayUnion(author.uid) : arrayRemove(author.uid) }).catch(() => {});
-      await updateDoc(doc(db, "users", author.uid), { followers: _reelFollowing ? arrayUnion(state.uid) : arrayRemove(state.uid) }).catch(() => {});
-      if (_reelFollowing) {
-        writeNotif(author.uid, "follow", {}).catch(() => {});
-        import("./notifications.js").then(({ notifyUser }) =>
-          notifyUser(author.uid, state.me?.name || "Someone", "started following you", "/#profile/" + state.uid)
-        ).catch(() => {});
-      }
-      if (state.me) { state.me.following = _reelFollowing ? [...(state.me.following||[]), author.uid] : (state.me.following||[]).filter((x)=>x!==author.uid); }
-    });
-    return btn;
-  })() : null;
-
-  const node = el("div", { class: "reel" },
-    video,
-    _tapIcon,
-    el("div", { class: "reel-overlay" }),
-    el("div", { class: "reel-info" },
-      el("div", { class: "name", onclick: () => location.hash = `#profile/${author?.uid}` },
-        el("img", { class: "avatar sm", src: avatarFor(author) }),
-        author?.name || "User",
-        author?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
-        reelFollowBtn,
-      ),
-        r.caption ? el("div", { class: "caption", text: r.caption }) : null,
-    ),
-    el("div", { class: "reel-actions" }, likeBtn, cmtBtn, shareBtn),
-    _progBar,
-  );
-  return node;
-};
-
-// TikTok-style slide-up comments for a reel
-const openReelComments = (reelId, cmtNumEl) => {
-  // Remove any existing
-  $("#reelCommentsSheet")?.remove();
-
-  const sheet = el("div", { class: "reel-cmt-sheet", id: "reelCommentsSheet" });
-  const backdrop = el("div", { class: "reel-cmt-backdrop", onclick: () => sheet.remove() });
-
-  const inner = el("div", { class: "reel-cmt-inner" },
-    el("div", { class: "reel-cmt-handle" }),
-    el("div", { class: "reel-cmt-head" },
-      el("span", { class: "reel-cmt-title" }, "Comments"),
-      el("button", { class: "icon-btn", style: "width:32px;height:32px;", onclick: () => sheet.remove() },
-        el("i", { class: "ri-close-line" })),
-    ),
-    el("div", { class: "reel-cmt-list", id: `reelCmtList_${reelId}` },
-      el("div", { style: "text-align:center;padding:20px;color:var(--text-mute);" }, "Loading…")),
-    el("div", { class: "reel-cmt-composer" },
-      el("img", { class: "avatar xs", src: avatarFor(state.me) }),
-      el("input", { type: "text", id: "reelCmtInput", placeholder: "Add a comment…" }),
-      el("button", { class: "icon-btn", id: "reelCmtSend",
-        onclick: () => submitReelComment(reelId, cmtNumEl),
-      }, el("i", { class: "ri-send-plane-fill", style: "color:var(--primary);" })),
-    ),
-  );
-
-  const reelCmtInput = inner.querySelector("#reelCmtInput");
-  reelCmtInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") submitReelComment(reelId, cmtNumEl);
-  });
-
-  sheet.appendChild(backdrop);
-  sheet.appendChild(inner);
-  document.body.appendChild(sheet);
-
-  // Load comments live
-  const listEl = inner.querySelector(`#reelCmtList_${reelId}`);
-  const unsub = onSnapshot(
-    query(collection(db, "reels", reelId, "comments"), orderBy("createdAt", "asc"), limit(100)),
-    async (snap) => {
-      listEl.innerHTML = "";
-      if (snap.empty) {
-        listEl.appendChild(el("div", { class: "reel-cmt-empty" }, "No comments yet. Be the first!"));
-        return;
-      }
-      const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      const uids = [...new Set(items.map((c) => c.authorUid))];
-      const authors = await Promise.all(uids.map(fetchUser));
-      const amap = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
-      items.forEach((c) => {
-        const a = amap[c.authorUid];
-        const row = el("div", { class: "reel-cmt-row" },
-          el("img", { class: "avatar xs", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
-          el("div", { class: "reel-cmt-body" },
-            el("div", { class: "reel-cmt-name" },
-              a?.name || "User",
-              a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
-            ),
-            el("div", { class: "reel-cmt-text", text: c.text }),
-            el("div", { class: "reel-cmt-meta" },
-              fmtTime(c.createdAt),
-              el("button", { class: "reel-cmt-reply-btn", onclick: () => {
-                reelCmtInput.value = `@${a?.username || "user"} `;
-                reelCmtInput.dataset.replyTo = c.id;
-                reelCmtInput.focus();
-              }}, "Reply"),
-              (c.likes || []).length
-                ? el("span", { style: "color:var(--danger);", text: `♥ ${c.likes.length}` })
-                : null,
-            ),
-          ),
-          el("button", { class: "reel-cmt-like",
-            onclick: async () => {
-              const has = (c.likes || []).includes(state.uid);
-              await updateDoc(doc(db, "reels", reelId, "comments", c.id), {
-                likes: has ? arrayRemove(state.uid) : arrayUnion(state.uid),
-              }).catch(() => {});
-            }
-          }, el("i", { class: (c.likes || []).includes(state.uid) ? "ri-heart-fill" : "ri-heart-line" })),
-        );
-        listEl.appendChild(row);
-      });
-      listEl.scrollTop = listEl.scrollHeight;
-    });
-
-  // Clean up listener when sheet is removed
-  const mo = new MutationObserver(() => {
-    if (!document.body.contains(sheet)) { unsub(); mo.disconnect(); }
-  });
-  mo.observe(document.body, { childList: true });
-};
-
-const submitReelComment = async (reelId, cmtNumEl) => {
-  const input = $("#reelCmtInput");
-  const text = (input?.value || "").trim();
-  if (!text) return;
-  input.value = "";
-  try {
-    await addDoc(collection(db, "reels", reelId, "comments"), {
-      authorUid: state.uid, text, likes: [],
-      replyTo: input.dataset.replyTo || null,
-      createdAt: serverTimestamp(),
-    });
-    await updateDoc(doc(db, "reels", reelId), { commentCount: increment(1) });
-    if (cmtNumEl) {
-      cmtNumEl.textContent = String(parseInt(cmtNumEl.textContent || "0") + 1);
-    }
-    delete input.dataset.replyTo;
-  } catch (err) {
-    toast("Couldn't post comment");
-  }
-};
-
-// =========================================================================
 // 10. GROUPS
 // =========================================================================
 const renderGroups = (root) => {
@@ -1554,7 +1354,6 @@ const renderProfile = async (root, uid) => {
   root.appendChild(proSection);
   import("./features.js").then((m) => {
     if (u.isPro) {
-      // Orbit Score goes at the TOP of proSection (not inside name-row)
       m.renderOrbitScoreBadge(proSection, uid);
       m.renderTechStack(proSection, u, isMe);
       m.renderSkillBadges(proSection, uid, isMe);
@@ -1565,10 +1364,11 @@ const renderProfile = async (root, uid) => {
     m.renderLearnBadges(proSection, uid);
   }).catch(() => {});
 
+  // Tabs: Posts | Media | About
   const tabs = el("div", { class: "profile-tabs" },
     el("button", { class: "profile-tab active", "data-ptab": "posts" }, "Posts"),
-    el("button", { class: "profile-tab", "data-ptab": "reels" }, "Reels"),
-    el("button", { class: "profile-tab", "data-ptab": "tagged" }, "About"),
+    el("button", { class: "profile-tab", "data-ptab": "media" }, "Media"),
+    el("button", { class: "profile-tab", "data-ptab": "about" }, "About"),
   );
   root.appendChild(tabs);
   const body = el("div", {});
@@ -1576,13 +1376,11 @@ const renderProfile = async (root, uid) => {
 
   const renderTab = async (which) => {
     body.innerHTML = "";
-    // Show loading state
     body.appendChild(el("div", { class: "empty" },
       el("i", { class: "ri-loader-4-line", style: "animation:spin 1s linear infinite;" }),
       el("div", { class: "t" }, "Loading…")));
 
     if (which === "posts") {
-      // No orderBy — avoid composite index requirement; sort client-side
       const snap = await getDocs(
         query(collection(db, "posts"), where("authorUid", "==", uid), limit(60))
       ).catch(() => null);
@@ -1596,28 +1394,42 @@ const renderProfile = async (root, uid) => {
 
       const profFeed = el("div", { class: "profile-feed-list" }); body.appendChild(profFeed);
       posts.forEach((p) => profFeed.appendChild(renderPost(p, u)));
-    } else if (which === "reels") {
-      // No orderBy — avoid composite index requirement; sort client-side
+
+    } else if (which === "media") {
+      // Show all posts that have media (images or videos) in a grid
       const snap = await getDocs(
-        query(collection(db, "reels"), where("authorUid", "==", uid), limit(30))
+        query(collection(db, "posts"), where("authorUid", "==", uid), limit(60))
       ).catch(() => null);
       body.innerHTML = "";
       if (!snap || snap.empty) {
-        body.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-film-line" }), el("div", { class: "t" }, "No reels yet"))); return;
+        body.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-image-line" }), el("div", { class: "t" }, "No media yet"))); return;
       }
-      const reels = snap.docs
+      const posts = snap.docs
         .map((d) => ({ id: d.id, ...d.data() }))
+        .filter((p) => p.media && (Array.isArray(p.media) ? p.media.length > 0 : true))
         .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
 
+      if (!posts.length) {
+        body.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-image-line" }), el("div", { class: "t" }, "No media yet"))); return;
+      }
       const grid = el("div", { class: "grid-3 portrait-grid" }); body.appendChild(grid);
-      reels.forEach((r) => {
-        const cell = el("div", { class: "cell portrait-cell", onclick: () => location.hash = `#reels` },
-          el("video", { src: r.media?.url, muted: "", playsinline: "", preload: "metadata" }),
-          el("span", { class: "cell-badge" }, el("i", { class: "ri-play-fill" })),
-        );
+      posts.forEach((p) => {
+        const mediaItems = Array.isArray(p.media) ? p.media : (p.media ? [p.media] : []);
+        if (!mediaItems.length) return;
+        const m = mediaItems[0];
+        const cell = el("div", { class: "cell portrait-cell", onclick: () => location.hash = `#post/${p.id}` });
+        if (m.type === "video") {
+          cell.appendChild(el("video", { src: m.url, muted: "", playsinline: "", preload: "metadata" }));
+          cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-play-fill" })));
+        } else {
+          cell.appendChild(el("img", { src: m.url, loading: "lazy" }));
+          if (mediaItems.length > 1) cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-image-2-line" })));
+        }
         grid.appendChild(cell);
       });
+
     } else {
+      body.innerHTML = "";
       body.appendChild(el("div", { class: "settings" },
         el("div", { class: "group" },
           el("h3", {}, "About"),
@@ -1781,7 +1593,7 @@ const requestLocationVerification = () => {
 };
 
 // =========================================================================
-// 14. COMPOSE MODAL — posts, reels, groups
+// 14. COMPOSE MODAL — posts, groups, experiences, build, project
 // =========================================================================
 const composeModal = $("#composeModal");
 const openCompose = (which = "post") => {
@@ -1806,7 +1618,9 @@ document.addEventListener("click", (e) => {
   }
 });
 
-// Post media — up to 3 files (images or one video)
+// =========================================================================
+// Post media — up to 3 files (images and/or videos)
+// =========================================================================
 let postFiles = [];
 const MAX_POST_FILES = 3;
 
@@ -1855,10 +1669,6 @@ $("#postMedia").addEventListener("change", (e) => {
   const files = Array.from(e.target.files || []);
   for (const file of files) {
     if (postFiles.length >= MAX_POST_FILES) break;
-    // Only allow 1 video
-    if (file.type.startsWith("video/") && postFiles.some((f) => f.type.startsWith("video/"))) {
-      toast("Only one video per post"); continue;
-    }
     postFiles.push(file);
   }
   e.target.value = "";
@@ -1897,29 +1707,6 @@ $("#postForm").addEventListener("submit", async (e) => {
   }
 });
 
-$("#reelForm").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const file = $("#reelMedia").files[0];
-  if (!file) { toast("Pick a video first"); return; }
-  const btn = e.target.querySelector("button[type='submit']");
-  btn.disabled = true; btn.textContent = "Uploading…";
-  try {
-    toast("Uploading reel…");
-    const media = await uploadToCloudinary(file, "video");
-    const capEl = e.target.querySelector("input[name='caption']");
-    const _rd = { authorUid: state.uid, caption: (capEl?.value || "").trim(), media, likes: [], likeCount: 0, commentCount: 0, createdAt: serverTimestamp() };
-    await addDoc(collection(db, "reels"), _rd);
-    e.target.reset();
-    composeModal.classList.add("hidden");
-    toast("Reel uploaded!");
-    location.hash = "#reels";
-  } catch (err) {
-    toast("Upload failed: " + (err.message || "check Cloudinary config"));
-  } finally {
-    btn.disabled = false; btn.textContent = "Upload reel";
-  }
-});
-
 $("#groupForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
@@ -1952,26 +1739,6 @@ $("#groupForm").addEventListener("submit", async (e) => {
   }
 });
 
-// =========================================================================
-// FEED REEL CARD
-// =========================================================================
-const renderFeedReelCard = (reel) => {
-  const card = el("div", { class: "feed-reel-card" });
-  const vid = el("video", { src: reel.media?.url, muted: "", playsinline: "", loop: "", style: "width:100%;height:240px;object-fit:cover;cursor:pointer;display:block;" });
-  card.appendChild(el("div", { class: "frc-label" }, el("i", { class: "ri-film-fill" }), " Reels for you"));
-  card.appendChild(vid);
-  if (reel.caption) card.appendChild(el("div", { class: "frc-caption", text: reel.caption.slice(0, 80) }));
-  card.appendChild(el("div", { class: "frc-actions" }, el("button", { class: "btn ghost", style: "font-size:13px;gap:6px;", onclick: () => location.hash = "#reels" }, el("i", { class: "ri-play-circle-line" }), "Watch more reels")));
-  vid.addEventListener("click", () => {
-    if (vid.paused) vid.play();
-    else vid.pause();
-  });
-  new IntersectionObserver((en) => en.forEach((e) => {
-    if (e.isIntersecting) vid.play().catch(()=>{});
-    else vid.pause();
-  }), { threshold: 0.5 }).observe(vid);
-  return card;
-};
 // =========================================================================
 // EXPERIENCE MINI CARD
 // =========================================================================
@@ -2058,7 +1825,6 @@ document.getElementById("experienceForm")?.addEventListener("submit", async (e) 
   finally { btn.disabled = false; }
 });
 
-// =========================================================================
 // =========================================================================
 // 14b. INLINE FEED SUGGESTION CARDS (People / Groups / Spaces)
 // =========================================================================
