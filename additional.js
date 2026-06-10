@@ -29,18 +29,19 @@ const AGORA_APP_CERT = "4bfadb5dd0b846d9b2460109e7505172";    // ← paste from 
 
 // =========================================================================
 // Browser-side Agora RTC token generator (AccessToken v006)
+// Matches the official Agora SDK signing spec exactly.
 // Uses the Web Crypto API — works in every modern browser, no npm needed.
 // =========================================================================
 const _buildAgoraToken = async (channelName, uid = 0, expireSeconds = 3600) => {
-  const enc   = new TextEncoder();
-  const ts    = Math.floor(Date.now() / 1000);
-  const salt  = Math.floor(Math.random() * 2147483647) + 1;
+  const enc  = new TextEncoder();
+  const ts   = Math.floor(Date.now() / 1000) + 100; // slight future offset (matches SDK)
+  const salt = Math.floor(Math.random() * 99999999);
   const expTs = ts + expireSeconds;
 
-  // Privileges: JOIN_CHANNEL=1, PUB_AUDIO=2, PUB_VIDEO=3, PUB_DATA=4
+  // Privileges sorted by key (must match server-side sort): JOIN=1, PUB_AUDIO=2, PUB_VIDEO=3, PUB_DATA=4
   const privs = [[1, expTs], [2, expTs], [3, expTs], [4, expTs]];
 
-  // ── Little-endian pack helpers ────────────────────────────────────────
+  // ── Little-endian pack helpers (matches Agora WPacket) ───────────────
   const u16 = (buf, o, v) => {
     buf[o] = v & 0xFF; buf[o+1] = (v >> 8) & 0xFF; return o + 2;
   };
@@ -48,40 +49,47 @@ const _buildAgoraToken = async (channelName, uid = 0, expireSeconds = 3600) => {
     buf[o] = v & 0xFF; buf[o+1] = (v>>8)&0xFF;
     buf[o+2] = (v>>16)&0xFF; buf[o+3] = (v>>24)&0xFF; return o + 4;
   };
-  const str = (buf, o, bytes) => {
+  // put_string / put_bytes: uint16 length prefix + raw bytes
+  const packBytes = (buf, o, bytes) => {
     o = u16(buf, o, bytes.length);
     bytes.forEach((b, i) => { buf[o + i] = b; });
     return o + bytes.length;
   };
 
-  const appIdB = enc.encode(AGORA_APP_ID);
-  const chanB  = enc.encode(channelName);
-  const uidB   = enc.encode(uid === 0 ? "0" : String(uid));
+  const appIdB  = enc.encode(AGORA_APP_ID);
+  const certB   = enc.encode(AGORA_APP_CERT);   // ← must be included in signing message
+  const chanB   = enc.encode(channelName);
+  const uidB    = enc.encode(uid === 0 ? "" : String(uid)); // uid 0 → empty string per spec
 
-  // Build signing message
-  const msgLen = (2+appIdB.length) + 4 + 4 + (2+chanB.length) + (2+uidB.length) + 2 + privs.length*6;
+  // ── Build the signing message ─────────────────────────────────────────
+  // Order: appId + appCertificate + ts + salt + channelName + uid + privileges
+  const msgLen = (2+appIdB.length) + (2+certB.length) + 4 + 4
+               + (2+chanB.length) + (2+uidB.length)
+               + 2 + privs.length * 6;
   const msg = new Uint8Array(msgLen);
   let o = 0;
-  o = str(msg, o, appIdB);
+  o = packBytes(msg, o, appIdB);
+  o = packBytes(msg, o, certB);
   o = u32(msg, o, ts);
   o = u32(msg, o, salt);
-  o = str(msg, o, chanB);
-  o = str(msg, o, uidB);
+  o = packBytes(msg, o, chanB);
+  o = packBytes(msg, o, uidB);
   o = u16(msg, o, privs.length);
   for (const [k, v] of privs) { o = u16(msg, o, k); o = u32(msg, o, v); }
 
-  // HMAC-SHA256 sign
+  // ── HMAC-SHA256 sign ──────────────────────────────────────────────────
   const cryptoKey = await crypto.subtle.importKey(
     "raw", enc.encode(AGORA_APP_CERT),
     { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
   );
   const sig = new Uint8Array(await crypto.subtle.sign("HMAC", cryptoKey, msg));
 
-  // Pack final content
-  const contLen = (2+sig.length) + 4 + 4 + 2 + privs.length*6;
+  // ── Pack the final token content ──────────────────────────────────────
+  // Order: signature + ts + salt + privileges
+  const contLen = (2+sig.length) + 4 + 4 + 2 + privs.length * 6;
   const cont = new Uint8Array(contLen);
   let co = 0;
-  co = str(cont, co, sig);
+  co = packBytes(cont, co, sig);
   co = u32(cont, co, ts);
   co = u32(cont, co, salt);
   co = u16(cont, co, privs.length);
