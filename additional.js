@@ -448,7 +448,20 @@ const _joinAgoraGroupCall = async ({ callId, chatId, groupName }) => {
     await client.publish([localTrack]);
   } catch (err) {
     localTrack.stop(); localTrack.close();
-    toast("Could not connect to voice call: " + (err.message || "unknown error"));
+    // Error 4096 (CAN_NOT_GET_GATEWAY_SERVER) = your Agora project has
+    // "Primary Certificate" enabled. Fix:
+    //   console.agora.io → your project → Edit → Auth → "No certificate"
+    const code = String(err?.code ?? err?.message ?? "");
+    if (code.includes("4096") || code.includes("GATEWAY") || code.includes("CAN_NOT_GET")) {
+      toast(
+        "Agora setup needed: go to console.agora.io → your project → Edit → " +
+        "change Auth to 'No certificate', then try again."
+      );
+    } else if (!AGORA_APP_ID || AGORA_APP_ID === "YOUR_AGORA_APP_ID") {
+      toast("Paste your Agora App ID in additional.js first");
+    } else {
+      toast("Voice call failed: " + (err?.message || "check console for details"));
+    }
     return;
   }
 

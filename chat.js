@@ -504,9 +504,10 @@ const renderChatView = ({ isGroup, chatId, peer, group }) => {
       el("button", { class: "icon-btn call-btn-desktop", title: "Voice call",
         onclick: () => import("./additional.js").then(m => m.startCall({ peerId: isGroup ? null : peer?.uid, chatId, isGroup, type: "voice" })) },
         el("i", { class: "ri-phone-line" })),
-      el("button", { class: "icon-btn call-btn-desktop", title: "Video call",
-        onclick: () => import("./additional.js").then(m => m.startCall({ peerId: isGroup ? null : peer?.uid, chatId, isGroup, type: "video" })) },
-        el("i", { class: "ri-vidicon-line" })),
+      // Video call — DMs only, hidden for group chats
+      !isGroup ? el("button", { class: "icon-btn call-btn-desktop", title: "Video call",
+        onclick: () => import("./additional.js").then(m => m.startCall({ peerId: peer?.uid, chatId, isGroup: false, type: "video" })) },
+        el("i", { class: "ri-vidicon-line" })) : null,
       el("button", { class: "icon-btn", title: "Search in chat", onclick: () => searchInChat(chatId, isGroup) },
         el("i", { class: "ri-search-line" })),
       el("button", { class: "btn ghost", style: "padding:6px 12px;font-size:13px;gap:6px;", title: "Customize", onclick: () => openCustomize(chatId) },
@@ -1378,7 +1379,7 @@ const chatHeaderMenu = ({ isGroup, chatId, peer, group }) => {
   hdr.querySelector(".cis-close").onclick = close;
   sheet.appendChild(hdr);
 
-  // ── Call actions row ────────────────────────────────────────────────────
+  // ── Call actions row — voice always shown; video only for DMs ────────────
   const callRow = document.createElement("div");
   callRow.className = "cis-call-row";
   const mkCallBtn = (icon, label, type) => {
@@ -1392,7 +1393,10 @@ const chatHeaderMenu = ({ isGroup, chatId, peer, group }) => {
     return btn;
   };
   callRow.appendChild(mkCallBtn("ri-phone-line", "Voice", "voice"));
-  callRow.appendChild(mkCallBtn("ri-vidicon-line", "Video", "video"));
+  // Video call button only for DMs — groups use voice-only via Agora
+  if (!isGroup) {
+    callRow.appendChild(mkCallBtn("ri-vidicon-line", "Video", "video"));
+  }
   sheet.appendChild(callRow);
 
   // ── Group members preview ───────────────────────────────────────────────
