@@ -1,8 +1,8 @@
 // =========================================================================
-// Orbit — additional.js  (v2 — Agora group calls + raise hand)
+// Orbit — additional.js  (v4 — no token server needed)
 // Stories (24 hr), Notifications full-page view,
-// Group Voice Calls via Agora (2000+ users, crystal-clear audio),
-// 1-on-1 Voice + Video Calls via WebRTC (unchanged).
+// Group Voice Calls via Agora (browser-side token generation),
+// 1-on-1 Voice + Video Calls via WebRTC + TURN relay.
 // =========================================================================
 
 import {
@@ -17,11 +17,78 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 
 // =========================================================================
-// AGORA CONFIG
-// Sign up free at https://console.agora.io → create a project → copy App ID.
-// Set Authentication to "No certificate" while testing (no token server needed).
+// AGORA CONFIG — only two values to fill in
+//
+// 1. AGORA_APP_ID       → console.agora.io → your project → App ID
+// 2. AGORA_APP_CERT     → console.agora.io → your project → Primary Certificate
+//
+// Tokens are generated in the browser — no separate server needed.
 // =========================================================================
-const AGORA_APP_ID = "415f1487439241848e7841abca1b0d3a"; // ← paste your App ID here
+const AGORA_APP_ID   = "415f1487439241848e7841abca1b0d3a"; // ← already yours
+const AGORA_APP_CERT = "4bfadb5dd0b846d9b2460109e7505172";    // ← paste from Agora console
+
+// =========================================================================
+// Browser-side Agora RTC token generator (AccessToken v006)
+// Uses the Web Crypto API — works in every modern browser, no npm needed.
+// =========================================================================
+const _buildAgoraToken = async (channelName, uid = 0, expireSeconds = 3600) => {
+  const enc   = new TextEncoder();
+  const ts    = Math.floor(Date.now() / 1000);
+  const salt  = Math.floor(Math.random() * 2147483647) + 1;
+  const expTs = ts + expireSeconds;
+
+  // Privileges: JOIN_CHANNEL=1, PUB_AUDIO=2, PUB_VIDEO=3, PUB_DATA=4
+  const privs = [[1, expTs], [2, expTs], [3, expTs], [4, expTs]];
+
+  // ── Little-endian pack helpers ────────────────────────────────────────
+  const u16 = (buf, o, v) => {
+    buf[o] = v & 0xFF; buf[o+1] = (v >> 8) & 0xFF; return o + 2;
+  };
+  const u32 = (buf, o, v) => {
+    buf[o] = v & 0xFF; buf[o+1] = (v>>8)&0xFF;
+    buf[o+2] = (v>>16)&0xFF; buf[o+3] = (v>>24)&0xFF; return o + 4;
+  };
+  const str = (buf, o, bytes) => {
+    o = u16(buf, o, bytes.length);
+    bytes.forEach((b, i) => { buf[o + i] = b; });
+    return o + bytes.length;
+  };
+
+  const appIdB = enc.encode(AGORA_APP_ID);
+  const chanB  = enc.encode(channelName);
+  const uidB   = enc.encode(uid === 0 ? "0" : String(uid));
+
+  // Build signing message
+  const msgLen = (2+appIdB.length) + 4 + 4 + (2+chanB.length) + (2+uidB.length) + 2 + privs.length*6;
+  const msg = new Uint8Array(msgLen);
+  let o = 0;
+  o = str(msg, o, appIdB);
+  o = u32(msg, o, ts);
+  o = u32(msg, o, salt);
+  o = str(msg, o, chanB);
+  o = str(msg, o, uidB);
+  o = u16(msg, o, privs.length);
+  for (const [k, v] of privs) { o = u16(msg, o, k); o = u32(msg, o, v); }
+
+  // HMAC-SHA256 sign
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw", enc.encode(AGORA_APP_CERT),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+  );
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", cryptoKey, msg));
+
+  // Pack final content
+  const contLen = (2+sig.length) + 4 + 4 + 2 + privs.length*6;
+  const cont = new Uint8Array(contLen);
+  let co = 0;
+  co = str(cont, co, sig);
+  co = u32(cont, co, ts);
+  co = u32(cont, co, salt);
+  co = u16(cont, co, privs.length);
+  for (const [k, v] of privs) { co = u16(cont, co, k); co = u32(cont, co, v); }
+
+  return "006" + AGORA_APP_ID + btoa(String.fromCharCode(...cont));
+};
 
 // =========================================================================
 // 1. STORIES
@@ -330,13 +397,8 @@ export const renderNotifications = (root) => {
 // =========================================================================
 // 3. VOICE CALLS
 //
-// GROUP calls  → Agora RTC (SFU, handles 2000+ people, noise-cancelled)
-//                Voice only — no video in groups.
-//                UI: Telegram-style slide-up bottom sheet.
-//                Features: Raise Hand, speaking ring, mute, participant list.
-//
-// 1-on-1 calls → WebRTC P2P with Firebase signaling (unchanged).
-//                Supports voice + video.
+// GROUP calls  → Agora RTC, token generated in browser (no server needed)
+// 1-on-1 calls → WebRTC P2P + TURN relay + Firebase signaling
 // =========================================================================
 
 // ── Agora SDK lazy-loader ─────────────────────────────────────────────────
@@ -351,7 +413,6 @@ const getAgora = () => new Promise((resolve, reject) => {
   document.head.appendChild(s);
 });
 
-// ── Active call state ─────────────────────────────────────────────────────
 let _activeCall = null;
 
 // =========================================================================
@@ -360,12 +421,7 @@ let _activeCall = null;
 
 export const startGroupVoiceCall = async ({ chatId, groupName = "Group" }) => {
   if (_activeCall) { toast("You're already in a call"); return; }
-  if (AGORA_APP_ID === "YOUR_AGORA_APP_ID") {
-    toast("Add your Agora App ID in additional.js to enable group calls");
-    return;
-  }
 
-  // Check if a call already exists for this group
   const existing = await getDocs(
     query(collection(db, "calls"),
       where("chatId", "==", chatId),
@@ -401,9 +457,7 @@ export const startGroupVoiceCall = async ({ chatId, groupName = "Group" }) => {
     for (const uid of members) {
       writeNotif(uid, "call", {
         text: `${state.me?.name || "Someone"} started a voice call in ${groupName}`,
-        callId,
-        chatId,
-        groupName,
+        callId, chatId, groupName,
       }).catch(() => {});
     }
   }
@@ -432,35 +486,40 @@ const _joinAgoraGroupCall = async ({ callId, chatId, groupName }) => {
   try {
     localTrack = await AgoraRTC.createMicrophoneAudioTrack({
       encoderConfig: { bitrate: 48, stereo: false },
-      AEC: true,
-      AGC: true,
-      ANS: true,
+      AEC: true, AGC: true, ANS: true,
     });
   } catch {
     toast("Microphone access denied — allow mic and try again");
     return;
   }
 
+  // Generate token in the browser — no server needed
+  let agoraToken = null;
+  if (AGORA_APP_CERT && AGORA_APP_CERT !== "YOUR_PRIMARY_CERTIFICATE_HERE") {
+    try {
+      agoraToken = await _buildAgoraToken(callId, 0);
+    } catch (err) {
+      console.error("Token build failed:", err);
+      toast("Could not build Agora token — check your App Certificate");
+      localTrack.stop(); localTrack.close();
+      return;
+    }
+  }
+
   const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
 
   try {
-    await client.join(AGORA_APP_ID, callId, null, state.uid);
+    await client.join(AGORA_APP_ID, callId, agoraToken, state.uid);
     await client.publish([localTrack]);
   } catch (err) {
     localTrack.stop(); localTrack.close();
-    // Error 4096 (CAN_NOT_GET_GATEWAY_SERVER) = your Agora project has
-    // "Primary Certificate" enabled. Fix:
-    //   console.agora.io → your project → Edit → Auth → "No certificate"
     const code = String(err?.code ?? err?.message ?? "");
     if (code.includes("4096") || code.includes("GATEWAY") || code.includes("CAN_NOT_GET")) {
-      toast(
-        "Agora setup needed: go to console.agora.io → your project → Edit → " +
-        "change Auth to 'No certificate', then try again."
-      );
-    } else if (!AGORA_APP_ID || AGORA_APP_ID === "YOUR_AGORA_APP_ID") {
-      toast("Paste your Agora App ID in additional.js first");
+      toast("Agora join failed: make sure AGORA_APP_CERT is set correctly in additional.js");
+    } else if (code.includes("token") || code.includes("Token")) {
+      toast("Invalid token: double-check the Primary Certificate you pasted into additional.js");
     } else {
-      toast("Voice call failed: " + (err?.message || "check console for details"));
+      toast("Voice call failed: " + (err?.message || "check browser console"));
     }
     return;
   }
@@ -488,7 +547,14 @@ const _joinAgoraGroupCall = async ({ callId, chatId, groupName }) => {
     _groupCallUpdateCount(panel);
   });
 
-  // Speaking indicator — glows the ring when someone is talking
+  // Auto-renew token ~30s before it expires
+  client.on("token-privilege-will-expire", async () => {
+    try {
+      const newToken = await _buildAgoraToken(callId, 0);
+      await client.renewToken(newToken);
+    } catch {}
+  });
+
   client.on("volume-indicator", (volumes) => {
     volumes.forEach(({ uid, level }) => {
       const tile = panel.querySelector(`.vc-tile[data-uid="${uid}"]`);
@@ -496,8 +562,6 @@ const _joinAgoraGroupCall = async ({ callId, chatId, groupName }) => {
     });
   });
 
-  // ── Firestore real-time sync ───────────────────────────────────────────
-  // Tracks participants joining/leaving + raised hands
   const callUnsub = onSnapshot(doc(db, "calls", callId), async (snap) => {
     if (!snap.exists() || snap.data().status === "ended") {
       _leaveAgoraCall();
@@ -508,74 +572,26 @@ const _joinAgoraGroupCall = async ({ callId, chatId, groupName }) => {
     _groupCallSyncRaisedHands(panel, data.raisedHands || []);
   });
 
-  // Build the Telegram-style slide-up panel
-  const panel = _buildGroupCallPanel({ callId, groupName, localTrack });
+  const panel = _buildGroupCallPanel({ callId, groupName });
   document.body.appendChild(panel);
   requestAnimationFrame(() => panel.classList.add("vc-visible"));
 
   let muted = false;
   let handRaised = false;
 
-  // ── Mute ─────────────────────────────────────────────────────────────
-  panel.querySelector("#vcMute").addEventListener("click", () => {
-    muted = !muted;
-    localTrack.setEnabled(!muted);
-    const btn = panel.querySelector("#vcMute");
-    btn.querySelector("i").className = muted ? "ri-mic-off-fill" : "ri-mic-fill";
-    btn.classList.toggle("vc-btn-active", muted);
-    btn.querySelector(".vc-btn-label").textContent = muted ? "Unmute" : "Mute";
-    const myTile = panel.querySelector(`.vc-tile[data-uid="${state.uid}"]`);
-    myTile?.classList.toggle("vc-muted", muted);
-  });
-
-  // ── Raise Hand ────────────────────────────────────────────────────────
-  panel.querySelector("#vcHand").addEventListener("click", async () => {
-    handRaised = !handRaised;
-    const btn = panel.querySelector("#vcHand");
-    btn.classList.toggle("vc-btn-active", handRaised);
-    btn.querySelector("i").className = handRaised ? "ri-hand-coin-fill" : "ri-hand-coin-line";
-    btn.querySelector(".vc-btn-label").textContent = handRaised ? "Lower hand" : "Raise hand";
-
-    await updateDoc(doc(db, "calls", callId), {
-      raisedHands: handRaised ? arrayUnion(state.uid) : arrayRemove(state.uid),
-    }).catch(() => {});
-
-    if (handRaised) toast("✋ Hand raised — the host can see this");
-  });
-
-  // ── Leave ─────────────────────────────────────────────────────────────
-  panel.querySelector("#vcLeave").addEventListener("click", () => _leaveAgoraCall());
-
-  // ── Minimise / expand ─────────────────────────────────────────────────
-  panel.querySelector("#vcMinimise").addEventListener("click", () => {
-    panel.classList.toggle("vc-minimised");
-    panel.querySelector("#vcMinimise i").className =
-      panel.classList.contains("vc-minimised") ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line";
-  });
-
-  _activeCall = { type: "group", callId, client, localTrack, callUnsub, panel };
-
-  // Add our own tile immediately
-  _groupCallAddParticipant(panel, state.uid);
-
   // ── Leave handler ─────────────────────────────────────────────────────
   const _leaveAgoraCall = async () => {
     if (!_activeCall) return;
     const ac = _activeCall;
     _activeCall = null;
-
     ac.callUnsub?.();
     ac.localTrack?.stop();
     ac.localTrack?.close();
     try { await ac.client.leave(); } catch {}
-
-    // Clear our raised hand on exit
     await updateDoc(doc(db, "calls", ac.callId), {
       participants: arrayRemove(state.uid),
       raisedHands: arrayRemove(state.uid),
     }).catch(() => {});
-
-    // Mark ended if we were the last person
     const snap = await getDoc(doc(db, "calls", ac.callId)).catch(() => null);
     if (snap?.exists()) {
       const remaining = (snap.data().participants || []).filter(u => u !== state.uid);
@@ -583,21 +599,52 @@ const _joinAgoraGroupCall = async ({ callId, chatId, groupName }) => {
         await updateDoc(doc(db, "calls", ac.callId), { status: "ended" }).catch(() => {});
       }
     }
-
     ac.panel.classList.remove("vc-visible");
     setTimeout(() => ac.panel.remove(), 380);
     toast("Left the call");
   };
+
+  panel.querySelector("#vcMute").addEventListener("click", () => {
+    muted = !muted;
+    localTrack.setEnabled(!muted);
+    const btn = panel.querySelector("#vcMute");
+    btn.querySelector("i").className = muted ? "ri-mic-off-fill" : "ri-mic-fill";
+    btn.classList.toggle("vc-btn-active", muted);
+    btn.querySelector(".vc-btn-label").textContent = muted ? "Unmute" : "Mute";
+    panel.querySelector(`.vc-tile[data-uid="${state.uid}"]`)?.classList.toggle("vc-muted", muted);
+  });
+
+  panel.querySelector("#vcHand").addEventListener("click", async () => {
+    handRaised = !handRaised;
+    const btn = panel.querySelector("#vcHand");
+    btn.classList.toggle("vc-btn-active", handRaised);
+    btn.querySelector("i").className = handRaised ? "ri-hand-coin-fill" : "ri-hand-coin-line";
+    btn.querySelector(".vc-btn-label").textContent = handRaised ? "Lower hand" : "Raise hand";
+    await updateDoc(doc(db, "calls", callId), {
+      raisedHands: handRaised ? arrayUnion(state.uid) : arrayRemove(state.uid),
+    }).catch(() => {});
+    if (handRaised) toast("✋ Hand raised — the host can see this");
+  });
+
+  panel.querySelector("#vcLeave").addEventListener("click", () => _leaveAgoraCall());
+
+  panel.querySelector("#vcMinimise").addEventListener("click", () => {
+    panel.classList.toggle("vc-minimised");
+    panel.querySelector("#vcMinimise i").className =
+      panel.classList.contains("vc-minimised") ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line";
+  });
+
+  _activeCall = { type: "group", callId, client, localTrack, callUnsub, panel };
+  _groupCallAddParticipant(panel, state.uid);
 };
 
-// ── Telegram-style slide-up panel builder ─────────────────────────────────
-const _buildGroupCallPanel = ({ callId, groupName }) => {
+// ── Panel builder ─────────────────────────────────────────────────────────
+const _buildGroupCallPanel = ({ groupName }) => {
   const panel = document.createElement("div");
   panel.className = "vc-panel";
   panel.id = "vcPanel";
   panel.innerHTML = `
     <div class="vc-handle-bar"></div>
-
     <div class="vc-header">
       <div class="vc-header-left">
         <div class="vc-title">
@@ -616,26 +663,18 @@ const _buildGroupCallPanel = ({ callId, groupName }) => {
         </button>
       </div>
     </div>
-
-    <!-- Raised-hands queue — appears when someone raises hand -->
     <div class="vc-hands-queue hidden" id="vcHandsQueue">
       <i class="ri-hand-coin-fill" style="color:#f6c90e;"></i>
       <span class="vc-hands-text" id="vcHandsText"></span>
     </div>
-
     <div class="vc-participants" id="vcParticipants"></div>
-
     <div class="vc-controls">
       <div class="vc-ctrl-col">
-        <button class="vc-ctrl-btn" id="vcMute">
-          <i class="ri-mic-fill"></i>
-        </button>
+        <button class="vc-ctrl-btn" id="vcMute"><i class="ri-mic-fill"></i></button>
         <span class="vc-btn-label">Mute</span>
       </div>
       <div class="vc-ctrl-col">
-        <button class="vc-ctrl-btn" id="vcHand" title="Raise hand">
-          <i class="ri-hand-coin-line"></i>
-        </button>
+        <button class="vc-ctrl-btn" id="vcHand" title="Raise hand"><i class="ri-hand-coin-line"></i></button>
         <span class="vc-btn-label">Raise hand</span>
       </div>
       <div class="vc-ctrl-col">
@@ -646,7 +685,6 @@ const _buildGroupCallPanel = ({ callId, groupName }) => {
       </div>
     </div>`;
 
-  // Call timer
   const startMs = Date.now();
   const timerEl = panel.querySelector("#vcTimer");
   const timerInterval = setInterval(() => {
@@ -662,7 +700,6 @@ const _buildGroupCallPanel = ({ callId, groupName }) => {
 const _groupCallAddParticipant = async (panel, uid) => {
   const grid = panel.querySelector("#vcParticipants");
   if (!grid || grid.querySelector(`.vc-tile[data-uid="${uid}"]`)) return;
-
   const isMe = uid === state.uid;
   const tile = document.createElement("div");
   tile.className = "vc-tile";
@@ -675,7 +712,6 @@ const _groupCallAddParticipant = async (panel, uid) => {
     </div>
     <div class="vc-tile-name">${isMe ? (state.me?.name?.split(" ")[0] || "You") : "…"}</div>
     <div class="vc-tile-mic"><i class="ri-mic-off-fill"></i></div>`;
-
   if (!isMe) {
     fetchUser(uid).then(u => {
       if (!u) return;
@@ -683,7 +719,6 @@ const _groupCallAddParticipant = async (panel, uid) => {
       tile.querySelector(".vc-tile-name").textContent = (u.name || "User").split(" ")[0];
     });
   }
-
   grid.appendChild(tile);
   _groupCallUpdateCount(panel);
 };
@@ -706,9 +741,7 @@ const _groupCallSyncParticipants = (panel, uids) => {
   _groupCallUpdateCount(panel);
 };
 
-// ── Raised-hand sync ─────────────────────────────────────────────────────
 const _groupCallSyncRaisedHands = async (panel, raisedUids) => {
-  // Update hand badge on every tile
   panel.querySelectorAll(".vc-tile").forEach(tile => {
     const badge = tile.querySelector(".vc-hand-badge");
     if (!badge) return;
@@ -716,20 +749,11 @@ const _groupCallSyncRaisedHands = async (panel, raisedUids) => {
     badge.classList.toggle("hidden", !hasHand);
     tile.classList.toggle("vc-hand-raised", hasHand);
   });
-
-  // Update the hands queue banner at the top
   const queue = panel.querySelector("#vcHandsQueue");
   const queueText = panel.querySelector("#vcHandsText");
   if (!queue || !queueText) return;
-
-  if (raisedUids.length === 0) {
-    queue.classList.add("hidden");
-    return;
-  }
-
+  if (raisedUids.length === 0) { queue.classList.add("hidden"); return; }
   queue.classList.remove("hidden");
-
-  // Resolve names for the banner (cache-friendly — fetchUser caches)
   const names = await Promise.all(
     raisedUids.slice(0, 3).map(uid =>
       uid === state.uid
@@ -737,25 +761,27 @@ const _groupCallSyncRaisedHands = async (panel, raisedUids) => {
         : fetchUser(uid).then(u => (u?.name || "Someone").split(" ")[0]).catch(() => "Someone")
     )
   );
-
   const extra = raisedUids.length > 3 ? ` +${raisedUids.length - 3} more` : "";
   queueText.textContent = `${names.join(", ")}${extra} raised hand${raisedUids.length > 1 ? "s" : ""}`;
 };
 
 // =========================================================================
-// 1-ON-1 VOICE + VIDEO CALLS  (WebRTC P2P — unchanged)
+// 1-ON-1 VOICE + VIDEO CALLS  (WebRTC + TURN relay)
+// TURN servers added so calls work through firewalls and mobile networks.
 // =========================================================================
 
 const ICE_SERVERS = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
-    { urls: "stun:stun2.l.google.com:19302" },
+    // TURN relay — needed for calls behind NAT / mobile networks / firewalls
+    { urls: "turn:openrelay.metered.ca:80",               username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turn:openrelay.metered.ca:443",              username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turn:openrelay.metered.ca:443?transport=tcp",username: "openrelayproject", credential: "openrelayproject" },
   ],
 };
 
 export const startCall = async ({ peerId, chatId, isGroup, type = "voice" }) => {
-  // Group calls always use Agora
   if (isGroup) {
     const gSnap = await getDoc(doc(db, "groups", chatId)).catch(() => null);
     const groupName = gSnap?.data()?.name || "Group";
@@ -792,7 +818,16 @@ export const startCall = async ({ peerId, chatId, isGroup, type = "voice" }) => 
   document.body.appendChild(overlay);
   _activeCall = { type: "dm", callId, overlay, localStream, peers: {}, unsubs: [] };
 
-  _connectPeer({ callId, localStream, peerId, overlay, type });
+  _connectPeer({ callId, localStream, peerId, overlay });
+
+  // Watch for decline / hang-up from the other side
+  const statusUnsub = onSnapshot(doc(db, "calls", callId), snap => {
+    if (!snap.exists()) return;
+    const status = snap.data().status;
+    if (status === "declined") { toast("Call declined"); _endDMCall(callId, overlay, localStream); statusUnsub(); }
+    else if (status === "ended") { _endDMCall(callId, overlay, localStream); statusUnsub(); }
+  });
+  if (_activeCall) _activeCall.unsubs.push(statusUnsub);
 };
 
 const _connectPeer = async ({ callId, localStream, peerId, overlay }) => {
@@ -805,6 +840,9 @@ const _connectPeer = async ({ callId, localStream, peerId, overlay }) => {
   const candCol = collection(db, "calls", callId, `cand_${state.uid}_${peerId}`);
   pc.onicecandidate = e => {
     if (e.candidate) addDoc(candCol, e.candidate.toJSON()).catch(() => {});
+  };
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === "failed") toast("Connection failed — check your internet connection");
   };
 
   const offer = await pc.createOffer();
@@ -829,13 +867,12 @@ const _connectPeer = async ({ callId, localStream, peerId, overlay }) => {
     }
   );
 
-  if (_activeCall) { _activeCall.unsubs.push(u1, u2); }
+  if (_activeCall) _activeCall.unsubs.push(u1, u2);
 };
 
 export const answerCall = async (callId) => {
   const callSnap = await getDoc(doc(db, "calls", callId)).catch(() => null);
   if (!callSnap?.exists()) { toast("Call no longer available"); return; }
-
   const call = callSnap.data();
 
   if (call.isGroup) {
@@ -876,6 +913,9 @@ export const answerCall = async (callId) => {
     const candCol = collection(db, "calls", callId, `cand_${state.uid}_${peerId}`);
     pc.onicecandidate = e => {
       if (e.candidate) addDoc(candCol, e.candidate.toJSON()).catch(() => {});
+    };
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === "failed") toast("Connection failed — check your internet connection");
     };
 
     await pc.setRemoteDescription(new RTCSessionDescription(offer)).catch(() => {});
@@ -1059,7 +1099,7 @@ const _endDMCall = async (callId, overlay, localStream) => {
 };
 
 // =========================================================================
-// Incoming call notification listener
+// Incoming call listener
 // =========================================================================
 const initCallListener = () => {
   onSnapshot(
@@ -1100,7 +1140,7 @@ const _showIncomingBanner = async (n) => {
     <img class="avatar md" src="${avatarFor(caller)}" alt="" />
     <div class="icb-info">
       <div class="icb-name">${caller?.name || n.fromName || "Someone"}</div>
-      <div class="icb-type">Voice call${isGroup ? ` · ${call.groupName || "Group"}` : ""}</div>
+      <div class="icb-type">${isGroup ? "Voice" : (call.type === "video" ? "Video" : "Voice")} call${isGroup ? ` · ${call.groupName || "Group"}` : ""}</div>
     </div>
     <button class="call-ctrl danger" id="icbDecline_${n.callId}" title="Decline">
       <i class="ri-phone-fill" style="transform:rotate(135deg);"></i>
@@ -1132,7 +1172,7 @@ const _showIncomingBanner = async (n) => {
 };
 
 // =========================================================================
-// 4. INIT — fires once auth is ready
+// 4. INIT
 // =========================================================================
 document.addEventListener("orbit:auth-ready", () => {
   initCallListener();
