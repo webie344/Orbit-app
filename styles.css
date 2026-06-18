@@ -485,3 +485,32 @@ h3 { font-size: 1.1rem; font-weight: 600; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* ── Video player full-width fix ─────────────────────────────────────────── */
+/* Base player styles (also applied in chat context via chat.css) */
+.vid-player { width: 100%; position: relative; background: #000; }
+.vid-player video { width: 100%; display: block; }
+.post-media { width: 100%; }
+.post-media > img { width: 100%; display: block; }
+
+/* Post-context override: chat.css caps .vid-player at max-width:320px for
+   chat bubbles, which bleeds into feed posts and creates a black right gap.
+   These rules restore full width specifically for post and stack containers. */
+.post-media .vid-player,
+.post-media-stack .vid-player {
+  max-width: none !important;
+}
+.post-media .vid-player video,
+.post-media-stack .vid-player video {
+  max-height: 600px;
+  object-fit: contain;
+}
+
+/* Controls auto-hide: .vp-bar fades out when .vp-bar-hidden is applied */
+.vp-bar {
+  transition: opacity 0.35s ease;
+}
+.vp-bar-hidden {
+  opacity: 0;
+  pointer-events: none;
+}

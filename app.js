@@ -125,7 +125,8 @@ const _cloudPoster = (url) => {
 };
 const buildVideoPlayer = (url) => {
   const poster = _cloudPoster(url);
-  const video = el("video", { src: url, poster, preload: "metadata", playsinline: "" });
+  // muted enables browser auto-play-on-scroll; user can unmute via the button
+  const video = el("video", { src: url, poster, preload: "metadata", playsinline: "", muted: "", style: "width:100%;display:block;" });
   const playIcon  = el("i", { class: "ri-play-fill" });
   const overlay   = el("div", { class: "vp-overlay" }, el("button", { class: "vp-big-play" }, playIcon));
   const playSmI   = el("i", { class: "ri-play-fill" });
@@ -133,26 +134,88 @@ const buildVideoPlayer = (url) => {
   const played    = el("div", { class: "vp-played" });
   const seek      = el("div", { class: "vp-seek" }, played);
   const timeEl    = el("span", { class: "vp-time", text: "0:00" });
-  const muteI     = el("i", { class: "ri-volume-up-line" });
+  // starts muted to match the muted attribute above
+  const muteI     = el("i", { class: "ri-volume-mute-line" });
   const muteBtn   = el("button", { class: "vp-btn" }, muteI);
   const fullBtn   = el("button", { class: "vp-btn" }, el("i", { class: "ri-fullscreen-line" }));
   const bar       = el("div", { class: "vp-bar" }, playSmBtn, seek, timeEl, muteBtn, fullBtn);
-  const wrap      = el("div", { class: "vid-player" }, video, overlay, bar);
+  // inline style overrides chat.css max-width:320px for post-context players
+  const wrap      = el("div", { class: "vid-player", style: "width:100%;max-width:none;" }, video, overlay, bar);
+
+  // ── Controls auto-hide ────────────────────────────────────────────────────
+  // Shows bar on any interaction; hides 4 s later while playing.
+  // On mobile (no mouseleave), a second touchstart resets the 4 s clock.
+  let _hideTimer = null;
+  const _scheduleHide = (delay = 4000) => {
+    clearTimeout(_hideTimer);
+    _hideTimer = setTimeout(() => {
+      if (!video.paused) bar.classList.add("vp-bar-hidden");
+    }, delay);
+  };
+  const _showBar = () => {
+    bar.classList.remove("vp-bar-hidden");
+    if (!video.paused) _scheduleHide();
+  };
+  // Desktop: show on hover, hide immediately on leave (then timer handles playing)
+  wrap.addEventListener("mousemove",  _showBar);
+  wrap.addEventListener("mouseleave", () => {
+    clearTimeout(_hideTimer);
+    if (!video.paused) bar.classList.add("vp-bar-hidden");
+  });
+  // Mobile: tap wrap to toggle bar visibility; bar auto-hides after 4 s
+  wrap.addEventListener("touchstart", (e) => {
+    if (e.target.closest(".vp-btn,.vp-seek,.vp-overlay")) return;
+    if (bar.classList.contains("vp-bar-hidden")) {
+      _showBar();
+    } else {
+      bar.classList.add("vp-bar-hidden");
+    }
+  }, { passive: true });
+
   const togglePlay = () => { video.paused ? video.play() : video.pause(); };
   overlay.onclick = togglePlay;
   playSmBtn.onclick = (e) => { e.stopPropagation(); togglePlay(); };
-  video.addEventListener("play",  () => { playIcon.className = playSmI.className = "ri-pause-fill"; overlay.classList.add("playing"); });
-  video.addEventListener("pause", () => { playIcon.className = playSmI.className = "ri-play-fill";  overlay.classList.remove("playing"); });
-  video.addEventListener("ended", () => { playIcon.className = playSmI.className = "ri-play-fill";  overlay.classList.remove("playing"); played.style.width = "0%"; });
+  video.addEventListener("play",  () => {
+    playIcon.className = playSmI.className = "ri-pause-fill";
+    overlay.classList.add("playing");
+    _scheduleHide(4000); // start 4 s hide timer when playback begins
+  });
+  video.addEventListener("pause", () => {
+    playIcon.className = playSmI.className = "ri-play-fill";
+    overlay.classList.remove("playing");
+    bar.classList.remove("vp-bar-hidden");
+    clearTimeout(_hideTimer);
+  });
+  video.addEventListener("ended", () => {
+    playIcon.className = playSmI.className = "ri-play-fill";
+    overlay.classList.remove("playing");
+    played.style.width = "0%";
+    bar.classList.remove("vp-bar-hidden");
+    clearTimeout(_hideTimer);
+  });
   video.addEventListener("timeupdate", () => {
     const pct = video.duration ? (video.currentTime / video.duration) * 100 : 0;
     played.style.width = pct + "%";
     const s = Math.floor(video.currentTime);
     timeEl.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
   });
-  seek.onclick = (e) => { if (!video.duration) return; const r = seek.getBoundingClientRect(); video.currentTime = ((e.clientX - r.left) / r.width) * video.duration; };
-  muteBtn.onclick = (e) => { e.stopPropagation(); video.muted = !video.muted; muteI.className = video.muted ? "ri-volume-mute-line" : "ri-volume-up-line"; };
+  seek.onclick    = (e) => { if (!video.duration) return; const r = seek.getBoundingClientRect(); video.currentTime = ((e.clientX - r.left) / r.width) * video.duration; _showBar(); };
+  muteBtn.onclick = (e) => { e.stopPropagation(); video.muted = !video.muted; muteI.className = video.muted ? "ri-volume-mute-line" : "ri-volume-up-line"; _showBar(); };
   fullBtn.onclick = (e) => { e.stopPropagation(); (video.requestFullscreen || video.webkitRequestFullscreen || (() => {})).call(video); };
+
+  // ── Play on scroll into view / pause on scroll out ────────────────────────
+  // Uses IntersectionObserver: starts playing when ≥50% visible, pauses when less.
+  const _io = new IntersectionObserver((entries) => {
+    if (entries[0].isIntersecting) {
+      video.play().catch(() => {});
+    } else {
+      video.pause();
+    }
+  }, { threshold: 0.5 });
+  _io.observe(wrap);
+  // Clean up observer if the player is ever removed from DOM
+  video.addEventListener("emptied", () => _io.disconnect(), { once: true });
+
   return wrap;
 };
 

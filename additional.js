@@ -17,86 +17,11 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 
 // =========================================================================
-// AGORA CONFIG — only two values to fill in
-//
-// 1. AGORA_APP_ID       → console.agora.io → your project → App ID
-// 2. AGORA_APP_CERT     → console.agora.io → your project → Primary Certificate
-//
-// Tokens are generated in the browser — no separate server needed.
+// GROUP CALL CONFIG
+// WebRTC mesh — no third-party SDK or account required.
+// Up to GROUP_CALL_MAX participants per call.
 // =========================================================================
-const AGORA_APP_ID   = "415f1487439241848e7841abca1b0d3a"; // ← already yours
-const AGORA_APP_CERT = "4bfadb5dd0b846d9b2460109e7505172";    // ← paste from Agora console
-
-// =========================================================================
-// Browser-side Agora RTC token generator (AccessToken v006)
-// Matches the official Agora SDK signing spec exactly.
-// Uses the Web Crypto API — works in every modern browser, no npm needed.
-// =========================================================================
-const _buildAgoraToken = async (channelName, uid = 0, expireSeconds = 3600) => {
-  const enc  = new TextEncoder();
-  const ts   = Math.floor(Date.now() / 1000) + 100; // slight future offset (matches SDK)
-  const salt = Math.floor(Math.random() * 99999999);
-  const expTs = ts + expireSeconds;
-
-  // Privileges sorted by key (must match server-side sort): JOIN=1, PUB_AUDIO=2, PUB_VIDEO=3, PUB_DATA=4
-  const privs = [[1, expTs], [2, expTs], [3, expTs], [4, expTs]];
-
-  // ── Little-endian pack helpers (matches Agora WPacket) ───────────────
-  const u16 = (buf, o, v) => {
-    buf[o] = v & 0xFF; buf[o+1] = (v >> 8) & 0xFF; return o + 2;
-  };
-  const u32 = (buf, o, v) => {
-    buf[o] = v & 0xFF; buf[o+1] = (v>>8)&0xFF;
-    buf[o+2] = (v>>16)&0xFF; buf[o+3] = (v>>24)&0xFF; return o + 4;
-  };
-  // put_string / put_bytes: uint16 length prefix + raw bytes
-  const packBytes = (buf, o, bytes) => {
-    o = u16(buf, o, bytes.length);
-    bytes.forEach((b, i) => { buf[o + i] = b; });
-    return o + bytes.length;
-  };
-
-  const appIdB  = enc.encode(AGORA_APP_ID);
-  const certB   = enc.encode(AGORA_APP_CERT);   // ← must be included in signing message
-  const chanB   = enc.encode(channelName);
-  const uidB    = enc.encode(uid === 0 ? "" : String(uid)); // uid 0 → empty string per spec
-
-  // ── Build the signing message ─────────────────────────────────────────
-  // Order: appId + appCertificate + ts + salt + channelName + uid + privileges
-  const msgLen = (2+appIdB.length) + (2+certB.length) + 4 + 4
-               + (2+chanB.length) + (2+uidB.length)
-               + 2 + privs.length * 6;
-  const msg = new Uint8Array(msgLen);
-  let o = 0;
-  o = packBytes(msg, o, appIdB);
-  o = packBytes(msg, o, certB);
-  o = u32(msg, o, ts);
-  o = u32(msg, o, salt);
-  o = packBytes(msg, o, chanB);
-  o = packBytes(msg, o, uidB);
-  o = u16(msg, o, privs.length);
-  for (const [k, v] of privs) { o = u16(msg, o, k); o = u32(msg, o, v); }
-
-  // ── HMAC-SHA256 sign ──────────────────────────────────────────────────
-  const cryptoKey = await crypto.subtle.importKey(
-    "raw", enc.encode(AGORA_APP_CERT),
-    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
-  );
-  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", cryptoKey, msg));
-
-  // ── Pack the final token content ──────────────────────────────────────
-  // Order: signature + ts + salt + privileges
-  const contLen = (2+sig.length) + 4 + 4 + 2 + privs.length * 6;
-  const cont = new Uint8Array(contLen);
-  let co = 0;
-  co = packBytes(cont, co, sig);
-  co = u32(cont, co, ts);
-  co = u32(cont, co, salt);
-  co = u16(cont, co, privs.length);
-  for (const [k, v] of privs) { co = u16(cont, co, k); co = u32(cont, co, v); }
-
-  return "006" + AGORA_APP_ID + btoa(String.fromCharCode(...cont));
-};
+const GROUP_CALL_MAX = 20;
 
 // =========================================================================
 // 1. STORIES
@@ -409,23 +334,24 @@ export const renderNotifications = (root) => {
 // 1-on-1 calls → WebRTC P2P + TURN relay + Firebase signaling
 // =========================================================================
 
-// ── Agora SDK lazy-loader ─────────────────────────────────────────────────
-let _AgoraRTC = null;
-const getAgora = () => new Promise((resolve, reject) => {
-  if (_AgoraRTC) return resolve(_AgoraRTC);
-  if (window.AgoraRTC) { _AgoraRTC = window.AgoraRTC; return resolve(_AgoraRTC); }
-  const s = document.createElement("script");
-  s.src = "https://download.agora.io/sdk/release/AgoraRTC_N-4.21.0.js";
-  s.onload = () => { _AgoraRTC = window.AgoraRTC; resolve(_AgoraRTC); };
-  s.onerror = () => reject(new Error("Failed to load Agora SDK"));
-  document.head.appendChild(s);
-});
-
 let _activeCall = null;
 
 // =========================================================================
-// GROUP VOICE CALL  (Agora)
+// GROUP VOICE CALL  (WebRTC mesh — up to GROUP_CALL_MAX participants)
+// Uses the same ICE / TURN servers as 1-on-1 calls.
+// Firebase Firestore is used for signaling (offers, answers, ICE candidates).
 // =========================================================================
+
+// ICE servers shared by both group and 1-on-1 calls
+const ICE_SERVERS = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "turn:openrelay.metered.ca:80",                username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turn:openrelay.metered.ca:443",               username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" },
+  ],
+};
 
 export const startGroupVoiceCall = async ({ chatId, groupName = "Group" }) => {
   if (_activeCall) { toast("You're already in a call"); return; }
@@ -440,10 +366,13 @@ export const startGroupVoiceCall = async ({ chatId, groupName = "Group" }) => {
 
   let callId;
   if (!existing.empty) {
+    const callData = existing.docs[0].data();
+    if ((callData.participants || []).length >= GROUP_CALL_MAX) {
+      toast(`Call is full — max ${GROUP_CALL_MAX} participants`);
+      return;
+    }
     callId = existing.docs[0].id;
-    await updateDoc(doc(db, "calls", callId), {
-      participants: arrayUnion(state.uid),
-    }).catch(() => {});
+    await updateDoc(doc(db, "calls", callId), { participants: arrayUnion(state.uid) }).catch(() => {});
   } else {
     const callRef = await addDoc(collection(db, "calls"), {
       createdAt: serverTimestamp(),
@@ -470,151 +399,196 @@ export const startGroupVoiceCall = async ({ chatId, groupName = "Group" }) => {
     }
   }
 
-  await _joinAgoraGroupCall({ callId, chatId, groupName });
+  await _joinWebRTCGroupCall({ callId, groupName });
 };
 
 export const joinGroupVoiceCall = async ({ callId, chatId, groupName = "Group" }) => {
   if (_activeCall) { toast("Already in a call"); return; }
-  await updateDoc(doc(db, "calls", callId), {
-    participants: arrayUnion(state.uid),
-  }).catch(() => {});
-  await _joinAgoraGroupCall({ callId, chatId, groupName });
-};
-
-const _joinAgoraGroupCall = async ({ callId, chatId, groupName }) => {
-  let AgoraRTC;
-  try {
-    AgoraRTC = await getAgora();
-  } catch {
-    toast("Could not load voice call engine — check your internet connection");
+  const callSnap = await getDoc(doc(db, "calls", callId)).catch(() => null);
+  if (!callSnap?.exists()) { toast("Call no longer available"); return; }
+  const callData = callSnap.data();
+  if ((callData.participants || []).length >= GROUP_CALL_MAX) {
+    toast(`Call is full — max ${GROUP_CALL_MAX} participants`);
     return;
   }
+  await updateDoc(doc(db, "calls", callId), { participants: arrayUnion(state.uid) }).catch(() => {});
+  await _joinWebRTCGroupCall({ callId, groupName });
+};
 
-  let localTrack;
+const _joinWebRTCGroupCall = async ({ callId, groupName }) => {
+  let localStream;
   try {
-    localTrack = await AgoraRTC.createMicrophoneAudioTrack({
-      encoderConfig: { bitrate: 48, stereo: false },
-      AEC: true, AGC: true, ANS: true,
+    localStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
   } catch {
     toast("Microphone access denied — allow mic and try again");
+    await updateDoc(doc(db, "calls", callId), { participants: arrayRemove(state.uid) }).catch(() => {});
     return;
   }
-
-  // Generate token in the browser — no server needed
-  let agoraToken = null;
-  if (AGORA_APP_CERT && AGORA_APP_CERT !== "YOUR_PRIMARY_CERTIFICATE_HERE") {
-    try {
-      agoraToken = await _buildAgoraToken(callId, 0);
-    } catch (err) {
-      console.error("Token build failed:", err);
-      toast("Could not build Agora token — check your App Certificate");
-      localTrack.stop(); localTrack.close();
-      return;
-    }
-  }
-
-  const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
-
-  try {
-    await client.join(AGORA_APP_ID, callId, agoraToken, state.uid);
-    await client.publish([localTrack]);
-  } catch (err) {
-    localTrack.stop(); localTrack.close();
-    const code = String(err?.code ?? err?.message ?? "");
-    if (code.includes("4096") || code.includes("GATEWAY") || code.includes("CAN_NOT_GET")) {
-      toast("Agora join failed: make sure AGORA_APP_CERT is set correctly in additional.js");
-    } else if (code.includes("token") || code.includes("Token")) {
-      toast("Invalid token: double-check the Primary Certificate you pasted into additional.js");
-    } else {
-      toast("Voice call failed: " + (err?.message || "check browser console"));
-    }
-    return;
-  }
-
-  client.enableAudioVolumeIndicator();
-
-  const remoteUsers = new Map();
-
-  client.on("user-published", async (user, mediaType) => {
-    await client.subscribe(user, mediaType);
-    if (mediaType === "audio") {
-      user.audioTrack.play();
-      remoteUsers.set(String(user.uid), user);
-      _groupCallAddParticipant(panel, String(user.uid));
-    }
-  });
-
-  client.on("user-unpublished", (user) => {
-    remoteUsers.delete(String(user.uid));
-  });
-
-  client.on("user-left", (user) => {
-    remoteUsers.delete(String(user.uid));
-    _groupCallRemoveParticipant(panel, String(user.uid));
-    _groupCallUpdateCount(panel);
-  });
-
-  // Auto-renew token ~30s before it expires
-  client.on("token-privilege-will-expire", async () => {
-    try {
-      const newToken = await _buildAgoraToken(callId, 0);
-      await client.renewToken(newToken);
-    } catch {}
-  });
-
-  client.on("volume-indicator", (volumes) => {
-    volumes.forEach(({ uid, level }) => {
-      const tile = panel.querySelector(`.vc-tile[data-uid="${uid}"]`);
-      if (tile) tile.classList.toggle("vc-speaking", level > 8);
-    });
-  });
-
-  const callUnsub = onSnapshot(doc(db, "calls", callId), async (snap) => {
-    if (!snap.exists() || snap.data().status === "ended") {
-      _leaveAgoraCall();
-      return;
-    }
-    const data = snap.data();
-    _groupCallSyncParticipants(panel, data.participants || []);
-    _groupCallSyncRaisedHands(panel, data.raisedHands || []);
-  });
 
   const panel = _buildGroupCallPanel({ callId, groupName });
   document.body.appendChild(panel);
   requestAnimationFrame(() => panel.classList.add("vc-visible"));
 
-  let muted = false;
+  const peers  = {};   // peerId → RTCPeerConnection
+  const unsubs = [];
+  let muted      = false;
   let handRaised = false;
 
-  // ── Leave handler ─────────────────────────────────────────────────────
-  const _leaveAgoraCall = async () => {
+  _activeCall = { type: "group", callId, localStream, peers, unsubs, panel };
+  _groupCallAddParticipant(panel, state.uid);
+
+  // ── Build a peer connection to a remote participant ─────────────────────
+  const _makePC = (peerId) => {
+    if (peers[peerId] || peerId === state.uid) return null;
+    const pc = new RTCPeerConnection(ICE_SERVERS);
+    peers[peerId] = pc;
+    localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+
+    pc.ontrack = (e) => {
+      const stream = e.streams[0];
+      if (!stream) return;
+      // Re-use existing audio element if already attached
+      const tile = panel.querySelector(`.vc-tile[data-uid="${peerId}"]`);
+      let audio = tile?.querySelector("audio");
+      if (!audio) {
+        audio = document.createElement("audio");
+        audio.autoplay = true;
+        audio.setAttribute("playsinline", "");
+        (tile || panel).appendChild(audio);
+      }
+      audio.srcObject = stream;
+      _watchGroupSpeaking(stream, peerId, panel);
+    };
+
+    const iceCandCol = collection(db, "calls", callId, `gcand_${state.uid}_${peerId}`);
+    pc.onicecandidate = e => {
+      if (e.candidate) addDoc(iceCandCol, e.candidate.toJSON()).catch(() => {});
+    };
+
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+        _groupCallRemoveParticipant(panel, peerId);
+        _groupCallUpdateCount(panel);
+        try { pc.close(); } catch {}
+        delete peers[peerId];
+      }
+    };
+
+    // Listen for ICE candidates from the remote side
+    const candUnsub = onSnapshot(
+      query(collection(db, "calls", callId, `gcand_${peerId}_${state.uid}`), orderBy("__name__")),
+      snap => {
+        snap.docChanges().filter(c => c.type === "added").forEach(c => {
+          pc.addIceCandidate(new RTCIceCandidate(c.doc.data())).catch(() => {});
+        });
+      }
+    );
+    unsubs.push(candUnsub);
+    return pc;
+  };
+
+  // ── Send an offer to a participant (we are the later joiner) ───────────
+  const _offerPeer = async (peerId) => {
+    const pc = _makePC(peerId);
+    if (!pc) return;
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await setDoc(doc(db, "calls", callId, "goffers", `${state.uid}_to_${peerId}`), {
+      from: state.uid, to: peerId, sdp: offer.sdp, type: offer.type,
+    });
+    // Listen for the answer
+    const ansUnsub = onSnapshot(doc(db, "calls", callId, "ganswers", `${peerId}_to_${state.uid}`), async snap => {
+      if (!snap.exists() || pc.remoteDescription) return;
+      const data = snap.data();
+      if (data.from !== peerId) return;
+      await pc.setRemoteDescription(new RTCSessionDescription(data)).catch(() => {});
+    });
+    unsubs.push(ansUnsub);
+  };
+
+  // ── Listen for offers addressed to us and answer them ─────────────────
+  const offerUnsub = onSnapshot(
+    query(collection(db, "calls", callId, "goffers"), where("to", "==", state.uid)),
+    async (snap) => {
+      snap.docChanges().filter(c => c.type === "added").forEach(async (change) => {
+        const offer = change.doc.data();
+        const peerId = offer.from;
+        if (!peerId || peerId === state.uid) return;
+
+        const pc = _makePC(peerId);
+        if (!pc) return; // already connected
+
+        _groupCallAddParticipant(panel, peerId);
+
+        await pc.setRemoteDescription(new RTCSessionDescription(offer)).catch(() => {});
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        await setDoc(doc(db, "calls", callId, "ganswers", `${state.uid}_to_${peerId}`), {
+          from: state.uid, to: peerId, sdp: answer.sdp, type: answer.type,
+        });
+      });
+    }
+  );
+  unsubs.push(offerUnsub);
+
+  // ── Watch the call document for participant list / status changes ───────
+  const callUnsub = onSnapshot(doc(db, "calls", callId), async (snap) => {
+    if (!snap.exists() || snap.data().status === "ended") {
+      await _leaveGroupCall();
+      return;
+    }
+    const data = snap.data();
+    const currentParticipants = data.participants || [];
+
+    // Offer to any participant who joined before us (they wait for our offer)
+    for (const peerId of currentParticipants) {
+      if (peerId !== state.uid && !peers[peerId]) {
+        _groupCallAddParticipant(panel, peerId);
+        await _offerPeer(peerId);
+      }
+    }
+
+    // Remove tiles for participants who left
+    panel.querySelectorAll(".vc-tile").forEach(tile => {
+      const uid = tile.dataset.uid;
+      if (uid && uid !== state.uid && !currentParticipants.includes(uid)) {
+        _groupCallRemoveParticipant(panel, uid);
+        if (peers[uid]) { try { peers[uid].close(); } catch {} delete peers[uid]; }
+      }
+    });
+
+    _groupCallSyncParticipants(panel, currentParticipants);
+    _groupCallSyncRaisedHands(panel, data.raisedHands || []);
+  });
+  unsubs.push(callUnsub);
+
+  // ── Leave handler ───────────────────────────────────────────────────────
+  const _leaveGroupCall = async () => {
     if (!_activeCall) return;
     const ac = _activeCall;
     _activeCall = null;
-    ac.callUnsub?.();
-    ac.localTrack?.stop();
-    ac.localTrack?.close();
-    try { await ac.client.leave(); } catch {}
+    ac.unsubs?.forEach(u => { try { u(); } catch {} });
+    Object.values(ac.peers || {}).forEach(pc => { try { pc.close(); } catch {} });
+    ac.localStream?.getTracks().forEach(t => t.stop());
     await updateDoc(doc(db, "calls", ac.callId), {
       participants: arrayRemove(state.uid),
-      raisedHands: arrayRemove(state.uid),
+      raisedHands:  arrayRemove(state.uid),
     }).catch(() => {});
     const snap = await getDoc(doc(db, "calls", ac.callId)).catch(() => null);
-    if (snap?.exists()) {
-      const remaining = (snap.data().participants || []).filter(u => u !== state.uid);
-      if (remaining.length === 0) {
-        await updateDoc(doc(db, "calls", ac.callId), { status: "ended" }).catch(() => {});
-      }
+    if (snap?.exists() && (snap.data().participants || []).filter(u => u !== state.uid).length === 0) {
+      await updateDoc(doc(db, "calls", ac.callId), { status: "ended" }).catch(() => {});
     }
     ac.panel.classList.remove("vc-visible");
     setTimeout(() => ac.panel.remove(), 380);
     toast("Left the call");
   };
 
+  // ── Panel controls ──────────────────────────────────────────────────────
   panel.querySelector("#vcMute").addEventListener("click", () => {
     muted = !muted;
-    localTrack.setEnabled(!muted);
+    localStream.getAudioTracks().forEach(t => { t.enabled = !muted; });
     const btn = panel.querySelector("#vcMute");
     btn.querySelector("i").className = muted ? "ri-mic-off-fill" : "ri-mic-fill";
     btn.classList.toggle("vc-btn-active", muted);
@@ -634,16 +608,34 @@ const _joinAgoraGroupCall = async ({ callId, chatId, groupName }) => {
     if (handRaised) toast("✋ Hand raised — the host can see this");
   });
 
-  panel.querySelector("#vcLeave").addEventListener("click", () => _leaveAgoraCall());
+  panel.querySelector("#vcLeave").addEventListener("click", () => _leaveGroupCall());
 
   panel.querySelector("#vcMinimise").addEventListener("click", () => {
     panel.classList.toggle("vc-minimised");
     panel.querySelector("#vcMinimise i").className =
       panel.classList.contains("vc-minimised") ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line";
   });
+};
 
-  _activeCall = { type: "group", callId, client, localTrack, callUnsub, panel };
-  _groupCallAddParticipant(panel, state.uid);
+// ── Speaking indicator for group call participants ─────────────────────────
+const _watchGroupSpeaking = (stream, uid, panel) => {
+  try {
+    const ctx = new AudioContext();
+    const src = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    src.connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    const check = () => {
+      const tile = panel.querySelector(`.vc-tile[data-uid="${uid}"]`);
+      if (!tile || !document.body.contains(panel)) { ctx.close(); return; }
+      analyser.getByteFrequencyData(data);
+      const avg = data.reduce((a, b) => a + b, 0) / data.length;
+      tile.classList.toggle("vc-speaking", avg > 8);
+      requestAnimationFrame(check);
+    };
+    check();
+  } catch {}
 };
 
 // ── Panel builder ─────────────────────────────────────────────────────────
@@ -778,16 +770,7 @@ const _groupCallSyncRaisedHands = async (panel, raisedUids) => {
 // TURN servers added so calls work through firewalls and mobile networks.
 // =========================================================================
 
-const ICE_SERVERS = {
-  iceServers: [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" },
-    // TURN relay — needed for calls behind NAT / mobile networks / firewalls
-    { urls: "turn:openrelay.metered.ca:80",               username: "openrelayproject", credential: "openrelayproject" },
-    { urls: "turn:openrelay.metered.ca:443",              username: "openrelayproject", credential: "openrelayproject" },
-    { urls: "turn:openrelay.metered.ca:443?transport=tcp",username: "openrelayproject", credential: "openrelayproject" },
-  ],
-};
+// ICE_SERVERS defined above in the group call section
 
 export const startCall = async ({ peerId, chatId, isGroup, type = "voice" }) => {
   if (isGroup) {
