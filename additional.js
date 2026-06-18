@@ -638,8 +638,137 @@ const _watchGroupSpeaking = (stream, uid, panel) => {
   } catch {}
 };
 
+// ── Inject group-call CSS once ─────────────────────────────────────────────
+let _vcStylesReady = false;
+const _injectVCStyles = () => {
+  if (_vcStylesReady) return;
+  _vcStylesReady = true;
+  const s = document.createElement("style");
+  s.textContent = `
+    /* ── Group voice-call panel ───────────────────────────────────────── */
+    .vc-panel {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      max-height: 65vh;
+      background: var(--bg-elev, #1e1e2e);
+      border-top: 1px solid var(--line, rgba(255,255,255,.12));
+      border-radius: 20px 20px 0 0;
+      box-shadow: 0 -8px 40px rgba(0,0,0,.45);
+      z-index: 4000;
+      display: flex;
+      flex-direction: column;
+      transform: translateY(100%);
+      transition: transform .32s cubic-bezier(.32,1,.32,1);
+      overflow: hidden;
+    }
+    .vc-panel.vc-visible { transform: translateY(0); }
+    .vc-panel.vc-minimised { max-height: 72px; }
+    .vc-handle-bar {
+      width: 36px; height: 4px;
+      background: var(--line, rgba(255,255,255,.2));
+      border-radius: 4px;
+      margin: 10px auto 0;
+      flex-shrink: 0;
+    }
+    .vc-header {
+      display: flex; align-items: center;
+      padding: 10px 16px 8px;
+      flex-shrink: 0;
+    }
+    .vc-header-left { flex: 1; min-width: 0; }
+    .vc-title {
+      display: flex; align-items: center; gap: 6px;
+      font-weight: 700; font-size: 15px;
+      color: var(--text, #fff);
+    }
+    .vc-subtitle {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; color: var(--text-mute, rgba(255,255,255,.55));
+      margin-top: 2px;
+    }
+    .vc-dot-sep { opacity: .5; }
+    .vc-header-right { display: flex; gap: 4px; }
+    .vc-icon-btn {
+      width: 32px; height: 32px; border-radius: 50%;
+      display: grid; place-items: center;
+      background: none; border: none; cursor: pointer;
+      color: var(--text-mute, rgba(255,255,255,.55));
+      font-size: 18px;
+      transition: background .15s;
+    }
+    .vc-icon-btn:hover { background: rgba(255,255,255,.08); }
+    .vc-hands-queue {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 16px;
+      background: rgba(246,201,14,.1);
+      font-size: 13px; color: #f6c90e;
+      flex-shrink: 0;
+    }
+    .vc-hands-queue.hidden { display: none !important; }
+    .vc-participants {
+      display: flex; flex-wrap: wrap; gap: 10px;
+      padding: 12px 16px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .vc-tile {
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      width: 72px;
+    }
+    .vc-av-wrap { position: relative; width: 56px; height: 56px; }
+    .vc-av {
+      width: 56px; height: 56px; border-radius: 50%;
+      object-fit: cover;
+      border: 2px solid rgba(255,255,255,.15);
+    }
+    .vc-speaking-ring {
+      position: absolute; inset: -3px; border-radius: 50%;
+      border: 2.5px solid transparent;
+      pointer-events: none;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .vc-tile.vc-speaking .vc-speaking-ring {
+      border-color: #4ade80;
+      box-shadow: 0 0 10px rgba(74,222,128,.5);
+    }
+    .vc-hand-badge {
+      position: absolute; top: -2px; right: -2px;
+      font-size: 14px; line-height: 1;
+    }
+    .vc-hand-badge.hidden { display: none !important; }
+    .vc-tile-name {
+      font-size: 11px; color: var(--text-mute, rgba(255,255,255,.6));
+      text-align: center; max-width: 72px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .vc-tile-mic { font-size: 12px; color: var(--text-mute, rgba(255,255,255,.4)); }
+    .vc-tile.vc-muted .vc-tile-mic { color: #f87171; }
+    .vc-controls {
+      display: flex; justify-content: center; gap: 24px;
+      padding: 12px 16px 22px;
+      border-top: 1px solid var(--line, rgba(255,255,255,.1));
+      flex-shrink: 0;
+    }
+    .vc-ctrl-col { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+    .vc-ctrl-btn {
+      width: 52px; height: 52px; border-radius: 50%;
+      background: rgba(255,255,255,.1); border: none; cursor: pointer;
+      color: #fff; font-size: 22px;
+      display: grid; place-items: center;
+      transition: background .15s, transform .1s;
+    }
+    .vc-ctrl-btn:active { transform: scale(.93); }
+    .vc-ctrl-btn.vc-btn-active { background: rgba(255,255,255,.28); }
+    .vc-ctrl-btn.vc-leave-btn { background: #ef4444; }
+    .vc-ctrl-btn.vc-leave-btn:hover { background: #dc2626; }
+    .vc-btn-label { font-size: 11px; color: var(--text-mute, rgba(255,255,255,.55)); }
+  `;
+  document.head.appendChild(s);
+};
+
 // ── Panel builder ─────────────────────────────────────────────────────────
 const _buildGroupCallPanel = ({ groupName }) => {
+  _injectVCStyles();
   const panel = document.createElement("div");
   panel.className = "vc-panel";
   panel.id = "vcPanel";
