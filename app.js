@@ -56,7 +56,63 @@ export const state = {
   cache: {
     users: new Map(), // uid -> profile snapshot
   },
+  // AI assistant settings (persisted in localStorage)
+  aiName:   localStorage.getItem("orbit:ai_name")   || "Aria",
+  aiAvatar: localStorage.getItem("orbit:ai_avatar") || "🤖",
+  aiTone:   localStorage.getItem("orbit:ai_tone")   || "friendly",
 };
+
+// =========================================================================
+// AI ASSISTANT CONSTANTS
+// =========================================================================
+// Set your Groq API key here or assign window.GROQ_API_KEY before this file loads.
+// Get a free key at https://console.groq.com
+window.GROQ_API_KEY = window.GROQ_API_KEY || "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";
+window.GROQ_MODEL   = window.GROQ_MODEL   || "llama-3.3-70b-versatile";
+
+const AI_TONES = {
+  friendly:   { label: "Friendly & Warm",    emoji: "😊" },
+  witty:      { label: "Witty & Playful",    emoji: "😄" },
+  thoughtful: { label: "Thoughtful & Deep",  emoji: "🧠" },
+  calm:       { label: "Calm & Supportive",  emoji: "🌿" },
+  bold:       { label: "Bold & Direct",      emoji: "⚡" },
+};
+
+const AI_AVATARS = ["🤖","✨","🌟","💫","🎯","🧠","🌙","🔮","💡","🎭","🌊","🦋"];
+
+function getAIChatSystem() {
+  const name = state.aiName || "Aria";
+  const tone = state.aiTone || "friendly";
+  const styles = {
+    friendly:   "warm, supportive, and upbeat — like a genuine friend",
+    witty:      "playful and clever, with smart humor and banter",
+    thoughtful: "reflective and curious, asking follow-up questions and going deep",
+    calm:       "soothing, steady, and empathetic",
+    bold:       "direct, confident, and to the point",
+  };
+  return `You are ${name}, an AI assistant built into Orbit — a social platform. You are ${styles[tone] || styles.friendly}.
+Rules:
+- Keep replies SHORT and conversational (1-3 sentences max unless the user asks for detail).
+- Be genuinely helpful and engaging.
+- Never be explicit, harmful, or offensive.
+- Plain text only — no markdown, no asterisks.
+- You can discuss anything: social life, advice, ideas, creative writing, tech, etc.`;
+}
+
+// Load / save AI chat history from Firestore (under users/{uid}/ai_chat doc)
+async function loadAIHistory() {
+  if (!state.uid) return [];
+  try {
+    const snap = await getDoc(doc(db, "users", state.uid));
+    return snap.exists() ? (snap.data().aiMessages || []) : [];
+  } catch { return []; }
+}
+async function saveAIHistory(msgs) {
+  if (!state.uid) return;
+  try {
+    await updateDoc(doc(db, "users", state.uid), { aiMessages: msgs.slice(-60) });
+  } catch {}
+}
 
 // =========================================================================
 // 3. UTILITIES
@@ -570,7 +626,7 @@ $("#notifBtn").addEventListener("click", () => { location.hash = "#notifications
 // 7. ROUTER
 // =========================================================================
 // "reels" removed — videos live in the feed as regular posts
-const routes = ["feed", "chats", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn"];
+const routes = ["feed", "chats", "ai-chat", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn"];
 
 // Feed DOM caching — lets us restore the feed instantly when navigating
 // back from a post without re-rendering or re-shuffling.
@@ -632,7 +688,16 @@ const router = () => {
   }
 
   switch (target) {
-    case "chats":      document.dispatchEvent(new CustomEvent("orbit:open-chats", { detail: { peerUid: rest[0] || null } })); break;
+    case "chats":
+      if (rest[0] === "ai") {
+        renderAIChat(content);
+      } else {
+        document.dispatchEvent(new CustomEvent("orbit:open-chats", { detail: { peerUid: rest[0] || null } }));
+        // Inject AI entry at top of chat list after chat.js renders
+        setTimeout(() => _injectAIChatEntry(), 350);
+      }
+      break;
+    case "ai-chat":    renderAIChat(content); break;
     case "groups":     renderGroups(content); break;
     case "explore":    renderExplore(content, rest[0] === "tag" ? rest[1] : null); break;
     case "saved":      renderSaved(content); break;
@@ -804,12 +869,17 @@ const renderTrendingCard = (p, author) => {
 // 3 items → 1 large left + 2 stacked right (Facebook-style)
 // 4+      → swipeable carousel
 // =========================================================================
-const _makeGridCell = (m, spanRows = false, _allItems = [], _idx = 0) => {
+const _makeGridCell = (m, spanRows = false, _allItems = [], _idx = 0, _postId = null) => {
   const cellStyle = [
-    "position:relative;overflow:hidden;",
+    "position:relative;overflow:hidden;cursor:pointer;",
     spanRows ? "grid-row:1/3;" : "",
   ].join("");
   const cell = el("div", { style: cellStyle });
+
+  const _navigateToPost = (e) => {
+    e.stopPropagation();
+    if (_postId) location.hash = `#post/${_postId}`;
+  };
 
   if (m.type === "video") {
     const vid = el("video", {
@@ -821,30 +891,54 @@ const _makeGridCell = (m, spanRows = false, _allItems = [], _idx = 0) => {
     });
     const overlay = el("div", {
       class: "media-grid-play",
-      style: "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.18);pointer-events:none;",
+      style: "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.18);",
     }, el("i", { class: "ri-play-circle-fill", style: "font-size:44px;color:#fff;filter:drop-shadow(0 2px 10px rgba(0,0,0,0.5));" }));
-    vid.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const items = _allItems.length ? _allItems : [m];
-      openVideoViewer(items, _allItems.length ? _idx : 0);
-    });
+    // Clicking navigates to post detail instead of opening modal
+    vid.addEventListener("click", _navigateToPost);
+    overlay.addEventListener("click", _navigateToPost);
     cell.appendChild(vid);
     cell.appendChild(overlay);
   } else {
-    cell.appendChild(el("img", { src: m.url, loading: "lazy", style: "width:100%;height:100%;object-fit:cover;display:block;" }));
+    const img = el("img", { src: m.url, loading: "lazy", style: "width:100%;height:100%;object-fit:cover;display:block;" });
+    img.addEventListener("click", _navigateToPost);
+    cell.appendChild(img);
   }
   return cell;
 };
 
-const renderMediaCarousel = (mediaRaw) => {
+const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
+  const { detailView = false } = opts;
   const items = Array.isArray(mediaRaw) ? mediaRaw : (mediaRaw ? [mediaRaw] : []);
   if (!items.length) return null;
+
+  // ── Detail view: all items stacked vertically (Facebook-style) ──
+  if (detailView && items.length > 1) {
+    const stack = el("div", { class: "post-media-stack", style: "display:flex;flex-direction:column;gap:4px;" });
+    items.forEach((m) => {
+      if (m.type === "video") {
+        const player = buildVideoPlayer(m.url);
+        player.style.borderRadius = "0";
+        stack.appendChild(player);
+      } else {
+        stack.appendChild(el("img", {
+          src: m.url, loading: "lazy",
+          style: "width:100%;display:block;max-height:600px;object-fit:cover;",
+        }));
+      }
+    });
+    return stack;
+  }
 
   // ── Single item ────────────────────────────────────────────────
   if (items.length === 1) {
     const m = items[0];
     if (m.type === "video") {
-      return el("div", { class: "post-media" }, buildVideoPlayer(m.url));
+      // Full-width, no side border-radius so it stretches edge-to-edge
+      const player = buildVideoPlayer(m.url);
+      player.style.borderRadius = "0";
+      const wrap = el("div", { class: "post-media", style: "border-radius:0;overflow:hidden;" });
+      wrap.appendChild(player);
+      return wrap;
     }
     return el("div", { class: "post-media" }, el("img", { src: m.url, loading: "lazy" }));
   }
@@ -855,7 +949,7 @@ const renderMediaCarousel = (mediaRaw) => {
       class: "post-media",
       style: "display:grid;grid-template-columns:1fr 1fr;gap:2px;border-radius:12px;overflow:hidden;height:280px;",
     });
-    items.forEach((m, i) => grid.appendChild(_makeGridCell(m, false, items, i)));
+    items.forEach((m, i) => grid.appendChild(_makeGridCell(m, false, items, i, postId)));
     return grid;
   }
 
@@ -865,7 +959,7 @@ const renderMediaCarousel = (mediaRaw) => {
       class: "post-media",
       style: "display:grid;grid-template-columns:2fr 1fr;grid-template-rows:140px 140px;gap:2px;border-radius:12px;overflow:hidden;",
     });
-    items.forEach((m, i) => grid.appendChild(_makeGridCell(m, i === 0, items, i)));
+    items.forEach((m, i) => grid.appendChild(_makeGridCell(m, i === 0, items, i, postId)));
     return grid;
   }
 
@@ -875,20 +969,17 @@ const renderMediaCarousel = (mediaRaw) => {
     const slide = el("div", { class: "carousel-slide", style: i === 0 ? "" : "display:none;" });
     if (m.type === "video") {
       const player = buildVideoPlayer(m.url);
-      // Intercept the fullscreen button → open viewer instead
-      const fullBtn = player.querySelector(".vp-btn:last-child");
-      if (fullBtn) {
-        fullBtn.onclick = (e) => { e.stopPropagation(); openVideoViewer(items, i); };
-      }
-      // Tapping the play overlay also opens the viewer
-      const overlay = player.querySelector(".vp-overlay");
-      if (overlay) {
-        overlay.onclick = (e) => { e.stopPropagation(); openVideoViewer(items, i); };
+      // Clicking anywhere on the player navigates to the post detail
+      if (postId) {
+        const overlay = player.querySelector(".vp-overlay");
+        if (overlay) overlay.onclick = (e) => { e.stopPropagation(); location.hash = `#post/${postId}`; };
+        const fullBtn = player.querySelector(".vp-btn:last-child");
+        if (fullBtn) fullBtn.onclick = (e) => { e.stopPropagation(); location.hash = `#post/${postId}`; };
       }
       slide.appendChild(player);
     } else {
-      const img = el("img", { src: m.url, loading: "lazy", style: "cursor:pointer;" });
-      img.onclick = (e) => { e.stopPropagation(); openVideoViewer(items, i); };
+      const img = el("img", { src: m.url, loading: "lazy", style: postId ? "cursor:pointer;" : "" });
+      if (postId) img.onclick = (e) => { e.stopPropagation(); location.hash = `#post/${postId}`; };
       slide.appendChild(img);
     }
     return slide;
@@ -941,7 +1032,7 @@ const renderPost = (p, author, opts = {}) => {
   const iOrbited = (p.orbits || []).includes(state.uid);
   const isMine = p.authorUid === state.uid;
   const trending = (p.orbitCount || 0) >= 3;
-  const { hideComments = false } = opts;
+  const { hideComments = false, detailView: _detailView = false } = opts;
 
   const post = el("article", { class: `post${trending ? " is-trending" : ""}` });
 
@@ -1020,7 +1111,7 @@ const renderPost = (p, author, opts = {}) => {
   }
 
   // Media (single, grid, or carousel)
-  const carousel = renderMediaCarousel(p.media);
+  const carousel = renderMediaCarousel(p.media, p.id, { detailView: _detailView });
   if (carousel) post.appendChild(carousel);
 
   // Feature: extra detail block for build/project posts (stage, progress, tags, links)
@@ -1100,9 +1191,43 @@ const renderPost = (p, author, opts = {}) => {
     );
     post.appendChild(replyBanner);
 
+    const aiSuggestBtn = el("button", {
+      class: "icon-btn", type: "button", title: "AI reply suggestion",
+      style: "color:var(--primary);flex-shrink:0;",
+    }, el("i", { class: "ri-sparkling-2-line" }));
+    aiSuggestBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const inp = cForm.querySelector("input");
+      if (!window.GROQ_API_KEY) { toast("Add your Groq API key to enable AI suggestions"); return; }
+      aiSuggestBtn.disabled = true;
+      aiSuggestBtn.innerHTML = '<i class="ri-loader-4-line" style="animation:spin 1s linear infinite;"></i>';
+      try {
+        const postText = p.text || "";
+        const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${window.GROQ_API_KEY}` },
+          body: JSON.stringify({
+            model: window.GROQ_MODEL,
+            messages: [
+              { role: "system", content: "You suggest short, genuine social media comments. One sentence max. No quotes, no hashtags, no emojis unless natural." },
+              { role: "user", content: `Suggest a comment for this post: "${postText.slice(0, 300)}"` },
+            ],
+            max_tokens: 60, temperature: 0.9,
+          }),
+        });
+        if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error ${res.status}`); }
+        const data = await res.json();
+        const suggestion = data.choices?.[0]?.message?.content?.trim();
+        if (suggestion) { inp.value = suggestion; inp.focus(); }
+      } catch (err) { toast("AI suggestion failed: " + (err.message || "unknown error")); }
+      aiSuggestBtn.disabled = false;
+      aiSuggestBtn.innerHTML = '<i class="ri-sparkling-2-line"></i>';
+    });
+
     const cForm = el("form", { class: "comment-form" },
       el("img", { class: "avatar xs", src: avatarFor(state.me) }),
       el("input", { type: "text", placeholder: "Write a comment…" }),
+      aiSuggestBtn,
       el("button", { class: "icon-btn", type: "submit" }, el("i", { class: "ri-send-plane-fill" })),
     );
     cForm.addEventListener("submit", async (e) => {
@@ -1209,8 +1334,8 @@ const renderPostDetail = async (root, postId) => {
   const p = { id: snap.id, ...snap.data() };
   const author = await fetchUser(p.authorUid);
 
-  // Render the post card (no inline comment form — we show all comments below)
-  root.appendChild(renderPost(p, author, { hideComments: true }));
+  // Render the post card with media stacked vertically in detail view
+  root.appendChild(renderPost(p, author, { hideComments: true, detailView: true }));
 
   // Full comments section
   const cmtSection = el("div", { class: "detail-comments" });
@@ -1309,9 +1434,42 @@ const renderPostDetail = async (root, postId) => {
 
   loadDetailComments(false);
 
+  const detailAISuggestBtn = el("button", {
+    class: "icon-btn", type: "button", title: "AI reply suggestion",
+    style: "color:var(--primary);flex-shrink:0;",
+  }, el("i", { class: "ri-sparkling-2-line" }));
+  detailAISuggestBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const inp = cmtSection.querySelector("input");
+    if (!window.GROQ_API_KEY) { toast("Add your Groq API key to enable AI suggestions"); return; }
+    detailAISuggestBtn.disabled = true;
+    detailAISuggestBtn.innerHTML = '<i class="ri-loader-4-line" style="animation:spin 1s linear infinite;"></i>';
+    try {
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${window.GROQ_API_KEY}` },
+        body: JSON.stringify({
+          model: window.GROQ_MODEL,
+          messages: [
+            { role: "system", content: "You suggest short, genuine social media comments. One sentence max. No quotes, no hashtags." },
+            { role: "user", content: `Suggest a comment for this post: "${(p.text || "").slice(0, 300)}"` },
+          ],
+          max_tokens: 60, temperature: 0.9,
+        }),
+      });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error ${res.status}`); }
+      const data = await res.json();
+      const suggestion = data.choices?.[0]?.message?.content?.trim();
+      if (suggestion && inp) { inp.value = suggestion; inp.focus(); }
+    } catch (err) { toast("AI suggestion failed: " + (err.message || "unknown error")); }
+    detailAISuggestBtn.disabled = false;
+    detailAISuggestBtn.innerHTML = '<i class="ri-sparkling-2-line"></i>';
+  });
+
   const cForm = el("form", { class: "comment-form detail-cmt-form" },
     el("img", { class: "avatar xs", src: avatarFor(state.me) }),
     el("input", { type: "text", placeholder: "Write a comment…" }),
+    detailAISuggestBtn,
     el("button", { class: "icon-btn", type: "submit" }, el("i", { class: "ri-send-plane-fill" })),
   );
   cForm.addEventListener("submit", async (e) => {
@@ -2483,7 +2641,323 @@ $("#globalSearch").addEventListener("keydown", async (e) => {
 })();
 
 // =========================================================================
-// 16. INIT
+// 16. AI ASSISTANT — Chat interface, settings, and chat-list injection
+// =========================================================================
+
+// --- AI Chat state ---
+let _aiMessages = [];
+let _aiTyping   = false;
+
+// --- Inject AI entry into chat list (Snapchat-style, survives onSnapshot resets) ---
+let _aiChatObserver = null;
+const _injectAIChatEntry = () => {
+  // Disconnect any previous observer
+  if (_aiChatObserver) { _aiChatObserver.disconnect(); _aiChatObserver = null; }
+
+  const buildAIRow = () => {
+    const toneInfo = AI_TONES[state.aiTone] || AI_TONES.friendly;
+    return el("div", {
+      class: "orbit-ai-entry chat-row",
+      style: "display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer;border-bottom:1px solid var(--border,rgba(255,255,255,0.07));background:linear-gradient(90deg,rgba(108,99,255,0.10) 0%,transparent 100%);flex-shrink:0;",
+      onclick: () => location.hash = "#chats/ai",
+    },
+      el("div", { class: "av", style: "position:relative;" },
+        el("div", { style: "width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#6c63ff,#ff6b9d);display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0;" }, state.aiAvatar),
+        el("span", { style: "position:absolute;bottom:1px;right:1px;width:10px;height:10px;border-radius:50%;background:#22c55e;border:2px solid var(--bg2,#1a1a2e);" }),
+      ),
+      el("div", { class: "meta", style: "min-width:0;flex:1;" },
+        el("div", { class: "name", style: "font-weight:700;font-size:15px;" }, state.aiName,
+          el("span", { style: "font-size:10px;font-weight:700;color:#6c63ff;margin-left:6px;background:rgba(108,99,255,.15);padding:1px 6px;border-radius:20px;" }, "AI"),
+        ),
+        el("div", { class: "preview", style: "font-size:12px;color:var(--text3);margin-top:2px;" }, `${toneInfo.emoji} ${toneInfo.label} · Always here for you`),
+      ),
+    );
+  };
+
+  const ensureInjected = (scroll) => {
+    if (!scroll) return;
+    // Only inject if the list has real content (not just loader/empty state)
+    const hasRows = scroll.querySelector(".chat-row:not(.orbit-ai-entry)") || scroll.querySelector(".empty");
+    if (!hasRows) return;
+    if (scroll.querySelector(".orbit-ai-entry")) return; // already there
+    scroll.insertBefore(buildAIRow(), scroll.firstChild);
+  };
+
+  // Watch #chatsScroll for DOM changes (loadChatsList clears it on every snapshot)
+  const attachObserver = () => {
+    const scroll = document.getElementById("chatsScroll");
+    if (!scroll) return false;
+    ensureInjected(scroll);
+    _aiChatObserver = new MutationObserver(() => ensureInjected(document.getElementById("chatsScroll")));
+    _aiChatObserver.observe(scroll, { childList: true });
+    return true;
+  };
+
+  // Poll until #chatsScroll appears in the DOM
+  if (!attachObserver()) {
+    const poll = setInterval(() => { if (attachObserver()) clearInterval(poll); }, 80);
+    setTimeout(() => clearInterval(poll), 8000);
+  }
+
+  // Clean up when user navigates away from chats
+  window.addEventListener("hashchange", () => {
+    if (_aiChatObserver) { _aiChatObserver.disconnect(); _aiChatObserver = null; }
+  }, { once: true });
+};
+
+// --- Render AI message bubble ---
+const _aiBubbleEl = (m) => {
+  const isAI = m.role === "ai";
+  const wrap = el("div", { class: `chat-bubble-wrap ${isAI ? "ai" : "user"}`, style: `display:flex;align-items:flex-end;gap:8px;margin:6px 14px;${isAI ? "" : "flex-direction:row-reverse;"}` });
+  if (isAI) {
+    wrap.appendChild(el("div", { style: "width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--grad-1,#6c63ff),var(--grad-2,#ff6b9d));display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;" }, state.aiAvatar));
+  }
+  const bubble = el("div", { style: `max-width:75%;padding:10px 14px;border-radius:${isAI ? "4px 18px 18px 18px" : "18px 4px 18px 18px"};background:${isAI ? "var(--bg3,#2a2a3a)" : "var(--primary,#6c63ff)"};color:${isAI ? "var(--text)" : "#fff"};font-size:14px;line-height:1.5;word-break:break-word;` });
+  bubble.textContent = m.text;
+  wrap.appendChild(bubble);
+  return wrap;
+};
+
+// --- Render AI messages list ---
+const _aiRenderMessages = () => {
+  const box = document.getElementById("aiChatMessages");
+  if (!box) return;
+  if (!_aiMessages.length && !_aiTyping) {
+    box.innerHTML = `<div style="text-align:center;padding:40px 20px;color:var(--text3);font-size:14px;">${state.aiAvatar}<br><br>Say something to ${state.aiName}…</div>`;
+    return;
+  }
+  box.innerHTML = "";
+  _aiMessages.forEach((m) => box.appendChild(_aiBubbleEl(m)));
+  if (_aiTyping) {
+    const typingWrap = el("div", { style: "display:flex;align-items:flex-end;gap:8px;margin:6px 14px;" });
+    typingWrap.appendChild(el("div", { style: "width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--grad-1,#6c63ff),var(--grad-2,#ff6b9d));display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;" }, state.aiAvatar));
+    const dots = el("div", { style: "padding:12px 16px;border-radius:4px 18px 18px 18px;background:var(--bg3,#2a2a3a);" });
+    dots.innerHTML = `<span style="display:inline-flex;gap:4px;align-items:center;height:14px;"><span style="width:6px;height:6px;border-radius:50%;background:var(--text3);animation:aiDot 1.2s infinite 0s;"></span><span style="width:6px;height:6px;border-radius:50%;background:var(--text3);animation:aiDot 1.2s infinite .2s;"></span><span style="width:6px;height:6px;border-radius:50%;background:var(--text3);animation:aiDot 1.2s infinite .4s;"></span></span>`;
+    typingWrap.appendChild(dots);
+    box.appendChild(typingWrap);
+  }
+  box.scrollTop = box.scrollHeight;
+};
+
+// Inject typing dot animation styles once
+let _aiStylesInjected = false;
+const _aiInjectStyles = () => {
+  if (_aiStylesInjected) return;
+  _aiStylesInjected = true;
+  const s = document.createElement("style");
+  s.textContent = `
+    @keyframes aiDot { 0%,80%,100% { opacity:.3; transform:scale(.8); } 40% { opacity:1; transform:scale(1); } }
+    .ai-chat-page { display:flex;flex-direction:column;height:100%;max-height:100dvh;overflow:hidden; }
+    .ai-chat-header { display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border,rgba(255,255,255,0.07));flex-shrink:0;background:var(--bg2,#1a1a2e); }
+    .ai-chat-messages { flex:1;overflow-y:auto;padding:12px 0; }
+    .ai-chat-bottom { flex-shrink:0;border-top:1px solid var(--border,rgba(255,255,255,0.07));padding:10px 14px;display:flex;flex-direction:column;gap:8px;background:var(--bg2,#1a1a2e); }
+    .ai-chat-input-row { display:flex;align-items:center;gap:8px; }
+    .ai-chat-textarea { flex:1;resize:none;border:1px solid var(--border,rgba(255,255,255,0.12));border-radius:22px;padding:10px 16px;background:var(--bg3,#2a2a3a);color:var(--text);font-size:14px;outline:none;max-height:120px;line-height:1.4; }
+    .ai-chat-textarea:focus { border-color:var(--primary,#6c63ff); }
+    .ai-chat-send-btn { width:40px;height:40px;border-radius:50%;background:var(--primary,#6c63ff);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#fff; }
+    .ai-chat-send-btn:hover { opacity:.85; }
+    .ai-settings-sheet { display:flex;flex-direction:column;gap:10px;max-height:80dvh;overflow-y:auto; }
+    .ai-settings-section { font-size:11px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--text3);margin-top:8px; }
+    .ai-name-input { width:100%;padding:10px 14px;border:1px solid var(--border,rgba(255,255,255,0.12));border-radius:12px;background:var(--bg3);color:var(--text);font-size:14px;outline:none;box-sizing:border-box; }
+    .ai-avatar-grid { display:flex;flex-wrap:wrap;gap:8px;margin-top:4px; }
+    .ai-avatar-opt { width:42px;height:42px;border-radius:50%;border:2px solid transparent;display:flex;align-items:center;justify-content:center;font-size:22px;cursor:pointer;background:var(--bg3);transition:border-color .15s; }
+    .ai-avatar-opt.sel { border-color:var(--primary,#6c63ff); }
+    .ai-tone-list { display:flex;flex-direction:column;gap:6px;margin-top:4px; }
+    .ai-tone-opt { display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:12px;border:1px solid transparent;cursor:pointer;background:var(--bg3);transition:border-color .15s; }
+    .ai-tone-opt.sel { border-color:var(--primary,#6c63ff);background:rgba(108,99,255,.1); }
+    .ai-tone-emoji { font-size:18px; }
+    .ai-tone-label { font-size:14px;color:var(--text); }
+  `;
+  document.head.appendChild(s);
+};
+
+// --- Send message to AI ---
+window._aiSend = async function() {
+  const ta   = document.getElementById("aiChatInput");
+  const text = ta?.value?.trim();
+  if (!text || _aiTyping) return;
+  if (!window.GROQ_API_KEY) { toast("Set window.GROQ_API_KEY to use the AI assistant"); return; }
+  ta.value = "";
+  ta.style.height = "auto";
+
+  _aiMessages.push({ role: "user", text });
+  _aiTyping = true;
+  _aiRenderMessages();
+
+  try {
+    const history = _aiMessages.slice(-14).map((m) => ({
+      role:    m.role === "ai" ? "assistant" : "user",
+      content: m.text,
+    }));
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${window.GROQ_API_KEY}` },
+      body: JSON.stringify({
+        model:       window.GROQ_MODEL,
+        messages:    [{ role: "system", content: getAIChatSystem() }, ...history],
+        max_tokens:  280,
+        temperature: 0.9,
+      }),
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.error?.message || `API error ${res.status}`);
+    }
+    const data  = await res.json();
+    const reply = data.choices?.[0]?.message?.content?.trim();
+    if (!reply) throw new Error("Empty response from AI");
+    _aiMessages.push({ role: "ai", text: reply });
+  } catch (err) {
+    _aiMessages.push({ role: "ai", text: `⚠️ ${err.message || "Something went wrong. Check your API key and try again."}` });
+  }
+
+  _aiTyping = false;
+  _aiRenderMessages();
+  await saveAIHistory(_aiMessages);
+};
+
+window._aiKeydown = function(e) {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); window._aiSend(); }
+};
+
+window._aiClear = async function() {
+  if (!confirm(`Clear chat history with ${state.aiName}?`)) return;
+  _aiMessages = [];
+  await saveAIHistory([]);
+  _aiRenderMessages();
+};
+
+// --- AI Settings modal ---
+window._aiOpenSettings = function() {
+  const overlay = el("div", { style: "position:fixed;inset:0;z-index:1500;background:rgba(0,0,0,.6);display:flex;align-items:flex-end;justify-content:center;", onclick: (e) => { if (e.target === overlay) overlay.remove(); } });
+  const sheet = el("div", { style: "background:var(--bg2,#1a1a2e);border-radius:20px 20px 0 0;padding:20px 18px 32px;width:100%;max-width:480px;max-height:90dvh;overflow-y:auto;" });
+  sheet.innerHTML = "";
+
+  // Header
+  sheet.appendChild(el("div", { style: "display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;" },
+    el("h3", { style: "font-size:18px;font-weight:700;margin:0;" }, "✨ Customise AI"),
+    el("button", { class: "icon-btn", onclick: () => overlay.remove() }, el("i", { class: "ri-close-line" })),
+  ));
+  sheet.appendChild(el("p", { style: "font-size:12px;color:var(--text3);margin:0 0 12px;" }, "Changes apply to new messages immediately."));
+
+  // AI Name
+  sheet.appendChild(el("div", { class: "ai-settings-section" }, "AI Name"));
+  const nameInput = el("input", { class: "ai-name-input", type: "text", placeholder: "e.g. Aria, Nova, Rex…", value: state.aiName, maxlength: "24" });
+  sheet.appendChild(nameInput);
+
+  // Avatar
+  sheet.appendChild(el("div", { class: "ai-settings-section" }, "Avatar"));
+  const avatarGrid = el("div", { class: "ai-avatar-grid" });
+  let _pendingAvatar = state.aiAvatar;
+  AI_AVATARS.forEach((a) => {
+    const opt = el("div", { class: `ai-avatar-opt${a === _pendingAvatar ? " sel" : ""}` }, a);
+    opt.addEventListener("click", () => {
+      _pendingAvatar = a;
+      avatarGrid.querySelectorAll(".ai-avatar-opt").forEach((el2) => el2.classList.toggle("sel", el2.textContent === a));
+    });
+    avatarGrid.appendChild(opt);
+  });
+  sheet.appendChild(avatarGrid);
+
+  // Tone
+  sheet.appendChild(el("div", { class: "ai-settings-section" }, "Personality Tone"));
+  const toneList = el("div", { class: "ai-tone-list" });
+  let _pendingTone = state.aiTone;
+  Object.entries(AI_TONES).forEach(([key, t]) => {
+    const opt = el("div", { class: `ai-tone-opt${key === _pendingTone ? " sel" : ""}` },
+      el("span", { class: "ai-tone-emoji" }, t.emoji),
+      el("span", { class: "ai-tone-label" }, t.label),
+    );
+    opt.addEventListener("click", () => {
+      _pendingTone = key;
+      toneList.querySelectorAll(".ai-tone-opt").forEach((el2, i) => el2.classList.toggle("sel", Object.keys(AI_TONES)[i] === key));
+    });
+    toneList.appendChild(opt);
+  });
+  sheet.appendChild(toneList);
+
+  // Save button
+  const saveBtn = el("button", { class: "btn primary", style: "width:100%;margin-top:20px;", onclick: () => {
+    const name = nameInput.value.trim() || "Aria";
+    state.aiName   = name;
+    state.aiAvatar = _pendingAvatar;
+    state.aiTone   = _pendingTone;
+    localStorage.setItem("orbit:ai_name",   state.aiName);
+    localStorage.setItem("orbit:ai_avatar", state.aiAvatar);
+    localStorage.setItem("orbit:ai_tone",   state.aiTone);
+    overlay.remove();
+    toast(`${state.aiAvatar} ${state.aiName} is ready!`);
+    // Re-render AI chat if open
+    const chatContent = document.getElementById("aiChatMessages");
+    if (chatContent) renderAIChat(document.querySelector(".ai-chat-page")?.parentElement || document.getElementById("content"));
+  }}, "Save Changes");
+  sheet.appendChild(saveBtn);
+
+  overlay.appendChild(sheet);
+  document.body.appendChild(overlay);
+};
+
+// --- Main AI Chat render ---
+const renderAIChat = async (root) => {
+  _aiInjectStyles();
+  root.innerHTML = "";
+
+  const toneInfo = AI_TONES[state.aiTone] || AI_TONES.friendly;
+  const page = el("div", { class: "ai-chat-page" });
+
+  // Header
+  const header = el("div", { class: "ai-chat-header" },
+    el("button", { class: "icon-btn", onclick: () => history.back() }, el("i", { class: "ri-arrow-left-line" })),
+    el("div", { style: "width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,var(--grad-1,#6c63ff),var(--grad-2,#ff6b9d));display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;" }, state.aiAvatar),
+    el("div", { style: "flex:1;min-width:0;" },
+      el("div", { style: "font-weight:700;font-size:15px;" }, state.aiName),
+      el("div", { style: "font-size:12px;color:var(--text3);" }, `${toneInfo.emoji} ${toneInfo.label}`),
+    ),
+    el("button", { class: "icon-btn", title: "Customise AI", onclick: () => window._aiOpenSettings() },
+      el("i", { class: "ri-settings-3-line" }),
+    ),
+    el("button", { class: "icon-btn", title: "Clear chat", onclick: () => window._aiClear() },
+      el("i", { class: "ri-delete-bin-line" }),
+    ),
+  );
+  page.appendChild(header);
+
+  // Messages area
+  const messagesDiv = el("div", { class: "ai-chat-messages", id: "aiChatMessages" });
+  messagesDiv.innerHTML = `<div style="text-align:center;padding:40px 20px;color:var(--text3);font-size:14px;">${state.aiAvatar}<br><br>Loading…</div>`;
+  page.appendChild(messagesDiv);
+
+  // Bottom input area
+  const bottom = el("div", { class: "ai-chat-bottom" });
+  const inputRow = el("div", { class: "ai-chat-input-row" });
+  const textarea = el("textarea", {
+    class: "ai-chat-textarea",
+    id: "aiChatInput",
+    placeholder: `Message ${state.aiName}…`,
+    rows: "1",
+    onkeydown: "window._aiKeydown(event)",
+    oninput: "this.style.height='auto';this.style.height=this.scrollHeight+'px'",
+  });
+  const sendBtn = el("button", { class: "ai-chat-send-btn", onclick: () => window._aiSend() },
+    el("i", { class: "ri-send-plane-fill", style: "font-size:18px;" }),
+  );
+  inputRow.appendChild(textarea);
+  inputRow.appendChild(sendBtn);
+  bottom.appendChild(inputRow);
+  page.appendChild(bottom);
+  root.appendChild(page);
+
+  // Load history and render
+  _aiMessages = await loadAIHistory();
+  _aiTyping   = false;
+  _aiRenderMessages();
+};
+
+// Expose so router can call it
+window.renderAIChat = renderAIChat;
+
+// =========================================================================
+// 17. INIT
 // =========================================================================
 initTheme();
 // Hide boot once auth state resolved (handled in onAuthStateChanged)
