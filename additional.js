@@ -11,6 +11,10 @@ import {
 } from "./app.js";
 
 import {
+  sfxCallEnd, sfxCallConnect, sfxNotification, sfxCallRing,
+} from "./sounds.js";
+
+import {
   doc, setDoc, getDoc, updateDoc, addDoc,
   collection, query, where, orderBy, limit, onSnapshot, getDocs,
   serverTimestamp, arrayUnion, arrayRemove, Timestamp,
@@ -582,6 +586,7 @@ const _joinWebRTCGroupCall = async ({ callId, groupName }) => {
     }
     ac.panel.classList.remove("vc-visible");
     setTimeout(() => ac.panel.remove(), 380);
+    sfxCallEnd();
     toast("Left the call");
   };
 
@@ -592,7 +597,8 @@ const _joinWebRTCGroupCall = async ({ callId, groupName }) => {
     const btn = panel.querySelector("#vcMute");
     btn.querySelector("i").className = muted ? "ri-mic-off-fill" : "ri-mic-fill";
     btn.classList.toggle("vc-btn-active", muted);
-    btn.querySelector(".vc-btn-label").textContent = muted ? "Unmute" : "Mute";
+    // label is a sibling <span> outside the button — go up to .vc-ctrl-col first
+    btn.closest(".vc-ctrl-col").querySelector(".vc-btn-label").textContent = muted ? "Unmute" : "Mute";
     panel.querySelector(`.vc-tile[data-uid="${state.uid}"]`)?.classList.toggle("vc-muted", muted);
   });
 
@@ -601,7 +607,8 @@ const _joinWebRTCGroupCall = async ({ callId, groupName }) => {
     const btn = panel.querySelector("#vcHand");
     btn.classList.toggle("vc-btn-active", handRaised);
     btn.querySelector("i").className = handRaised ? "ri-hand-coin-fill" : "ri-hand-coin-line";
-    btn.querySelector(".vc-btn-label").textContent = handRaised ? "Lower hand" : "Raise hand";
+    // label is a sibling <span> outside the button — go up to .vc-ctrl-col first
+    btn.closest(".vc-ctrl-col").querySelector(".vc-btn-label").textContent = handRaised ? "Lower hand" : "Raise hand";
     await updateDoc(doc(db, "calls", callId), {
       raisedHands: handRaised ? arrayUnion(state.uid) : arrayRemove(state.uid),
     }).catch(() => {});
@@ -1093,6 +1100,12 @@ const _addDMRemoteStream = (overlay, peerId, stream) => {
     vid.style.cssText = "width:100%;height:100%;object-fit:cover;border-radius:inherit;";
     peerEl.appendChild(vid);
   } else {
+    // Audio-only: MUST create an <audio> element so the remote stream is heard
+    const aud = document.createElement("audio");
+    aud.autoplay = true;
+    aud.srcObject = stream;
+    peerEl.appendChild(aud);
+
     const box = document.createElement("div");
     box.className = "call-audio-peer";
     peerEl.appendChild(box);
@@ -1110,9 +1123,93 @@ const _addDMRemoteStream = (overlay, peerId, stream) => {
   peerEl.appendChild(label);
   _watchSpeaking(stream, peerEl);
   grid.appendChild(peerEl);
+  sfxCallConnect();
 };
 
+const _injectDMCallStyles = (() => {
+  let _done = false;
+  return () => {
+    if (_done) return; _done = true;
+    const s = document.createElement("style");
+    s.textContent = `
+/* ── DM Call overlay ───────────────────────────────────────────────────── */
+.call-overlay{position:fixed;inset:0;z-index:9000;display:flex;align-items:center;
+  justify-content:center;background:rgba(0,0,0,.88);backdrop-filter:blur(8px);
+  animation:coFadeIn .25s ease;}
+@keyframes coFadeIn{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}
+.call-overlay-exit{animation:coFadeOut .3s ease forwards!important}
+@keyframes coFadeOut{to{opacity:0;transform:scale(.94)}}
+.call-container{position:relative;width:min(520px,96vw);max-height:92vh;
+  display:flex;flex-direction:column;align-items:center;gap:12px;padding:20px 16px 16px;
+  background:linear-gradient(160deg,#1a1a2e 0%,#16213e 100%);
+  border-radius:24px;border:1px solid rgba(255,255,255,.08);overflow:hidden;}
+.call-topbar{width:100%;display:flex;align-items:center;justify-content:space-between;
+  font-size:13px;color:rgba(255,255,255,.5);}
+.call-timer{font-size:15px;font-weight:600;color:#fff;letter-spacing:.05em;}
+.call-type-badge{display:flex;align-items:center;gap:5px;
+  background:rgba(255,255,255,.08);padding:3px 10px;border-radius:20px;font-size:12px;}
+.call-remote-grid{width:100%;display:flex;flex-wrap:wrap;gap:10px;
+  justify-content:center;min-height:0;}
+.call-remote-peer{position:relative;width:220px;height:180px;flex:1 1 180px;
+  background:rgba(255,255,255,.06);border-radius:16px;overflow:hidden;
+  display:flex;align-items:center;justify-content:center;}
+.call-self-tile{position:relative;width:220px;height:180px;flex:1 1 180px;
+  background:rgba(255,255,255,.06);border-radius:16px;overflow:hidden;
+  display:flex;align-items:center;justify-content:center;}
+.call-audio-peer{display:flex;flex-direction:column;align-items:center;gap:10px;padding:12px;}
+.call-audio-peer .avatar{width:72px;height:72px;border-radius:50%;object-fit:cover;
+  border:2px solid rgba(255,255,255,.2);}
+.call-peer-name{font-size:14px;font-weight:500;color:#fff;text-align:center;}
+.call-tile-label{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);
+  display:flex;align-items:center;gap:4px;background:rgba(0,0,0,.55);
+  padding:3px 10px;border-radius:20px;white-space:nowrap;}
+.call-tile-mic{font-size:12px;color:rgba(255,255,255,.7);}
+.call-tile-mic.muted{color:#f87171;}
+.call-tile-name{font-size:12px;color:rgba(255,255,255,.85);}
+.call-status-wrap{display:flex;flex-direction:column;align-items:center;gap:14px;
+  padding:24px 0;}
+.call-waiting-wrap{position:relative;width:90px;height:90px;
+  display:flex;align-items:center;justify-content:center;}
+.call-waiting-av{width:80px;height:80px;border-radius:50%;object-fit:cover;
+  position:relative;z-index:1;border:3px solid rgba(255,255,255,.25);}
+.call-ripple{position:absolute;inset:-10px;border-radius:50%;
+  border:2px solid rgba(99,179,237,.5);animation:ripple 1.8s ease-out infinite;}
+@keyframes ripple{0%{transform:scale(1);opacity:.7}100%{transform:scale(1.9);opacity:0}}
+.call-status-text{font-size:15px;color:rgba(255,255,255,.6);letter-spacing:.03em;}
+.call-local-video{width:110px;height:80px;border-radius:12px;object-fit:cover;
+  border:2px solid rgba(255,255,255,.15);position:absolute;bottom:72px;right:18px;}
+.call-controls{display:flex;align-items:center;gap:14px;padding:8px 0 4px;width:100%;
+  justify-content:center;}
+.call-ctrl-group{display:flex;flex-direction:column;align-items:center;gap:5px;}
+.call-ctrl{width:52px;height:52px;border-radius:50%;border:none;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;font-size:20px;
+  background:rgba(255,255,255,.12);color:#fff;transition:background .2s,transform .15s;}
+.call-ctrl:hover{background:rgba(255,255,255,.22);transform:scale(1.08);}
+.call-ctrl.active{background:rgba(99,179,237,.3);color:#63b3ed;}
+.call-ctrl.danger{background:#dc2626;color:#fff;}
+.call-ctrl.danger:hover{background:#b91c1c;}
+.call-ctrl.accept{background:#16a34a;color:#fff;}
+.call-ctrl.accept:hover{background:#15803d;}
+.call-ctrl-label{font-size:11px;color:rgba(255,255,255,.55);white-space:nowrap;}
+/* ── Incoming call banner ───────────────────────────────────────────────── */
+.incoming-call-banner{position:fixed;top:16px;right:16px;z-index:9100;
+  display:flex;align-items:center;gap:12px;padding:14px 16px;
+  background:linear-gradient(135deg,#1e293b,#0f172a);
+  border:1px solid rgba(255,255,255,.12);border-radius:18px;
+  box-shadow:0 8px 32px rgba(0,0,0,.5);
+  animation:bannerSlide .3s cubic-bezier(.32,1,.32,1);}
+@keyframes bannerSlide{from{opacity:0;transform:translateY(-20px)}to{opacity:1;transform:translateY(0)}}
+.incoming-call-banner .avatar{width:44px;height:44px;border-radius:50%;object-fit:cover;flex-shrink:0;}
+.icb-info{flex:1;min-width:0;}
+.icb-name{font-size:14px;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.icb-type{font-size:12px;color:rgba(255,255,255,.5);margin-top:2px;}
+`.trim();
+    document.head.appendChild(s);
+  };
+})();
+
 const _buildDMCallOverlay = ({ callId, localStream, type, role }) => {
+  _injectDMCallStyles();
   const overlay = document.createElement("div");
   overlay.className = "call-overlay";
   const hasVideo = type === "video";
@@ -1214,7 +1311,9 @@ const _endDMCall = async (callId, overlay, localStream) => {
     (_activeCall.unsubs || []).forEach(u => { try { u(); } catch {} });
     _activeCall = null;
   }
-  overlay.remove();
+  sfxCallEnd();
+  overlay.classList.add("call-overlay-exit");
+  setTimeout(() => overlay.remove(), 320);
   await updateDoc(doc(db, "calls", callId), { status: "ended" }).catch(() => {});
 };
 
@@ -1253,6 +1352,9 @@ const _showIncomingBanner = async (n) => {
   const caller = await fetchUser(call.callerId).catch(() => null);
   const isGroup = !!call.isGroup;
 
+  sfxNotification();
+  const _stopRing = sfxCallRing();
+
   const banner = document.createElement("div");
   banner.className = "incoming-call-banner";
   banner.id = `icb_${n.callId}`;
@@ -1273,22 +1375,179 @@ const _showIncomingBanner = async (n) => {
   const dismiss = setTimeout(() => banner.remove(), 30000);
 
   banner.querySelector(`#icbDecline_${n.callId}`).onclick = () => {
-    clearTimeout(dismiss); banner.remove();
+    _stopRing(); clearTimeout(dismiss); banner.remove();
     if (!isGroup) updateDoc(doc(db, "calls", n.callId), { status: "declined" }).catch(() => {});
   };
 
   banner.querySelector(`#icbAccept_${n.callId}`).onclick = async () => {
-    clearTimeout(dismiss); banner.remove();
+    _stopRing(); clearTimeout(dismiss); banner.remove();
     await answerCall(n.callId);
   };
 
   if (!isGroup) {
     const u = onSnapshot(doc(db, "calls", n.callId), snap => {
       if (!snap.exists() || snap.data().status !== "ringing") {
-        clearTimeout(dismiss); banner.remove(); u();
+        _stopRing(); clearTimeout(dismiss); banner.remove(); u();
       }
     });
   }
+};
+
+// =========================================================================
+// TIKTOK-STYLE TOAST NOTIFICATION POPUP
+// =========================================================================
+const _injectToastNotifStyles = (() => {
+  let _done = false;
+  return () => {
+    if (_done) return; _done = true;
+    const s = document.createElement("style");
+    s.textContent = `
+.orbit-toast-stack{position:fixed;top:0;left:50%;transform:translateX(-50%);
+  z-index:9500;display:flex;flex-direction:column;align-items:center;
+  gap:8px;padding-top:12px;pointer-events:none;width:min(420px,96vw);}
+.orbit-toast{pointer-events:all;display:flex;align-items:center;gap:12px;
+  padding:12px 16px;border-radius:20px;cursor:pointer;
+  background:rgba(15,15,25,.92);backdrop-filter:blur(16px) saturate(1.6);
+  border:1px solid rgba(255,255,255,.1);
+  box-shadow:0 8px 32px rgba(0,0,0,.45),0 2px 8px rgba(0,0,0,.3);
+  width:100%;max-width:420px;box-sizing:border-box;
+  transform:translateY(-110%);opacity:0;
+  transition:transform .38s cubic-bezier(.32,1,.32,1),opacity .28s ease;}
+.orbit-toast.orbit-toast-in{transform:translateY(0);opacity:1;}
+.orbit-toast.orbit-toast-out{transform:translateY(-115%);opacity:0;
+  transition:transform .3s cubic-bezier(.6,0,.4,1),opacity .22s ease;}
+.orbit-toast-av{width:42px;height:42px;border-radius:50%;object-fit:cover;
+  flex-shrink:0;border:2px solid rgba(255,255,255,.15);}
+.orbit-toast-av-icon{width:42px;height:42px;border-radius:50%;flex-shrink:0;
+  background:linear-gradient(135deg,#7c5cff,#ff5cae);
+  display:flex;align-items:center;justify-content:center;font-size:20px;}
+.orbit-toast-body{flex:1;min-width:0;}
+.orbit-toast-name{font-size:13px;font-weight:700;color:#fff;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.orbit-toast-msg{font-size:13px;color:rgba(255,255,255,.65);margin-top:2px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.orbit-toast-app{font-size:11px;color:rgba(255,255,255,.35);margin-bottom:2px;
+  text-transform:uppercase;letter-spacing:.06em;}
+.orbit-toast-close{background:none;border:none;color:rgba(255,255,255,.4);
+  font-size:18px;cursor:pointer;padding:4px;flex-shrink:0;line-height:1;}
+.orbit-toast-close:hover{color:rgba(255,255,255,.8);}
+.orbit-toast-progress{position:absolute;bottom:0;left:0;height:2px;
+  border-radius:0 0 20px 20px;background:var(--primary,#7c5cff);
+  animation:toastProgress var(--tp-dur,4s) linear forwards;}
+@keyframes toastProgress{from{width:100%}to{width:0%}}
+    `.trim();
+    document.head.appendChild(s);
+  };
+})();
+
+let _toastStack = null;
+const _getToastStack = () => {
+  if (!_toastStack || !document.body.contains(_toastStack)) {
+    _toastStack = document.createElement("div");
+    _toastStack.className = "orbit-toast-stack";
+    document.body.appendChild(_toastStack);
+  }
+  return _toastStack;
+};
+
+export const showToastNotif = ({ avatar, icon, name, app = "Orbit", body, href, duration = 4000 }) => {
+  _injectToastNotifStyles();
+  const stack = _getToastStack();
+
+  const wrap = document.createElement("div");
+  wrap.className = "orbit-toast";
+  wrap.style.setProperty("--tp-dur", duration + "ms");
+  wrap.style.position = "relative";
+  wrap.style.overflow = "hidden";
+
+  const avEl = avatar
+    ? Object.assign(document.createElement("img"), { className: "orbit-toast-av", src: avatar, alt: "" })
+    : Object.assign(document.createElement("div"), { className: "orbit-toast-av-icon", textContent: icon || "🔔" });
+
+  const bodyEl = document.createElement("div");
+  bodyEl.className = "orbit-toast-body";
+  bodyEl.innerHTML = `
+    <div class="orbit-toast-app">${app}</div>
+    <div class="orbit-toast-name">${name || ""}</div>
+    <div class="orbit-toast-msg">${body || ""}</div>
+  `;
+
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "orbit-toast-close";
+  closeBtn.innerHTML = '<i class="ri-close-line"></i>';
+
+  const progress = document.createElement("div");
+  progress.className = "orbit-toast-progress";
+
+  wrap.appendChild(avEl);
+  wrap.appendChild(bodyEl);
+  wrap.appendChild(closeBtn);
+  wrap.appendChild(progress);
+  stack.appendChild(wrap);
+
+  // Slide in
+  requestAnimationFrame(() => requestAnimationFrame(() => wrap.classList.add("orbit-toast-in")));
+
+  const dismiss = () => {
+    wrap.classList.add("orbit-toast-out");
+    wrap.classList.remove("orbit-toast-in");
+    setTimeout(() => wrap.remove(), 350);
+  };
+
+  const timer = setTimeout(dismiss, duration);
+
+  closeBtn.onclick = (e) => { e.stopPropagation(); clearTimeout(timer); dismiss(); };
+
+  if (href) {
+    wrap.onclick = () => { clearTimeout(timer); dismiss(); location.hash = href; };
+    wrap.style.cursor = "pointer";
+  }
+};
+
+// General notification listener — shows toast for messages, orbits, comments
+const _initToastListener = () => {
+  // Firebase functions are already imported at the top of this file
+  onSnapshot(
+    query(
+      collection(db, "notifications", state.uid, "items"),
+      where("read", "==", false),
+      limit(10),
+    ),
+    async snap => {
+      for (const change of snap.docChanges()) {
+        if (change.type !== "added") continue;
+        const n = { id: change.doc.id, ...change.doc.data() };
+        if (n.type === "call") continue; // handled separately in initCallListener
+
+        // Mark read so it doesn't re-fire on next load
+        updateDoc(doc(db, "notifications", state.uid, "items", n.id), { read: true }).catch(() => {});
+
+        let avatar = null, name = "Orbit", body = n.text || "", href = "";
+        try {
+          if (n.fromUid || n.fromName) {
+            const sender = n.fromUid ? await fetchUser(n.fromUid) : null;
+            avatar = sender ? avatarFor(sender) : null;
+            name = sender?.name || n.fromName || "Someone";
+          }
+          if (n.type === "message") {
+            href = "chats";
+            body = n.text || "Sent you a message";
+          } else if (n.type === "orbit") {
+            href = n.postId ? `post/${n.postId}` : "";
+            body = body || "Orbited your post 🔥";
+          } else if (n.type === "comment") {
+            href = n.postId ? `post/${n.postId}` : "";
+            body = body || "Commented on your post";
+          } else if (n.type === "follow") {
+            href = n.fromUid ? `profile/${n.fromUid}` : "";
+            body = body || "Started following you";
+          }
+        } catch {}
+
+        showToastNotif({ avatar, name, body, href, app: "Orbit" });
+      }
+    }
+  );
 };
 
 // =========================================================================
@@ -1296,6 +1555,7 @@ const _showIncomingBanner = async (n) => {
 // =========================================================================
 document.addEventListener("orbit:auth-ready", () => {
   initCallListener();
+  _initToastListener();
 
   const contentEl = document.getElementById("content") || document.body;
   const feedObserver = new MutationObserver(() => {
@@ -1304,3 +1564,15 @@ document.addEventListener("orbit:auth-ready", () => {
   });
   feedObserver.observe(contentEl, { childList: true, subtree: true });
 });
+
+// ── Typing sound — fires on keydown inside any chat/comment input ─────────
+document.addEventListener("keydown", (e) => {
+  const tag = e.target.tagName;
+  if (tag !== "INPUT" && tag !== "TEXTAREA") return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === "Enter" || e.key === "Tab") return;
+  // Only trigger inside message/comment inputs (not search, username, etc.)
+  const el = e.target;
+  const inChat = el.closest(".chat-input-area, .cmt-form, .comment-form, .compose-box, [data-chat-input]");
+  if (inChat) window.sfxTyping?.();
+}, { passive: true });

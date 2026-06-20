@@ -16,6 +16,8 @@ import {
   serverTimestamp, increment, arrayUnion, arrayRemove, deleteField,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 
+import { sfxSend, sfxNotification, sfxTyping } from "./sounds.js";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // VIDEO PLAYER — custom player replacing bare <video controls>
 // ─────────────────────────────────────────────────────────────────────────────
@@ -559,7 +561,9 @@ const renderChatView = ({ isGroup, chatId, peer, group }) => {
     localStorage.setItem(`orbit:draft:${chatId}`, composerField.innerText);
   });
   composerField.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); return; }
+    // Typing sound — only for printable characters, not modifiers
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1) sfxTyping();
   });
   composerField.addEventListener("focus", () => { const p = document.getElementById("orbitStickerPicker"); if (p) { p.classList.add("closing"); setTimeout(() => p.remove(), 220); } });
 
@@ -660,6 +664,7 @@ const renderChatView = ({ isGroup, chatId, peer, group }) => {
         createdAt: serverTimestamp(),
       };
       await addDoc(collection(db, ...messagesPath), msg);
+      sfxSend();
 
       if (isGroup) {
         await updateDoc(doc(db, "groups", chatId), { lastMessage: text || "[media]", lastMessageAt: serverTimestamp() });
@@ -793,6 +798,16 @@ const _showVoiceDraft = (blob, chatId, isGroup) => {
 // =========================================================================
 const renderMessages = async (root, snap, { isGroup, chatId, peer }) => {
   const wasNearBottom = root.scrollTop + root.clientHeight >= root.scrollHeight - 80;
+
+  // Play receive sound when new incoming messages arrive
+  const newIncoming = snap.docChanges().filter(c =>
+    c.type === "added" && c.doc.data().authorUid !== state.uid
+  );
+  // Only sound if this isn't the very first load (root already has content)
+  if (newIncoming.length > 0 && root.childElementCount > 0) {
+    sfxNotification();
+  }
+
   // Save existing video players keyed by src so they don't re-buffer on re-render
   const _savedVids = {};
   root.querySelectorAll(".vid-player").forEach((vp) => {

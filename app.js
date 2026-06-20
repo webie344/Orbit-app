@@ -5,6 +5,8 @@
 // Chat + DM logic lives in chat.js (it imports state from this file).
 // =========================================================================
 
+import { sfxOrbit, sfxComment, sfxPost } from "./sounds.js";
+
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
 import {
   getAuth, onAuthStateChanged, signInWithEmailAndPassword,
@@ -1193,6 +1195,7 @@ const renderPost = (p, author, opts = {}) => {
   const orbitBtn = el("button", { class: `post-act orbit${iOrbited ? " active" : ""}`, onclick: async (e) => {
     e.stopPropagation();
     _iOrbited = !_iOrbited;
+    if (_iOrbited) sfxOrbit();
     orbitIcon.className = _iOrbited ? "ri-fire-fill" : "ri-fire-line";
     orbitCount.textContent = String((p.orbitCount || 0) + (_iOrbited ? 1 : -1));
     orbitBtn.classList.toggle("active", _iOrbited);
@@ -1315,6 +1318,7 @@ const renderPost = (p, author, opts = {}) => {
           el("div", { class: "text", text: commentData.text }),
         ),
       ));
+      sfxComment();
       await addDoc(collection(db, "posts", p.id, "comments"), commentData);
       await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
     });
@@ -1548,6 +1552,7 @@ const renderPostDetail = async (root, postId) => {
     _detailReplyTo = null;
     detailReplyBanner.classList.add("hidden");
     input.placeholder = "Write a comment…";
+    sfxComment();
     await addDoc(collection(db, "posts", p.id, "comments"), commentData);
     await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
   });
@@ -2096,6 +2101,7 @@ $("#postForm").addEventListener("submit", async (e) => {
     const _pd = { authorUid: state.uid, text, media, hashtags, orbits: [], orbitCount: 0, commentCount: 0, createdAt: serverTimestamp() };
     if (_postLocation) { _pd.location = _postLocation; _postLocation = null; }
     await addDoc(collection(db, "posts"), _pd);
+    sfxPost();
     e.target.reset(); postFiles = []; refreshPostPreviews();
     const _lt = document.getElementById("postLocationTag"); if (_lt) { _lt.style.display = "none"; _lt.textContent = ""; }
     const _lb = document.getElementById("postLocationBtn"); if (_lb) _lb.innerHTML = '<i class="ri-map-pin-line"></i>';
