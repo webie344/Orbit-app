@@ -69,7 +69,7 @@ export const state = {
 // =========================================================================
 // Set your Groq API key here or assign window.GROQ_API_KEY before this file loads.
 // Get a free key at https://console.groq.com
-window.GROQ_API_KEY = window.GROQ_API_KEY || "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";
+window.GROQ_API_KEY = window.GROQ_API_KEY || "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";
 window.GROQ_MODEL   = window.GROQ_MODEL   || "llama-3.3-70b-versatile";
 
 const AI_TONES = {
