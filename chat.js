@@ -492,10 +492,20 @@ const renderChatView = ({ isGroup, chatId, peer, group }) => {
     el("button", { class: "icon-btn back", onclick: () => $("#chatsRoute").classList.remove("is-open") },
       el("i", { class: "ri-arrow-left-line" })),
     el("img", { class: "avatar md",
-      src: isGroup ? `https://api.dicebear.com/7.x/shapes/svg?seed=${chatId}` : avatarFor(peer),
-      onclick: () => isGroup ? null : (location.hash = `#profile/${peer.uid}`),
+      src: isGroup
+        ? (group.photoURL || `https://api.dicebear.com/7.x/shapes/svg?seed=${chatId}`)
+        : avatarFor(peer),
+      style: "cursor:pointer;",
+      onclick: () => isGroup
+        ? import("./additional.js").then(m => m.openGroupInfo(chatId, group))
+        : (location.hash = `#profile/${peer.uid}`),
     }),
-    el("div", { class: "info" },
+    el("div", { class: "info",
+      style: isGroup ? "cursor:pointer;" : "",
+      onclick: isGroup
+        ? () => import("./additional.js").then(m => m.openGroupInfo(chatId, group))
+        : null,
+    },
       el("div", { class: "name" }, isGroup ? group.name : peer.name,
         !isGroup && peer.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null),
       el("div", { class: "sub", id: "chatSub" },
@@ -506,7 +516,6 @@ const renderChatView = ({ isGroup, chatId, peer, group }) => {
       el("button", { class: "icon-btn call-btn-desktop", title: "Voice call",
         onclick: () => import("./additional.js").then(m => m.startCall({ peerId: isGroup ? null : peer?.uid, chatId, isGroup, type: "voice" })) },
         el("i", { class: "ri-phone-line" })),
-      // Video call — DMs only, hidden for group chats
       !isGroup ? el("button", { class: "icon-btn call-btn-desktop", title: "Video call",
         onclick: () => import("./additional.js").then(m => m.startCall({ peerId: peer?.uid, chatId, isGroup: false, type: "video" })) },
         el("i", { class: "ri-vidicon-line" })) : null,
@@ -1411,6 +1420,17 @@ const chatHeaderMenu = ({ isGroup, chatId, peer, group }) => {
   // Video call button only for DMs — groups use voice-only via Agora
   if (!isGroup) {
     callRow.appendChild(mkCallBtn("ri-vidicon-line", "Video", "video"));
+  }
+  // Group Info button — groups only, sits right next to the call button
+  if (isGroup) {
+    const infoBtn = document.createElement("button");
+    infoBtn.className = "cis-call-btn";
+    infoBtn.innerHTML = `<span class="cis-call-icon"><i class="ri-information-line"></i></span><span>Group Info</span>`;
+    infoBtn.onclick = () => {
+      close();
+      import("./additional.js").then(m => m.openGroupInfo(chatId, group));
+    };
+    callRow.appendChild(infoBtn);
   }
   sheet.appendChild(callRow);
 

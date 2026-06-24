@@ -15,7 +15,7 @@
     <!-- ============================================================ -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="Orbit" />
+    <meta name="apple-mobile-web-app-title" content="JC" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 
     <!-- iOS splash screens (optional but recommended) -->
@@ -24,9 +24,9 @@
     <!-- ============================================================ -->
     <!-- SEO / Open Graph                                              -->
     <!-- ============================================================ -->
-    <title>Orbit — connect, share, chat</title>
-    <meta name="description" content="A new gravity for your circles. Connect, share, and chat on Orbit." />
-    <meta property="og:title" content="Orbit" />
+    <title>JC — Just Cruise</title>
+    <meta name="description" content="Just Cruise. Share memes, vibes, and things that make you smile." />
+    <meta property="og:title" content="JC" />
     <meta property="og:description" content="A new gravity for your circles." />
     <meta property="og:image" content="/icon-512.png" />
     <meta name="twitter:card" content="summary" />
@@ -46,7 +46,7 @@
     />
     <link rel="stylesheet" href="style.css" />
     <link rel="stylesheet" href="chat.css" />
-    <link rel="stylesheet" href="features.css" />
+    
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   </head>
@@ -56,8 +56,13 @@
     <!-- ============================================================ -->
     <div id="boot" class="boot">
       <div class="boot-logo">
-        <div class="orbit-mark"><span></span><span></span><span></span></div>
-        <div class="boot-name">Orbit</div>
+        <div class="cruise-mark">
+          <span class="cruise-wave w1">🌊</span>
+          <span class="cruise-wave w2">🌊</span>
+          <span class="cruise-icon">⛵</span>
+        </div>
+        <div class="boot-name">Just Cruise</div>
+        <div class="boot-sub">share what makes you happy</div>
       </div>
     </div>
 
@@ -72,10 +77,12 @@
       </div>
       <div class="auth-card">
         <div class="auth-brand">
-          <div class="orbit-mark sm"><span></span><span></span><span></span></div>
-          <h1>Orbit</h1>
+          <div class="cruise-mark sm">
+            <span class="cruise-icon">⛵</span>
+          </div>
+          <h1>Just Cruise</h1>
         </div>
-        <p class="auth-tag">A new gravity for your circles.</p>
+        <p class="auth-tag">share what makes you happy 🌊</p>
 
         <div class="auth-tabs">
           <button class="auth-tab active" data-tab="signin">Sign in</button>
@@ -84,12 +91,12 @@
 
         <form id="signinForm" class="auth-form">
           <label>Email
-            <input type="email" name="email" placeholder="you@orbit.app" required autocomplete="email"/>
+            <input type="email" name="email" placeholder="you@jc.app" required autocomplete="email"/>
           </label>
           <label>Password
             <input type="password" name="password" placeholder="••••••••" required autocomplete="current-password"/>
           </label>
-          <button type="submit" class="btn primary block">Enter Orbit</button>
+          <button type="submit" class="btn primary block">Sign in</button>
         </form>
 
         <form id="signupForm" class="auth-form hidden">
@@ -100,12 +107,12 @@
             <input type="text" name="username" placeholder="@username" pattern="[a-zA-Z0-9_]{3,20}" required/>
           </label>
           <label>Email
-            <input type="email" name="email" placeholder="you@orbit.app" required autocomplete="email"/>
+            <input type="email" name="email" placeholder="you@jc.app" required autocomplete="email"/>
           </label>
           <label>Password
             <input type="password" name="password" placeholder="At least 8 characters" required minlength="8" autocomplete="new-password"/>
           </label>
-          <button type="submit" class="btn primary block">Create my Orbit</button>
+          <button type="submit" class="btn primary block">Join JC</button>
         </form>
 
         <div class="auth-divider"><span>or</span></div>
@@ -115,7 +122,7 @@
 
         <!-- Install App button — always visible on the login screen -->
         <button id="authInstallBtn" class="btn ghost block install-app-btn">
-          <i class="ri-download-2-line"></i> Add Orbit to Home Screen
+          <i class="ri-download-2-line"></i> Add JC to Home Screen
         </button>
 
         <div class="auth-foot">
@@ -133,8 +140,8 @@
         <div class="topbar-left">
           <button class="icon-btn only-mobile" id="openSidebar" aria-label="menu"><i class="ri-menu-line"></i></button>
           <div class="brand" data-route="feed">
-            <div class="orbit-mark xs"><span></span><span></span><span></span></div>
-            <span class="brand-name">Orbit</span>
+            <div class="cruise-mark xs"><span class="cruise-icon">⛵</span></div>
+            <span class="brand-name">Just Cruise</span>
           </div>
         </div>
         <div class="topbar-search">
@@ -175,10 +182,10 @@
               <span class="pill" id="chatsPill" hidden>0</span>
             </button>
             <button class="nav-item dl-nav-item" data-route="groups">
-              <span class="dl-nav-icon"><i class="ri-group-2-line"></i></span>
+              <span class="dl-nav-icon"><i class="ri-community-line"></i></span>
               <span class="dl-nav-text">
-                <span class="dl-nav-label">Groups</span>
-                <small class="dl-nav-desc">Join &amp; chat in group rooms</small>
+                <span class="dl-nav-label">Community</span>
+                <small class="dl-nav-desc">Join &amp; chat in community rooms</small>
               </span>
             </button>
             <button class="nav-item dl-nav-item" data-route="explore">
@@ -193,34 +200,6 @@
               <span class="dl-nav-text">
                 <span class="dl-nav-label">Saved</span>
                 <small class="dl-nav-desc">Posts you bookmarked for later</small>
-              </span>
-            </button>
-            <button class="nav-item dl-nav-item" data-route="spaces">
-              <span class="dl-nav-icon"><i class="ri-planet-line"></i></span>
-              <span class="dl-nav-text">
-                <span class="dl-nav-label">Spaces</span>
-                <small class="dl-nav-desc">Live audio rooms &amp; events</small>
-              </span>
-            </button>
-            <button class="nav-item dl-nav-item" data-route="challenges">
-              <span class="dl-nav-icon"><i class="ri-trophy-line"></i></span>
-              <span class="dl-nav-text">
-                <span class="dl-nav-label">Challenges</span>
-                <small class="dl-nav-desc">Community challenges &amp; contests</small>
-              </span>
-            </button>
-            <button class="nav-item dl-nav-item" data-route="mentorship">
-              <span class="dl-nav-icon"><i class="ri-user-heart-line"></i></span>
-              <span class="dl-nav-text">
-                <span class="dl-nav-label">Mentorship</span>
-                <small class="dl-nav-desc">Find or become a mentor</small>
-              </span>
-            </button>
-            <button class="nav-item dl-nav-item" data-route="learn">
-              <span class="dl-nav-icon"><i class="ri-graduation-cap-line"></i></span>
-              <span class="dl-nav-text">
-                <span class="dl-nav-label">Academy</span>
-                <small class="dl-nav-desc">Learn coding skills &amp; earn badges</small>
               </span>
             </button>
             <button class="nav-item dl-nav-item" data-route="settings">
@@ -253,7 +232,7 @@
             <div id="suggestList" class="suggest-list"></div>
           </div>
           <div class="rail-card">
-            <div class="rail-title">Trending in Orbit</div>
+            <div class="rail-title">Trending in JC</div>
             <div id="trendList" class="trend-list"></div>
           </div>
         </aside>
@@ -280,14 +259,12 @@
         </div>
         <div class="compose-tabs">
           <button class="ct active" data-ctab="post"><i class="ri-image-line"></i> Post</button>
-          <button class="ct" data-ctab="experience"><i class="ri-sparkling-line"></i> Experience</button>
-          <button class="ct" data-ctab="group"><i class="ri-group-2-line"></i> Group</button>
-          <button class="ct" data-ctab="build"><i class="ri-hammer-line"></i> Build</button>
-          <button class="ct" data-ctab="project"><i class="ri-folder-5-line"></i> Project</button>
+          <button class="ct" data-ctab="experience"><i class="ri-sparkling-line"></i> Vibe</button>
+          <button class="ct" data-ctab="group"><i class="ri-community-line"></i> Community</button>
         </div>
 
         <form id="postForm" class="compose-pane">
-          <textarea name="text" placeholder="What's orbiting your mind? Use #hashtags and @mentions" rows="4"></textarea>
+          <textarea name="text" placeholder="Share a meme, a vibe, or something that made you smile 😄 Use #hashtags and @mentions" rows="4"></textarea>
           <input type="file" id="postMedia" accept="image/*,video/*" multiple hidden />
           <div class="post-preview" id="postPreview"></div>
           <div class="compose-actions">
@@ -314,7 +291,6 @@
               <option value="music">&#x1F3B5; Music</option>
               <option value="fitness">&#x1F4AA; Fitness</option>
               <option value="art">&#x1F3A8; Art</option>
-              <option value="tech">&#x1F4BB; Tech</option>
               <option value="life">&#x2728; Life</option>
             </select>
             <button type="button" class="icon-btn" id="expLocationBtn" title="Tag location">
@@ -335,46 +311,13 @@
         </form>
 
         <form id="groupForm" class="compose-pane hidden">
-          <input type="text" name="name" placeholder="Group name" required />
-          <textarea name="about" placeholder="What's this group about?" rows="3"></textarea>
+          <input type="text" name="name" placeholder="Community name" required />
+          <textarea name="about" placeholder="What's this community about? 😄" rows="3"></textarea>
           <label class="row gap">
-            <input type="checkbox" name="isPublic" checked /> Public group (anyone can join)
+            <input type="checkbox" name="isPublic" checked /> Public community (anyone can join)
           </label>
           <div class="compose-actions">
-            <button type="submit" class="btn primary">Create group</button>
-          </div>
-        </form>
-        <form id="buildForm" class="compose-pane hidden">
-          <input type="text" name="buildTitle" placeholder="What are you building?" required />
-          <textarea name="buildDesc" rows="3" placeholder="Update / milestone description…"></textarea>
-          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-            <label style="flex:1;margin:0;">Stage
-              <select name="buildStage" style="margin-top:6px;">
-                <option value="idea">&#x1F4A1; Idea</option>
-                <option value="prototype">&#x1F6E0;&#xFE0F; Prototype</option>
-                <option value="beta">&#x26A1; Beta</option>
-                <option value="live">&#x1F7E2; Live</option>
-              </select>
-            </label>
-          </div>
-          <div class="build-progress-row">
-            <span style="font-size:13px;color:var(--text-dim);white-space:nowrap;">Progress</span>
-            <input type="range" name="buildProgress" min="0" max="100" value="0" />
-          </div>
-          <div class="build-prog-track"><div class="build-prog-preview"></div></div>
-          <div class="compose-actions">
-            <button type="submit" class="btn primary">Post update</button>
-          </div>
-        </form>
-
-        <form id="projectForm" class="compose-pane hidden">
-          <input type="text" name="projectTitle" placeholder="Project name" required />
-          <textarea name="projectDesc" rows="3" placeholder="What does it do?"></textarea>
-          <input type="url" name="projectGithub" placeholder="GitHub URL (optional)" />
-          <input type="url" name="projectLive" placeholder="Live URL (optional)" />
-          <input type="text" name="projectTags" placeholder="Tech tags, comma-separated (e.g. React, Firebase)" />
-          <div class="compose-actions">
-            <button type="submit" class="btn primary">Showcase project</button>
+            <button type="submit" class="btn primary">Create community</button>
           </div>
         </form>
       </div>
@@ -473,16 +416,16 @@
     <!-- PWA Update banner -->
     <div id="updateBanner" class="update-banner hidden">
       <i class="ri-refresh-line update-banner-icon"></i>
-      <span class="update-banner-text">New version of Orbit available</span>
+      <span class="update-banner-text">New version of JC available</span>
       <button id="updateNowBtn" class="btn primary" style="padding:6px 18px;font-size:13px;flex-shrink:0;">Update now</button>
       <button id="updateDismissBtn" class="icon-btn" style="flex-shrink:0;opacity:.6;"><i class="ri-close-line"></i></button>
     </div>
 
     <div id="installBanner" class="install-banner hidden">
       <div class="install-banner-inner">
-        <img src="/icon-192.png" class="install-banner-icon" alt="Orbit" />
+        <img src="/icon-192.png" class="install-banner-icon" alt="JC" />
         <div class="install-banner-text">
-          <strong>Add Orbit to your home screen</strong>
+          <strong>Add JC to your home screen</strong>
           <span>Use it like a real app, no store needed</span>
         </div>
         <button id="installBtn" class="btn primary sm">Install</button>
@@ -499,8 +442,8 @@
           <h3>Add to Home Screen</h3>
           <button class="icon-btn" id="iosInstallClose"><i class="ri-close-line"></i></button>
         </div>
-        <img src="/icon-192.png" class="ios-app-icon" alt="Orbit icon" />
-        <p class="ios-install-intro">Install <strong>Orbit</strong> on your iPhone in 3 taps:</p>
+        <img src="/icon-192.png" class="ios-app-icon" alt="JC icon" />
+        <p class="ios-install-intro">Install <strong>JC</strong> on your iPhone in 3 taps:</p>
         <ol class="ios-steps">
           <li>
             <i class="ri-share-forward-line"></i>
@@ -512,7 +455,7 @@
           </li>
           <li>
             <i class="ri-check-line"></i>
-            Tap <strong>"Add"</strong> — Orbit appears on your home screen!
+            Tap <strong>"Add"</strong> — JC appears on your home screen!
           </li>
         </ol>
         <div class="ios-install-tip">
@@ -529,7 +472,6 @@
     <script type="module" src="app.js"></script>
     <script type="module" src="chat.js"></script>
     <script type="module" src="notifications.js"></script>
-    <script type="module" src="features.js"></script>
     <script type="module" src="additional.js"></script>
 
     <!-- ============================================================ -->
@@ -574,7 +516,7 @@
             // Silently poll for updates every 60 s (catches GitHub-deployed changes)
             setInterval(() => reg.update().catch(() => {}), 60_000);
 
-          }).catch((err) => console.error("Orbit SW error:", err));
+          }).catch((err) => console.error("JC SW error:", err));
         });
       }
 
