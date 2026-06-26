@@ -1,5 +1,5 @@
 // =========================================================================
-// JC — app.js
+// Orbit — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
 // Profile + Settings + Theme + Verified-by-location.
 // Chat + DM logic lives in chat.js (it imports state from this file).
@@ -59,9 +59,9 @@ export const state = {
     users: new Map(), // uid -> profile snapshot
   },
   // AI assistant settings (persisted in localStorage)
-  aiName:   localStorage.getItem("jc:ai_name")   || "Aria",
-  aiAvatar: localStorage.getItem("jc:ai_avatar") || "🤖",
-  aiTone:   localStorage.getItem("jc:ai_tone")   || "friendly",
+  aiName:   localStorage.getItem("orbit:ai_name")   || "Aria",
+  aiAvatar: localStorage.getItem("orbit:ai_avatar") || "🤖",
+  aiTone:   localStorage.getItem("orbit:ai_tone")   || "friendly",
 };
 
 // =========================================================================
@@ -69,7 +69,7 @@ export const state = {
 // =========================================================================
 // Set your Groq API key here or assign window.GROQ_API_KEY before this file loads.
 // Get a free key at https://console.groq.com
-window.GROQ_API_KEY = window.GROQ_API_KEY || "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";
+window.GROQ_API_KEY = window.GROQ_API_KEY || "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";
 window.GROQ_MODEL   = window.GROQ_MODEL   || "llama-3.3-70b-versatile";
 
 const AI_TONES = {
@@ -92,7 +92,7 @@ function getAIChatSystem() {
     calm:       "soothing, steady, and empathetic",
     bold:       "direct, confident, and to the point",
   };
-  return `You are ${name}, an AI assistant built into JC (Just Cruise) — a fun meme and happiness-sharing social app. You are ${styles[tone] || styles.friendly}.
+  return `You are ${name}, an AI assistant built into Orbit — a social platform. You are ${styles[tone] || styles.friendly}.
 Rules:
 - Keep replies SHORT and conversational (1-3 sentences max unless the user asks for detail).
 - Be genuinely helpful and engaging.
@@ -491,11 +491,11 @@ export const uploadToCloudinary = async (file, kind = "image") => {
 // =========================================================================
 const applyTheme = (theme) => {
   document.documentElement.setAttribute("data-theme", theme);
-  localStorage.setItem("jc:theme", theme);
+  localStorage.setItem("orbit:theme", theme);
   $("#themeToggle")?.querySelector("i")?.classList.toggle("ri-sun-line", theme === "dark");
   $("#themeToggle")?.querySelector("i")?.classList.toggle("ri-moon-line", theme === "light");
 };
-const initTheme = () => applyTheme(localStorage.getItem("jc:theme") || "dark");
+const initTheme = () => applyTheme(localStorage.getItem("orbit:theme") || "dark");
 const toggleTheme = () =>
   applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark");
 
@@ -531,7 +531,7 @@ const ensureUserDoc = async (user, extras = {}) => {
     // Welcome notification for new users
     await addDoc(collection(db, "notifications", user.uid, "items"), {
       type: "welcome",
-      text: `Welcome to Just Cruise, ${profile.name.split(" ")[0]}! 👋 Share memes, vibes, and things that make you smile! 🎉 Join communities and cruise together. 🌊`,
+      text: `Welcome to Orbit, ${profile.name.split(" ")[0]}! 👋 Explore groups, join spaces, and connect with people who share your interests.`,
       read: false,
       createdAt: serverTimestamp(),
     }).catch(() => {});
@@ -663,7 +663,7 @@ const toggleNotifPanel = () => {
       const n = { id: d.id, ...d.data() };
       const ic = iconMap[n.type] || "ri-notification-3-fill";
       const co = colMap[n.type]  || "var(--primary)";
-      const txt = n.text || (n.fromName || "Someone") + " " + ({ orbit:"reacted to your post 🔥", follow:"followed you", message:"sent you a message", experience:"replied to your experience" }[n.type] || "interacted");
+      const txt = n.text || (n.fromName || "Someone") + " " + ({ orbit:"orbited your post", follow:"followed you", message:"sent you a message", experience:"replied to your experience" }[n.type] || "interacted");
       const item = el("div", { class: "notif-item" + (n.read ? "" : " unread") },
         el("i", { class: ic, style: "color:" + co + ";font-size:20px;flex-shrink:0;margin-top:2px;" }),
         el("div", { style: "min-width:0;" }, el("div", { class: "ni-text" }, txt), el("div", { class: "ni-time" }, fmtTime(n.createdAt))),
@@ -770,11 +770,16 @@ const router = () => {
     case "profile":    renderProfile(content, rest[0] || state.uid); break;
     case "profile-u":  renderProfileByUsername(content, rest[0]); break;
     case "post":       renderPostDetail(content, rest[0]); break;
-    case "spaces":         location.hash = "#feed"; break;
-    case "challenges":     location.hash = "#feed"; break;
-    case "mentorship":     location.hash = "#feed"; break;
+    case "spaces":         import("./features.js").then(m => rest[0] ? m.renderSpacePage(content, rest[0]) : m.renderSpaces(content)); break;
+    case "challenges":     import("./features.js").then(m => m.renderChallenges(content)); break;
+    case "mentorship":     import("./features.js").then(m => m.renderMentorship(content)); break;
     case "notifications":  import("./additional.js").then(m => m.renderNotifications(content)); break;
-    case "learn":      location.hash = "#feed"; break;
+    case "learn":
+      import("./features.js").then(m => {
+        if (rest[0] && rest[1]) m.renderChapterPage(content, rest[0], rest[1]);
+        else if (rest[0])       m.renderTrackPage(content, rest[0]);
+        else                    m.renderLearn(content);
+      }); break;
   }
 };
 window.addEventListener("hashchange", router);
@@ -809,27 +814,14 @@ const renderFeed = (root) => {
 
   const stub = el("div", { class: "composer-stub" },
     el("img", { class: "avatar sm", src: avatarFor(state.me) }),
-    el("button", { onclick: () => openCompose("post") }, `Share a vibe, ${(state.me?.name || "there").split(" ")[0]}! 😄`)
+    el("button", { onclick: () => openCompose("post") }, `What's orbiting your mind, ${(state.me?.name || "there").split(" ")[0]}?`)
   );
   wrap.appendChild(stub);
-
-  // Community bar injected by additional.js after auth
-  import("./additional.js").then(m => m.injectCommunityBar(wrap)).catch(() => {});
-
-  // ── FFT / Following tab switcher ──────────────────────────────
-  let _activeTab = "fft"; // "fft" | "following"
-  const tabBar = el("div", { class: "feed-tab-bar" },
-    el("button", { class: "feed-tab active", "data-tab": "fft", onclick: (e) => switchTab(e, "fft") },
-      el("span", {}, "🔥 FFT")),
-    el("button", { class: "feed-tab", "data-tab": "following", onclick: (e) => switchTab(e, "following") },
-      el("span", {}, "👥 Following")),
-  );
-  wrap.appendChild(tabBar);
 
   // Trending lane container (filled later)
   const trendingLane = el("div", { class: "trending-lane hidden" });
   trendingLane.appendChild(el("div", { class: "trending-head" },
-    el("i", { class: "ri-fire-fill" }), "Trending in JC"
+    el("i", { class: "ri-fire-fill" }), "Trending in your orbit"
   ));
   const trendingScroller = el("div", { class: "trending-scroller" });
   trendingLane.appendChild(trendingScroller);
@@ -839,45 +831,30 @@ const renderFeed = (root) => {
   const list = el("div", { class: "feed-list" });
   list.appendChild(el("div", { class: "empty" },
     el("i", { class: "ri-loader-4-line" }),
-    el("div", { class: "t" }, "Loading your feed"),
+    el("div", { class: "t" }, "Loading your orbit"),
   ));
   wrap.appendChild(list);
   root.appendChild(wrap);
 
-  let _currentUnsub = null;
+  const q = query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(50));
   let _lastPostIds = "";
-
-  const loadPosts = (posts, unsub) => {
-    if (_currentUnsub) { try { _currentUnsub(); } catch {} }
-    _currentUnsub = unsub;
-    _feedUnsub = unsub;
-    root._unsub = unsub;
-  };
-
-  const renderPosts = async (snap) => {
+  const unsub = onSnapshot(q, async (snap) => {
     const _newIds = snap.docs.map(d => d.id).join(",");
     if (_newIds === _lastPostIds && list.children.length > 0) return;
     _lastPostIds = _newIds;
     list.innerHTML = "";
     trendingScroller.innerHTML = "";
     if (snap.empty) {
-      if (_activeTab === "following") {
-        list.appendChild(el("div", { class: "empty" },
-          el("i", { class: "ri-user-follow-line" }),
-          el("div", { class: "t" }, "No posts from people you follow"),
-          el("div", {}, "Explore and follow some cruisers!"),
-        ));
-      } else {
-        list.appendChild(el("div", { class: "empty" },
-          el("i", { class: "ri-sun-foggy-line" }),
-          el("div", { class: "t" }, "Feed is quiet right now"),
-          el("div", {}, "Be the first to post — tap Create above."),
-        ));
-      }
+      list.appendChild(el("div", { class: "empty" },
+        el("i", { class: "ri-planet-line" }),
+        el("div", { class: "t" }, "Your orbit is quiet"),
+        el("div", {}, "Be the first to post — tap Create above."),
+      ));
       return;
     }
 
     const posts = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    // resolve authors
     const authors = await Promise.all([...new Set(posts.map((p) => p.authorUid))].map(fetchUser));
     const byUid = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
 
@@ -891,81 +868,49 @@ const renderFeed = (root) => {
       trendingLane.classList.add("hidden");
     }
 
+    // Algorithm: score posts by affinity (following > hashtag match > engagement > recency)
+    // A random component (+0–15) shuffles the feed differently on each fresh load
     const _following = state.me?.following || [];
     const _interests = state.me?.interests || [];
-
-    let _display;
-    if (_activeTab === "following") {
-      // Following tab: only posts from followed users, sorted by recency
-      _display = posts.filter(p => _following.includes(p.authorUid))
-        .sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
-    } else {
-      // FFT (Food for Thought): scored by engagement + affinity + recency
-      const _scored = posts.map((p) => {
-        let score = 0;
-        if (_following.includes(p.authorUid)) score += 50;
-        if (_interests.some((tag) => (p.hashtags || []).includes(tag))) score += 30;
-        score += Math.min((p.orbitCount || 0) * 2 + (p.commentCount || 0), 30);
-        score += Math.max(0, 20 - Math.floor(((Date.now() - (p.createdAt?.toMillis?.() || Date.now())) / 3600000)));
-        score += Math.random() * 15;
-        return { p, score };
-      });
-      _scored.sort((a, b) => b.score - a.score);
-      _display = _scored.map(({ p }) => p);
-    }
-
-    if (_display.length === 0) {
-      list.appendChild(el("div", { class: "empty" },
-        el("i", { class: "ri-user-follow-line" }),
-        el("div", { class: "t" }, "No posts from people you follow yet"),
-        el("div", {}, "Follow some people to see their posts here!"),
-      ));
-      return;
-    }
-
-    const _suggTypes = ["people", "groups"];
+    const _scored = posts.map((p) => {
+      let score = 0;
+      if (_following.includes(p.authorUid)) score += 50;
+      if (_interests.some((tag) => (p.hashtags || []).includes(tag))) score += 30;
+      score += Math.min((p.orbitCount || 0) * 2 + (p.commentCount || 0), 30);
+      score += Math.max(0, 20 - Math.floor(((Date.now() - (p.createdAt?.toMillis?.() || Date.now())) / 3600000)));
+      score += Math.random() * 15; // freshness jitter — varies order each fresh load
+      return { p, score };
+    });
+    _scored.sort((a, b) => b.score - a.score);
+    const _suggTypes = ["people", "groups", "spaces"];
     let _suggShown = 0;
-    _display.forEach((p, idx) => {
+    _scored.forEach(({ p }, idx) => {
       list.appendChild(renderPost(p, byUid[p.authorUid]));
+      // Suggestion card at post 4, then every 7 after that
       if (idx === 4 || (idx > 4 && (idx - 4) % 7 === 0)) {
-        const type = _suggTypes[_suggShown % 2];
+        const type = _suggTypes[_suggShown % 3];
         _suggShown++;
         if (type === "people") list.appendChild(renderInlinePeopleSuggestion());
-        else list.appendChild(renderInlineGroupSuggestion());
+        else if (type === "groups") list.appendChild(renderInlineGroupSuggestion());
+        else list.appendChild(renderInlineSpaceSuggestion());
       }
     });
-  };
-
-  const startFeedListener = () => {
-    _lastPostIds = "";
-    const q = _activeTab === "following"
-      ? query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(50))
-      : query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(50));
-    const unsub = onSnapshot(q, renderPosts);
-    loadPosts(null, unsub);
-  };
-
-  const switchTab = (e, tab) => {
-    if (_activeTab === tab) return;
-    _activeTab = tab;
-    tabBar.querySelectorAll(".feed-tab").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
-    list.innerHTML = "";
-    list.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-loader-4-line" }), el("div", { class: "t" }, "Loading…")));
-    startFeedListener();
-  };
-
-  startFeedListener();
+  });
 
   getDocs(query(collection(db, "experiences"), orderBy("createdAt", "desc"), limit(3))).then(async (snap) => {
     if (snap.empty) return;
     const _eb = el("div", { class: "exp-feed-banner" });
-    _eb.appendChild(el("div", { class: "exp-feed-head" }, el("i", { class: "ri-sparkling-line", style: "color:var(--grad-1);" }), el("span", {}, "Vibes"), el("button", { class: "btn sm ghost", onclick: () => openCompose("experience") }, "+ Share yours")));
+    _eb.appendChild(el("div", { class: "exp-feed-head" }, el("i", { class: "ri-sparkling-line", style: "color:var(--grad-1);" }), el("span", {}, "Experiences"), el("button", { class: "btn sm ghost", onclick: () => openCompose("experience") }, "+ Share yours")));
     const _sc = el("div", { class: "exp-feed-scroller" }); _eb.appendChild(_sc);
     const _ea = await Promise.all(snap.docs.map((d) => fetchUser(d.data().authorUid)));
     const _em = Object.fromEntries(_ea.filter(Boolean).map((u) => [u.uid, u]));
     snap.docs.forEach((d) => { const ex = { id: d.id, ...d.data() }; _sc.appendChild(renderExperienceMiniCard(ex, _em[ex.authorUid])); });
     wrap.insertBefore(_eb, list);
   }).catch(() => {});
+
+  // store unsub globally and on root so route changes can clean up
+  _feedUnsub = unsub;
+  root._unsub = unsub;
 };
 
 const renderTrendingCard = (p, author) => {
@@ -1262,13 +1207,13 @@ const renderPost = (p, author, opts = {}) => {
     if (_iOrbited && author?.uid && author.uid !== state.uid) {
       writeNotif(author.uid, "orbit", {
         postId: p.id,
-        text: `${state.me?.name || "Someone"} reacted to your post 🔥`,
+        text: `${state.me?.name || "Someone"} orbited your post`,
       }).catch(() => {});
       import("./notifications.js").then(({ notifyUser }) =>
-        notifyUser(author.uid, state.me?.name || "Someone", "reacted to your post 🔥", "/#post/" + p.id)
+        notifyUser(author.uid, state.me?.name || "Someone", "orbited your post", "/#post/" + p.id)
       ).catch(() => {});
     }
-  }}, orbitIcon, el("span", {}, "🔥 · "), orbitCount);
+  }}, orbitIcon, el("span", {}, "Orbit · "), orbitCount);
 
   const saveIcon = (state.me?.saved || []).includes(p.id) ? "ri-bookmark-fill" : "ri-bookmark-line";
 
@@ -1280,7 +1225,7 @@ const renderPost = (p, author, opts = {}) => {
     el("button", { class: "post-act", onclick: async (e) => {
       e.stopPropagation();
       const url = `${location.origin}${location.pathname}#post/${p.id}`;
-      try { await navigator.share?.({ title: "Just Cruise", text: p.text || "Check this out", url }); }
+      try { await navigator.share?.({ title: "Orbit", text: p.text || "Check this out", url }); }
       catch { await navigator.clipboard.writeText(url); toast("Link copied"); }
     }},
       el("i", { class: "ri-share-forward-line" }),
@@ -1438,24 +1383,16 @@ const renderPost = (p, author, opts = {}) => {
 const renderPostDetail = async (root, postId) => {
   if (!postId) { location.hash = "#feed"; return; }
 
-  // ── Flex wrapper: scroll area + pinned footer ──────────────────
-  const pageWrap   = el("div", { class: "detail-page-wrap" });
-  const scrollArea = el("div", { class: "detail-page-scroll" });
-  const footer     = el("div", { class: "detail-page-footer" });
-  pageWrap.appendChild(scrollArea);
-  pageWrap.appendChild(footer);
-  root.appendChild(pageWrap);
-
-  // Back bar (sticky inside scroll area)
-  scrollArea.appendChild(el("div", { class: "detail-topbar" },
+  const back = el("div", { class: "detail-topbar" },
     el("button", { class: "icon-btn", onclick: () => history.back() },
       el("i", { class: "ri-arrow-left-line" }), "Back"),
     el("span", { class: "detail-title" }, "Post"),
-  ));
+  );
+  root.appendChild(back);
 
   const snap = await getDoc(doc(db, "posts", postId)).catch(() => null);
   if (!snap || !snap.exists()) {
-    scrollArea.appendChild(el("div", { class: "empty" },
+    root.appendChild(el("div", { class: "empty" },
       el("i", { class: "ri-ghost-line" }),
       el("div", { class: "t" }, "Post not found"),
     ));
@@ -1464,42 +1401,44 @@ const renderPostDetail = async (root, postId) => {
   const p = { id: snap.id, ...snap.data() };
   const author = await fetchUser(p.authorUid);
 
-  scrollArea.appendChild(renderPost(p, author, { hideComments: true, detailView: true }));
+  // Render the post card with media stacked vertically in detail view
+  root.appendChild(renderPost(p, author, { hideComments: true, detailView: true }));
 
-  // Comments list inside scroll area
+  // Full comments section
   const cmtSection = el("div", { class: "detail-comments" });
-  scrollArea.appendChild(cmtSection);
-  cmtSection.appendChild(el("div", { class: "detail-cmt-head" }, "Comments"));
+  root.appendChild(cmtSection);
+
+  const cmtHead = el("div", { class: "detail-cmt-head" }, "Comments");
+  cmtSection.appendChild(cmtHead);
+
   const cList = el("div", { class: "detail-cmt-list" });
   cmtSection.appendChild(cList);
 
-  // ── Reply state ────────────────────────────────────────────────
+  // Track reply state for detail view
   let _detailReplyTo = null;
-  let detailInput; // forward ref, assigned after cForm is built
-
   const detailReplyBanner = el("div", { class: "reply-banner hidden" },
     el("span", { class: "reply-banner-text" }, ""),
     el("button", { class: "reply-cancel-btn", onclick: () => {
       _detailReplyTo = null;
       detailReplyBanner.classList.add("hidden");
-      if (detailInput) { detailInput.placeholder = "Write a comment…"; detailInput.value = ""; }
+      cmtSection.querySelector("input").placeholder = "Write a comment…";
+      cmtSection.querySelector("input").value = "";
     }}, el("i", { class: "ri-close-line" })),
   );
-  footer.appendChild(detailReplyBanner);
+  cmtSection.appendChild(detailReplyBanner);
 
-  // ── Comment renderer ───────────────────────────────────────────
   const renderDetailComment = (c, a) => {
     const isLiked = (c.likes || []).includes(state.uid);
     const likeCountEl = el("span", { text: String((c.likes || []).length || "") });
-    const likeIconEl  = el("i", { class: isLiked ? "ri-heart-fill" : "ri-heart-line", style: isLiked ? "color:var(--danger);" : "" });
+    const likeIconEl = el("i", { class: isLiked ? "ri-heart-fill" : "ri-heart-line", style: isLiked ? "color:var(--danger);" : "" });
     let _liked = isLiked;
     const likeBtn = el("button", { class: "cmt-like-btn", onclick: async (ev) => {
       ev.stopPropagation();
       _liked = !_liked;
       likeIconEl.className = _liked ? "ri-heart-fill" : "ri-heart-line";
       likeIconEl.style.color = _liked ? "var(--danger)" : "";
-      likeCountEl.textContent = ((c.likes?.length || 0) + (_liked ? 1 : -1)) > 0
-        ? String((c.likes?.length || 0) + (_liked ? 1 : -1)) : "";
+      const newCount = (c.likes?.length || 0) + (_liked ? 1 : -1);
+      likeCountEl.textContent = newCount > 0 ? String(newCount) : "";
       await updateDoc(doc(db, "posts", p.id, "comments", c.id), {
         likes: _liked ? arrayUnion(state.uid) : arrayRemove(state.uid),
       }).catch(() => {});
@@ -1509,28 +1448,28 @@ const renderPostDetail = async (root, postId) => {
       _detailReplyTo = { uid: a?.uid, name: a?.name || "user" };
       detailReplyBanner.querySelector(".reply-banner-text").textContent = `Replying to ${a?.name || "user"}`;
       detailReplyBanner.classList.remove("hidden");
-      if (detailInput) { detailInput.placeholder = `Reply to ${a?.name || "user"}…`; detailInput.focus(); }
+      const inp = cmtSection.querySelector("input");
+      inp.placeholder = `Reply to ${a?.name || "user"}…`;
+      inp.focus();
     }}, "Reply");
 
-    // indent replies visually
-    const isReply = !!c.replyToName;
-    return el("div", { class: `comment detail-cmt${isReply ? " is-reply" : ""}` },
+    return el("div", { class: "comment detail-cmt" },
       el("img", { class: "avatar xs", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
       el("div", { class: "body" },
         el("div", { class: "name" }, a?.name || "User",
           a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
           el("span", { class: "cmt-time" }, fmtTime(c.createdAt)),
         ),
-        isReply ? el("div", { class: "reply-to-label" }, el("i", { class: "ri-corner-down-right-line" }), ` ${c.replyToName}`) : null,
+        c.replyToName ? el("div", { class: "reply-to-label" }, el("i", { class: "ri-corner-down-right-line" }), ` ${c.replyToName}`) : null,
         el("div", { class: "text", text: c.text }),
         el("div", { class: "cmt-meta-row" }, replyBtn, likeBtn),
       ),
     );
   };
 
-  // ── Load comments ──────────────────────────────────────────────
   const DETAIL_CMT_PAGE = 5;
   let _detailCmtSnap = null;
+
   const loadDetailComments = async (showAll = false) => {
     const q = showAll
       ? query(collection(db, "posts", p.id, "comments"), orderBy("createdAt", "asc"), limit(200))
@@ -1546,24 +1485,29 @@ const renderPostDetail = async (root, postId) => {
       const auths = await Promise.all([...new Set(comments.map((c) => c.authorUid))].map(fetchUser));
       const map = Object.fromEntries(auths.filter(Boolean).map((u) => [u.uid, u]));
       comments.forEach((c) => cList.appendChild(renderDetailComment(c, map[c.authorUid])));
+
+      // Show "Load more" button only if we might have more and haven't loaded all yet
       if (!showAll && snap.docs.length >= DETAIL_CMT_PAGE) {
-        const remaining = (p.commentCount || 0) - snap.docs.length;
-        cList.appendChild(el("button", { class: "load-more-cmts-btn", onclick: () => loadDetailComments(true) },
+        const total = p.commentCount || 0;
+        const remaining = total - snap.docs.length;
+        const loadMoreBtn = el("button", { class: "load-more-cmts-btn", onclick: () => loadDetailComments(true) },
           el("i", { class: "ri-arrow-down-s-line" }),
-          remaining > 0 ? ` View ${remaining} more` : " View all comments",
-        ));
+          remaining > 0 ? ` View ${remaining} more comment${remaining !== 1 ? "s" : ""}` : " View all comments",
+        );
+        cList.appendChild(loadMoreBtn);
       }
     });
   };
+
   loadDetailComments(false);
 
-  // ── AI suggest button ──────────────────────────────────────────
   const detailAISuggestBtn = el("button", {
     class: "icon-btn", type: "button", title: "AI reply suggestion",
     style: "color:var(--primary);flex-shrink:0;",
   }, el("i", { class: "ri-sparkling-2-line" }));
   detailAISuggestBtn.addEventListener("click", async (e) => {
     e.stopPropagation();
+    const inp = cmtSection.querySelector("input");
     if (!window.GROQ_API_KEY) { toast("Add your Groq API key to enable AI suggestions"); return; }
     detailAISuggestBtn.disabled = true;
     detailAISuggestBtn.innerHTML = '<i class="ri-loader-4-line" style="animation:spin 1s linear infinite;"></i>';
@@ -1583,37 +1527,36 @@ const renderPostDetail = async (root, postId) => {
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error ${res.status}`); }
       const data = await res.json();
       const suggestion = data.choices?.[0]?.message?.content?.trim();
-      if (suggestion && detailInput) { detailInput.value = suggestion; detailInput.focus(); }
+      if (suggestion && inp) { inp.value = suggestion; inp.focus(); }
     } catch (err) { toast("AI suggestion failed: " + (err.message || "unknown error")); }
     detailAISuggestBtn.disabled = false;
     detailAISuggestBtn.innerHTML = '<i class="ri-sparkling-2-line"></i>';
   });
 
-  // ── Comment form — lives in pinned footer ──────────────────────
-  const cForm = el("form", { class: "comment-form" },
+  const cForm = el("form", { class: "comment-form detail-cmt-form" },
     el("img", { class: "avatar xs", src: avatarFor(state.me) }),
     el("input", { type: "text", placeholder: "Write a comment…" }),
     detailAISuggestBtn,
     el("button", { class: "icon-btn", type: "submit" }, el("i", { class: "ri-send-plane-fill" })),
   );
-  detailInput = cForm.querySelector("input");
   cForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const text = detailInput.value.trim();
+    const input = cForm.querySelector("input");
+    const text = input.value.trim();
     if (!text) return;
     const commentData = {
       text, authorUid: state.uid, createdAt: serverTimestamp(), likes: [],
       ..._detailReplyTo ? { replyToUid: _detailReplyTo.uid, replyToName: _detailReplyTo.name } : {},
     };
-    detailInput.value = "";
+    input.value = "";
     _detailReplyTo = null;
     detailReplyBanner.classList.add("hidden");
-    detailInput.placeholder = "Write a comment…";
+    input.placeholder = "Write a comment…";
     sfxComment();
     await addDoc(collection(db, "posts", p.id, "comments"), commentData);
     await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
   });
-  footer.appendChild(cForm);
+  cmtSection.appendChild(cForm);
 };
 
 const toggleSave = async (postId) => {
@@ -1959,7 +1902,7 @@ const renderSettings = (root) => {
           el("div", { class: "t" }, state.me.verified ? "Verified ✓" : "Get verified by location"),
           el("div", { class: "d" }, state.me.verified
             ? `You're verified${state.me.location?.city ? " in " + state.me.location.city : ""}.`
-            : "Allow Just Cruise to read your location once. We only store an approximate area, never live tracking."),
+            : "Allow Orbit to read your location once. We only store an approximate area, never live tracking."),
         ),
         state.me.verified
           ? el("button", { class: "btn ghost", onclick: async () => {
@@ -1976,7 +1919,7 @@ const renderSettings = (root) => {
       el("div", { class: "row" },
         el("div", { class: "label" },
           el("div", { class: "t" }, "Browser notifications"),
-          el("div", { class: "d" }, "Get pings for new messages and reactions.")),
+          el("div", { class: "d" }, "Get pings for new messages and Orbits.")),
         el("button", { class: "btn ghost", onclick: async () => {
           const p = await Notification.requestPermission();
           toast(p === "granted" ? "Notifications enabled" : "Notifications denied");
@@ -1995,13 +1938,13 @@ const renderSettings = (root) => {
     ),
 
     el("div", { class: "group" },
-      el("h3", {}, el("i", { class: "ri-vip-crown-line", style: "color:var(--grad-1);margin-right:6px;" }), "JC Pro"),
+      el("h3", {}, el("i", { class: "ri-vip-crown-line", style: "color:var(--grad-1);margin-right:6px;" }), "Orbit Pro"),
       el("div", { class: "row" },
         el("div", { class: "label" },
           el("div", { class: "t" }, state.me.isPro ? "Pro activated ✦" : "Go Professional"),
           el("div", { class: "d" }, state.me.isPro
-            ? "You have access to Exclusive features, badges, and early access to new Just Cruise drops."
-            : "Unlock exclusive JC Pro features: badges, and early access to new drops."),
+            ? "You have access to Orbit Score, Tech Stack, Skill Badges, Build in Public and Project Showcase."
+            : "Unlock developer features: Orbit Score, Tech Stack, Skill Badges, Build in Public & Project Showcase."),
         ),
         state.me.isPro
           ? el("span", { class: "pro-active-badge" }, el("i", { class: "ri-vip-crown-fill" }), " Active")
@@ -2011,7 +1954,7 @@ const renderSettings = (root) => {
               await updateDoc(doc(db, "users", state.uid), { isPro: true }).catch(() => {});
               state.me.isPro = true;
               state.cache.users.delete(state.uid);
-              toast("Welcome to Just Cruise Pro ✦");
+              toast("Welcome to Orbit Pro! ✦");
               router();
             }}, el("i", { class: "ri-vip-crown-line" }), " Activate Pro"),
       ),
@@ -2188,12 +2131,12 @@ $("#groupForm").addEventListener("submit", async (e) => {
       createdAt: serverTimestamp(),
     });
     await addDoc(collection(db, "groups", ref.id, "messages"), {
-      type: "system", text: `${state.me.name} created the community`,
+      type: "system", text: `${state.me.name} created the group`,
       createdAt: serverTimestamp(),
     });
     e.target.reset();
     composeModal.classList.add("hidden");
-    toast("Community created!");
+    toast("Group created!");
     location.hash = `#chats/${ref.id}`;
   } catch (err) {
     toast("Failed to create group: " + (err.message || "check Firebase config"));
@@ -2346,7 +2289,7 @@ const renderInlineGroupSuggestion = () => {
   const scroller = el("div", { class: "feed-sugg-scroller" });
   const card = el("div", { class: "feed-suggestion-card" },
     el("div", { class: "feed-sugg-head" },
-      el("span", {}, el("i", { class: "ri-community-line" }), " Communities you might like"),
+      el("span", {}, el("i", { class: "ri-group-2-line" }), " Groups you might like"),
       el("span", { class: "feed-sugg-see-all", onclick: () => location.hash = "#groups" }, "See all")
     ),
     scroller
@@ -2428,161 +2371,141 @@ const renderInlineSpaceSuggestion = () => {
 // =========================================================================
 
 const showOnboardingModal = () => {
-  const firstName = (state.me?.name || "there").split(" ")[0];
-  let step = 0;
-
-  const STEPS = [
-    {
-      emoji: "⛵", title: `Welcome aboard, ${firstName}!`,
-      body: "Just Cruise is your space to share memes, good vibes, and everything that makes you smile. No pressure — just good energy.",
-      cta: "Let's go 🌊", secondary: null,
-    },
-    {
-      emoji: "🔥", title: "Food for Thought",
-      body: "The FFT feed surfaces the most uplifting and fun posts from everyone on Just Cruise — curated by vibes, not algorithms.",
-      cta: "Next", secondary: "Skip",
-    },
-    {
-      emoji: "👥", title: "Find your crew",
-      body: "Follow people you vibe with and join communities around the things you love.",
-      cta: "Follow people →", secondary: "Skip",
-    },
-    {
-      emoji: "🎉", title: "You're all set!",
-      body: "Start by sharing a vibe, reacting to posts, or just browsing what's out there. The water's warm 🌊",
-      cta: "Start cruising 🚀", secondary: null,
-    },
-  ];
-
   const overlay = el("div", { class: "onboard-overlay" });
-  const modal   = el("div", { class: "onboard-modal onboard-stepped" });
+  const modal   = el("div", { class: "onboard-modal" });
 
-  // Dots
-  const dots = el("div", { class: "onboard-dots" });
-  STEPS.forEach((_, i) => {
-    const d = el("span", { class: i === 0 ? "onboard-dot active" : "onboard-dot" });
-    dots.appendChild(d);
-  });
+  const close = () => overlay.remove();
 
-  // Slide area
-  const slideWrap = el("div", { class: "onboard-slide-wrap" });
+  // Header
+  modal.appendChild(el("div", { class: "onboard-header" },
+    el("div", { class: "onboard-logo" }, el("i", { class: "ri-planet-fill" })),
+    el("h2", {}, `Welcome to Orbit, ${(state.me?.name || "there").split(" ")[0]}! 🚀`),
+    el("p", {}, "Follow people, join groups, and discover spaces to get started.")
+  ));
 
-  // People list (preloaded for step 2)
-  let _people = [];
-  getDocs(query(collection(db, "users"), limit(10))).then((snap) => {
+  // ── People section ──────────────────────────────────────────────────────
+  const peopleList = el("div", { class: "onboard-section-list" });
+  modal.appendChild(el("div", { class: "onboard-section" },
+    el("div", { class: "onboard-section-title" }, el("i", { class: "ri-user-add-line" }), " Suggested people"),
+    peopleList
+  ));
+  getDocs(query(collection(db, "users"), orderBy("createdAt", "desc"), limit(8))).then((snap) => {
+    let added = 0;
     snap.docs.forEach((d) => {
       const u = { uid: d.id, ...d.data() };
-      if (u.uid !== state.uid) _people.push(u);
+      if (u.uid === state.uid || added >= 5) return;
+      added++;
+      let iFollow = false;
+      const btn = el("button", {
+        class: "btn sm primary",
+        onclick: async () => {
+          const meRef = doc(db, "users", state.uid);
+          const themRef = doc(db, "users", u.uid);
+          const batch = writeBatch(db);
+          if (iFollow) {
+            batch.update(meRef, { following: arrayRemove(u.uid) });
+            batch.update(themRef, { followers: arrayRemove(state.uid) });
+          } else {
+            batch.update(meRef, { following: arrayUnion(u.uid) });
+            batch.update(themRef, { followers: arrayUnion(state.uid) });
+          }
+          await batch.commit();
+          iFollow = !iFollow;
+          btn.textContent = iFollow ? "✓ Following" : "Follow";
+          btn.className = `btn sm ${iFollow ? "ghost" : "primary"}`;
+        }
+      }, "Follow");
+      peopleList.appendChild(el("div", { class: "onboard-row" },
+        el("img", { class: "avatar sm", src: avatarFor(u) }),
+        el("div", { class: "onboard-row-meta" },
+          el("div", { class: "onboard-row-name" }, u.name || "User"),
+          el("div", { class: "onboard-row-sub" }, "@" + (u.username || ""))
+        ),
+        btn
+      ));
     });
   }).catch(() => {});
 
-  const renderSlide = (idx) => {
-    slideWrap.innerHTML = "";
-    const s = STEPS[idx];
+  // ── Groups section ──────────────────────────────────────────────────────
+  const groupList = el("div", { class: "onboard-section-list" });
+  modal.appendChild(el("div", { class: "onboard-section" },
+    el("div", { class: "onboard-section-title" }, el("i", { class: "ri-group-2-line" }), " Groups to join"),
+    groupList
+  ));
+  getDocs(query(collection(db, "groups"), orderBy("createdAt", "desc"), limit(4))).then((snap) => {
+    if (snap.empty) return;
+    snap.docs.forEach((d) => {
+      const g = { id: d.id, ...d.data() };
+      let member = false;
+      const btn = el("button", {
+        class: "btn sm primary",
+        onclick: async () => {
+          const ref = doc(db, "groups", g.id);
+          if (member) {
+            await updateDoc(ref, { members: arrayRemove(state.uid) });
+          } else {
+            await updateDoc(ref, { members: arrayUnion(state.uid) });
+          }
+          member = !member;
+          btn.textContent = member ? "✓ Joined" : "Join";
+          btn.className = `btn sm ${member ? "ghost" : "primary"}`;
+        }
+      }, "Join");
+      groupList.appendChild(el("div", { class: "onboard-row" },
+        el("div", { class: "onboard-group-icon" }, (g.name || "?")[0].toUpperCase()),
+        el("div", { class: "onboard-row-meta" },
+          el("div", { class: "onboard-row-name" }, g.name),
+          el("div", { class: "onboard-row-sub" }, `${(g.members || []).length} members`)
+        ),
+        btn
+      ));
+    });
+  }).catch(() => {});
 
-    if (idx === 2) {
-      // People + groups step
-      const list = el("div", { class: "onboard-section-list" });
-      if (_people.length === 0) {
-        list.appendChild(el("div", { class: "onboard-empty" }, "No users yet — you're first! 🎉"));
-      } else {
-        _people.slice(0, 5).forEach((u) => {
-          let iFollow = (state.me?.following || []).includes(u.uid);
-          const btn = el("button", {
-            class: `btn sm ${iFollow ? "ghost" : "primary"}`,
-            onclick: async () => {
-              const meRef = doc(db, "users", state.uid);
-              const themRef = doc(db, "users", u.uid);
-              const batch = writeBatch(db);
-              if (iFollow) {
-                batch.update(meRef, { following: arrayRemove(u.uid) });
-                batch.update(themRef, { followers: arrayRemove(state.uid) });
-              } else {
-                batch.update(meRef, { following: arrayUnion(u.uid) });
-                batch.update(themRef, { followers: arrayUnion(state.uid) });
-              }
-              await batch.commit();
-              iFollow = !iFollow;
-              btn.textContent = iFollow ? "✓ Following" : "Follow";
-              btn.className = `btn sm ${iFollow ? "ghost" : "primary"}`;
-            }
-          }, iFollow ? "✓ Following" : "Follow");
-          list.appendChild(el("div", { class: "onboard-row" },
-            el("img", { class: "avatar sm", src: avatarFor(u) }),
-            el("div", { class: "onboard-row-meta" },
-              el("div", { class: "onboard-row-name" }, u.name || "User"),
-              el("div", { class: "onboard-row-sub" }, "@" + (u.username || ""))
-            ),
-            btn
-          ));
-        });
-      }
-      slideWrap.appendChild(
-        el("div", { class: "onboard-slide" },
-          el("div", { class: "onboard-slide-emoji" }, s.emoji),
-          el("h2", { class: "onboard-slide-title" }, s.title),
-          el("p",  { class: "onboard-slide-body" }, s.body),
-          el("div", { class: "onboard-section-label" }, el("i", { class: "ri-user-add-line" }), " People on Just Cruise"),
-          list
-        )
-      );
-    } else {
-      slideWrap.appendChild(
-        el("div", { class: "onboard-slide" },
-          el("div", { class: "onboard-slide-emoji" }, s.emoji),
-          el("h2", { class: "onboard-slide-title" }, s.title),
-          el("p",  { class: "onboard-slide-body" }, s.body),
-        )
-      );
-    }
-  };
+  // ── Spaces section ──────────────────────────────────────────────────────
+  const spaceList = el("div", { class: "onboard-section-list" });
+  modal.appendChild(el("div", { class: "onboard-section" },
+    el("div", { class: "onboard-section-title" }, el("i", { class: "ri-planet-line" }), " Spaces to explore"),
+    spaceList
+  ));
+  getDocs(query(collection(db, "spaces"), orderBy("memberCount", "desc"), limit(4))).then((snap) => {
+    if (snap.empty) return;
+    snap.docs.forEach((d) => {
+      const s = { id: d.id, ...d.data() };
+      let joined = false;
+      const btn = el("button", {
+        class: "btn sm primary",
+        onclick: async () => {
+          const ref = doc(db, "spaces", s.id);
+          if (joined) {
+            await updateDoc(ref, { members: arrayRemove(state.uid), memberCount: increment(-1) });
+          } else {
+            await updateDoc(ref, { members: arrayUnion(state.uid), memberCount: increment(1) });
+          }
+          joined = !joined;
+          btn.textContent = joined ? "✓ Joined" : "Join";
+          btn.className = `btn sm ${joined ? "ghost" : "primary"}`;
+        }
+      }, "Join");
+      spaceList.appendChild(el("div", { class: "onboard-row" },
+        el("div", { class: "onboard-space-icon", style: `background:${s.color || "var(--grad-1)"}` },
+          el("i", { class: s.icon || "ri-planet-line" })),
+        el("div", { class: "onboard-row-meta" },
+          el("div", { class: "onboard-row-name" }, s.name),
+          el("div", { class: "onboard-row-sub" }, `${s.memberCount || 0} members`)
+        ),
+        btn
+      ));
+    });
+  }).catch(() => {});
 
-  const updateDots = (idx) => {
-    dots.querySelectorAll(".onboard-dot").forEach((d, i) =>
-      d.classList.toggle("active", i === idx)
-    );
-  };
-
-  const advance = () => {
-    if (step >= STEPS.length - 1) { overlay.remove(); return; }
-    step++;
-    updateDots(step);
-    renderSlide(step);
-  };
-
-  const ctaBtn = el("button", { class: "btn primary block onboard-cta", onclick: advance }, STEPS[0].cta);
-  const skipBtn = el("button", { class: "link onboard-skip hidden", onclick: advance }, "Skip");
-
-  const rerender = () => {
-    const s = STEPS[step];
-    ctaBtn.textContent = s.cta;
-    if (s.secondary) {
-      skipBtn.classList.remove("hidden");
-      skipBtn.textContent = s.secondary;
-    } else {
-      skipBtn.classList.add("hidden");
-    }
-    ctaBtn.onclick = advance;
-  };
-
-  // Patch advance to also rerender buttons
-  const advanceFull = () => {
-    if (step >= STEPS.length - 1) { overlay.remove(); return; }
-    step++;
-    updateDots(step);
-    renderSlide(step);
-    rerender();
-  };
-  ctaBtn.onclick = advanceFull;
-  skipBtn.onclick = advanceFull;
-
-  renderSlide(0);
-
-  modal.appendChild(dots);
-  modal.appendChild(slideWrap);
-  modal.appendChild(el("div", { class: "onboard-actions" }, ctaBtn, skipBtn));
+  // ── Footer ──────────────────────────────────────────────────────────────
+  modal.appendChild(el("div", { class: "onboard-footer" },
+    el("button", { class: "btn primary full-width", onclick: close }, "🚀 Let's go!")
+  ));
 
   overlay.appendChild(modal);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
   document.body.appendChild(overlay);
 };
 
@@ -2592,27 +2515,27 @@ const showOnboardingModal = () => {
 
 const NEWS_BOTS = [
   {
-    uid:      "jc-news-official",
-    name:     "JC News Official",
-    username: "jc_news",
+    uid:      "orbit-news-official",
+    name:     "Orbit News Official",
+    username: "orbit_news",
     emoji:    "📰",
     badge:    "ri-newspaper-line",
     rss:      "https://feeds.bbci.co.uk/news/rss.xml",
     tag:      "news",
   },
   {
-    uid:      "jc-sport-official",
-    name:     "JC Sport Official",
-    username: "jc_sport",
+    uid:      "orbit-sport-official",
+    name:     "Orbit Sport Official",
+    username: "orbit_sport",
     emoji:    "⚽",
     badge:    "ri-football-line",
     rss:      "https://www.espn.com/espn/rss/news",
     tag:      "sports",
   },
   {
-    uid:      "jc-social-official",
-    name:     "JC Social Official",
-    username: "jc_social",
+    uid:      "orbit-social-official",
+    name:     "Orbit Social Official",
+    username: "orbit_social",
     emoji:    "🌐",
     badge:    "ri-global-line",
     rss:      "https://techcrunch.com/feed/",
@@ -2635,7 +2558,7 @@ const startNewsBot = async () => {
           name:      bot.name,
           username:  bot.username,
           photoURL:  `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(bot.name)}&backgroundColor=6c63ff`,
-          bio:       `Official updates curated by JC. Refreshed every 5 hours.`,
+          bio:       `Official ${bot.tag} updates curated by Orbit. Refreshed every 5 hours.`,
           verified:  true,
           isBot:     true,
           followers: [],
@@ -3028,9 +2951,9 @@ window._aiOpenSettings = function() {
     state.aiName   = name;
     state.aiAvatar = _pendingAvatar;
     state.aiTone   = _pendingTone;
-    localStorage.setItem("jc:ai_name",   state.aiName);
-    localStorage.setItem("jc:ai_avatar", state.aiAvatar);
-    localStorage.setItem("jc:ai_tone",   state.aiTone);
+    localStorage.setItem("orbit:ai_name",   state.aiName);
+    localStorage.setItem("orbit:ai_avatar", state.aiAvatar);
+    localStorage.setItem("orbit:ai_tone",   state.aiTone);
     overlay.remove();
     toast(`${state.aiAvatar} ${state.aiName} is ready!`);
     // Re-render AI chat if open

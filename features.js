@@ -488,7 +488,7 @@ const openCreateSpace = () => {
     el("div", { style: "display:flex;justify-content:center;margin-bottom:16px;" }, preview),
     el("label", {}, "Space name", el("input", { type: "text", id: "spaceNameInp", placeholder: "e.g. AI Builders" })),
     el("label", {}, "Topic / description", el("input", { type: "text", id: "spaceTopicInp", placeholder: "e.g. Discuss AI tools & projects" })),
-    el("label", { class: "space-api-label" },
+    el("label", { class: "space-api-label" }, 
       el("span", { class: "space-api-label-text" },
         el("i", { class: "ri-rss-line" }),
         " AI Feed URL ",
@@ -1339,35 +1339,32 @@ export const completeChapter = async (courseId, chapterId) => {
   const chapter = getChapter(courseId, chapterId);
   if (!course || !chapter) return;
 
-  const progressKey  = `learnProgress.${courseId}.${chapterId}`;
-  const isLastChapter = !getNextChapter(courseId, chapterId);
+  const progressKey = `learnProgress.${courseId}.${chapterId}`;
+  const badgeEntry  = `${course.emoji} ${course.title}`;
 
   try {
-    // 1. Mark chapter progress; only add badge when finishing the full course
-    const update = { [progressKey]: true };
-    if (isLastChapter) {
-      update.learnBadges = arrayUnion(`${course.emoji} ${course.title}`);
-    }
-    await updateDoc(doc(db, "users", state.uid), update);
+    // 1. Mark progress on user doc
+    await updateDoc(doc(db, "users", state.uid), {
+      [progressKey]: true,
+      learnBadges: arrayUnion(badgeEntry),
+    });
 
-    // 2. Post achievement to feed ONLY when the whole course is finished
-    if (isLastChapter) {
-      await addDoc(collection(db, "posts"), {
-        uid:          state.uid,
-        authorName:   state.me?.name || "Someone",
-        authorAvatar: state.me?.photoURL || "",
-        kind:         "achievement",
-        text:         `🏆 Just completed the ${course.emoji} ${course.title} course on Orbit Academy!`,
-        course:       course.title,
-        emoji:        course.emoji,
-        likes:        [],
-        comments:     0,
-        createdAt:    serverTimestamp(),
-      });
-      toast(`🏆 Course complete! Achievement posted to your feed.`);
-    } else {
-      toast("Progress saved!");
-    }
+    // 2. Post achievement to feed
+    await addDoc(collection(db, "posts"), {
+      uid:       state.uid,
+      authorName:  state.me?.name || "Someone",
+      authorAvatar: state.me?.photoURL || "",
+      kind:      "achievement",
+      text:      `🏆 Just completed "${chapter.title}" in the ${course.emoji} ${course.title} track on Orbit Academy!`,
+      course:    course.title,
+      chapter:   chapter.title,
+      emoji:     course.emoji,
+      likes:     [],
+      comments:  0,
+      createdAt: serverTimestamp(),
+    });
+
+    toast(`🏆 Chapter complete! Achievement posted to your feed.`);
   } catch (e) {
     console.error("completeChapter error:", e);
     toast("Progress saved!");
@@ -1606,84 +1603,35 @@ export const renderChapterPage = async (root, courseId, chapterId) => {
     wrap.appendChild(quizBox);
   }
 
-  // Navigation: Next button for all chapters except the last; Complete card only on the last
+  // Complete button
   const nextCh = getNextChapter(courseId, chapterId);
-
-  if (nextCh) {
-    // ── Not the last chapter — simple Next button, always visible ──────────
-    const nextBtn = el("div", { class: "acad-next-section" },
+  const completeBtn = el("div", { class: `acad-complete-section${alreadyDone ? "" : " hidden"}` },
+    el("div", { class: "acad-complete-card" },
+      el("div", { class: "acad-complete-icon" }, "🏆"),
+      el("div", { class: "acad-complete-text" },
+        el("div", { class: "acad-complete-title" }, alreadyDone ? "Chapter Complete!" : "Mark as Complete"),
+        el("div", { class: "acad-complete-sub" }, "Your achievement will be posted to your feed and a badge added to your profile."),
+      ),
       el("button", {
-        class: "btn primary acad-next-btn",
+        class: "btn primary acad-complete-btn",
         onclick: async (e) => {
-          // silently mark progress without posting achievement
           e.currentTarget.disabled = true;
+          e.currentTarget.textContent = "Saving...";
           await completeChapter(courseId, chapterId);
-          location.hash = `#learn/${courseId}/${nextCh.id}`;
-        }
-      }, "Next →")
-    );
-    wrap.appendChild(nextBtn);
-  } else {
-    // ── Last chapter — Complete Course card, shown after quiz is passed ────
-    const completeBtn = el("div", { class: `acad-complete-section${alreadyDone ? "" : " hidden"}` },
-      el("div", { class: "acad-complete-card" },
-        el("div", { class: "acad-complete-icon" }, "🏆"),
-        el("div", { class: "acad-complete-text" },
-          el("div", { class: "acad-complete-title" }, alreadyDone ? "Course Complete!" : "Complete Course"),
-          el("div", { class: "acad-complete-sub" }, "Your achievement will be posted to your feed and a badge added to your profile."),
-        ),
-        el("button", {
-          class: "btn primary acad-complete-btn",
-          onclick: async (e) => {
-            e.currentTarget.disabled = true;
-            e.currentTarget.textContent = "Saving...";
-            await completeChapter(courseId, chapterId);
+          if (nextCh) {
+            setTimeout(() => { location.hash = `#learn/${courseId}/${nextCh.id}`; }, 800);
+          } else {
             setTimeout(() => { location.hash = `#learn/${courseId}`; }, 800);
           }
-        }, alreadyDone ? "✅ Back to Track" : "🏆 Complete Course & Post Achievement"),
-      )
-    );
+        }
+      }, alreadyDone ? (nextCh ? "▶ Next Chapter" : "✅ Back to Track") :
+                       "🏆 Complete & Post Achievement"),
+    )
+  );
 
-    // Reveal only after quiz passed (or chapter has no quiz)
-    if (alreadyDone || !quiz) completeBtn.classList.remove("hidden");
-    wrap.appendChild(completeBtn);
-  }
+  // Show complete button immediately if already done
+  if (alreadyDone) completeBtn.classList.remove("hidden");
+
+  wrap.appendChild(completeBtn);
   root.appendChild(wrap);
-};
-
-// =========================================================================
-// ACADEMY BADGES ON PROFILE — call renderLearnBadges(container, uid) inside
-// your renderProfile function to show completed course badges.
-// Reads the `learnBadges` array saved on the user doc by completeChapter().
-// =========================================================================
-export const renderLearnBadges = (container, uid) => {
-  const wrap = el("div", { class: "learn-badges-section" });
-  wrap.appendChild(el("div", { class: "sb-head" },
-    el("span", {}, el("i", { class: "ri-graduation-cap-fill" }), " Academy Badges"),
-  ));
-  container.appendChild(wrap);
-
-  const grid = el("div", { class: "sb-grid" });
-  wrap.appendChild(grid);
-
-  const unsub = onSnapshot(doc(db, "users", uid), (snap) => {
-    grid.innerHTML = "";
-    const badges = snap.exists() ? (snap.data().learnBadges || []) : [];
-    if (!badges.length) {
-      grid.appendChild(el("div", { class: "sb-empty" }, "No Academy badges yet — complete a course chapter to earn one."));
-      return;
-    }
-    badges.forEach((badge) => {
-      grid.appendChild(el("div", { class: "sb-chip" },
-        el("div", { class: "sb-chip-info" },
-          el("span", { class: "sb-skill" }, badge),
-        ),
-      ));
-    });
-  });
-
-  const obs = new MutationObserver(() => {
-    if (!document.body.contains(wrap)) { unsub(); obs.disconnect(); }
-  });
-  obs.observe(document.body, { childList: true, subtree: true });
 };

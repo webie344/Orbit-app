@@ -1,5 +1,5 @@
 // =========================================================================
-// JC — additional.js  (v4 — no token server needed)
+// Orbit — additional.js  (v4 — no token server needed)
 // Stories (24 hr), Notifications full-page view,
 // Group Voice Calls via Agora (browser-side token generation),
 // 1-on-1 Voice + Video Calls via WebRTC + TURN relay.
@@ -28,53 +28,77 @@ import {
 const GROUP_CALL_MAX = 20;
 
 // =========================================================================
-// 1. COMMUNITY BAR — shows user's joined communities as circular avatars
+// 1. STORIES
 // =========================================================================
+const STORY_TTL_MS = 24 * 60 * 60 * 1000;
 
-export const injectCommunityBar = (feedWrap) => {
+export const injectStoryBar = (feedWrap) => {
   if (!feedWrap) return;
-
-  // Remove any existing bar first (safe re-entrant guard)
-  feedWrap.querySelector(".community-bar")?.remove();
+  const existing = feedWrap.querySelector(".story-bar");
+  if (existing) existing.remove();
 
   const bar = document.createElement("div");
-  bar.className = "community-bar";
+  bar.className = "story-bar";
 
-  // ── Insert SYNCHRONOUSLY so duplicate-check works on re-entrant calls ──
-  const ref = feedWrap.querySelector(".feed-tab-bar") || feedWrap.firstChild;
-  feedWrap.insertBefore(bar, ref);
-
-  // "Browse" button — always first
-  const findBtn = document.createElement("div");
-  findBtn.className = "community-item";
-  findBtn.innerHTML = `
-    <div class="community-ring community-find">
-      <i class="ri-community-line"></i>
+  const myBtn = document.createElement("div");
+  myBtn.className = "story-item my-story";
+  myBtn.innerHTML = `
+    <div class="story-ring no-story">
+      <img class="story-av" src="${avatarFor(state.me)}" alt="" />
+      <span class="story-add-icon"><i class="ri-add-line"></i></span>
     </div>
-    <span class="community-name">Browse</span>`;
-  findBtn.onclick = () => { location.hash = "#groups"; };
-  bar.appendChild(findBtn);
+    <span class="story-name">Your story</span>`;
+  myBtn.onclick = () => openStoryUploader();
+  bar.appendChild(myBtn);
 
-  // Fetch joined groups and append — bar is already in the DOM
-  getDocs(
-    query(collection(db, "groups"), where("members", "array-contains", state.uid), limit(20))
-  ).then((snap) => {
-    snap.docs.forEach(d => {
-      const g = { id: d.id, ...d.data() };
-      const item = document.createElement("div");
-      item.className = "community-item";
-      const letter = (g.name || "?")[0].toUpperCase();
-      item.innerHTML = `
-        <div class="community-ring community-joined ${g.photoURL ? "has-photo" : ""}">
-          ${g.photoURL
-            ? `<img src="${g.photoURL}" alt="" style="width:100%;height:100%;border-radius:50%;object-fit:cover;" />`
-            : `<span class="community-letter">${letter}</span>`}
-        </div>
-        <span class="community-name">${(g.name || "Community").split(" ")[0]}</span>`;
-      item.onclick = () => { location.hash = `#chats/${g.id}`; };
-      bar.appendChild(item);
-    });
-  }).catch(console.error);
+  const cutoff = Timestamp.fromMillis(Date.now() - STORY_TTL_MS);
+  onSnapshot(
+    query(collection(db, "stories"), where("expiresAt", ">", cutoff), orderBy("expiresAt", "asc"), limit(60)),
+    async (snap) => {
+      bar.querySelectorAll(".story-item:not(.my-story)").forEach(n => n.remove());
+
+      const byUser = new Map();
+      snap.docs.forEach(d => {
+        const s = { id: d.id, ...d.data() };
+        if (!byUser.has(s.authorUid)) byUser.set(s.authorUid, []);
+        byUser.get(s.authorUid).push(s);
+      });
+
+      if (byUser.has(state.uid)) {
+        const mine = byUser.get(state.uid);
+        const hasUnseen = mine.some(s => !(s.viewers || []).includes(state.uid));
+        const ring = myBtn.querySelector(".story-ring");
+        ring.className = `story-ring ${hasUnseen ? "has-story" : "seen-story"}`;
+        myBtn.onclick = () => openStoryViewer(state.uid, mine);
+      } else {
+        const ring = myBtn.querySelector(".story-ring");
+        ring.className = "story-ring no-story";
+        myBtn.onclick = () => openStoryUploader();
+      }
+
+      const otherUids = [...byUser.keys()].filter(u => u !== state.uid);
+      const users = await Promise.all(otherUids.map(fetchUser));
+      const userMap = Object.fromEntries(users.filter(Boolean).map(u => [u.uid, u]));
+
+      otherUids.forEach(uid => {
+        const user = userMap[uid];
+        if (!user) return;
+        const stories = byUser.get(uid);
+        const allSeen = stories.every(s => (s.viewers || []).includes(state.uid));
+        const item = document.createElement("div");
+        item.className = "story-item";
+        item.innerHTML = `
+          <div class="story-ring ${allSeen ? "seen-story" : "has-story"}">
+            <img class="story-av" src="${avatarFor(user)}" alt="" />
+          </div>
+          <span class="story-name">${(user.name || "User").split(" ")[0]}</span>`;
+        item.onclick = () => openStoryViewer(uid, stories);
+        bar.appendChild(item);
+      });
+    }
+  );
+
+  feedWrap.insertBefore(bar, feedWrap.firstChild);
 };
 
 const openStoryUploader = () => {
@@ -1426,7 +1450,7 @@ const _getToastStack = () => {
   return _toastStack;
 };
 
-export const showToastNotif = ({ avatar, icon, name, app = "JC", body, href, duration = 4000 }) => {
+export const showToastNotif = ({ avatar, icon, name, app = "Orbit", body, href, duration = 4000 }) => {
   _injectToastNotifStyles();
   const stack = _getToastStack();
 
@@ -1498,7 +1522,7 @@ const _initToastListener = () => {
         // Mark read so it doesn't re-fire on next load
         updateDoc(doc(db, "notifications", state.uid, "items", n.id), { read: true }).catch(() => {});
 
-        let avatar = null, name = "JC", body = n.text || "", href = "";
+        let avatar = null, name = "Orbit", body = n.text || "", href = "";
         try {
           if (n.fromUid || n.fromName) {
             const sender = n.fromUid ? await fetchUser(n.fromUid) : null;
@@ -1510,7 +1534,7 @@ const _initToastListener = () => {
             body = n.text || "Sent you a message";
           } else if (n.type === "orbit") {
             href = n.postId ? `post/${n.postId}` : "";
-            body = body || "reacted to your post 🔥";
+            body = body || "Orbited your post 🔥";
           } else if (n.type === "comment") {
             href = n.postId ? `post/${n.postId}` : "";
             body = body || "Commented on your post";
@@ -1520,484 +1544,13 @@ const _initToastListener = () => {
           }
         } catch {}
 
-        showToastNotif({ avatar, name, body, href, app: "JC" });
+        showToastNotif({ avatar, name, body, href, app: "Orbit" });
       }
     }
   );
 };
 
 // =========================================================================
-
-// =========================================================================
-// GROUP INFO PANEL — WhatsApp-style full-screen group profile
-// Admin can edit group name, description, and group photo.
-// =========================================================================
-
-let _giStylesReady = false;
-const _injectGroupInfoStyles = () => {
-  if (_giStylesReady) return;
-  _giStylesReady = true;
-  const s = document.createElement("style");
-  s.textContent = `
-/* ── Group Info overlay ────────────────────────────────────────────────── */
-.gi-overlay {
-  position: fixed; inset: 0; z-index: 3000;
-  background: var(--bg, #0f0f1a);
-  display: flex; flex-direction: column;
-  transform: translateX(100%);
-  transition: transform .32s cubic-bezier(.32,1,.32,1);
-  overflow-y: auto;
-}
-.gi-overlay.gi-open { transform: translateX(0); }
-
-.gi-topbar {
-  display: flex; align-items: center; gap: 12px;
-  padding: 14px 16px 10px;
-  position: sticky; top: 0; z-index: 10;
-  background: var(--bg2, #1a1a2e);
-  border-bottom: 1px solid var(--border, rgba(255,255,255,.07));
-  flex-shrink: 0;
-}
-.gi-topbar-title { flex: 1; font-weight: 700; font-size: 17px; color: var(--text); }
-
-.gi-avatar-wrap {
-  display: flex; justify-content: center; align-items: center;
-  padding: 28px 16px 14px;
-  position: relative; flex-direction: column; gap: 10px;
-  background: linear-gradient(180deg, var(--bg2, #1a1a2e) 0%, transparent 100%);
-}
-.gi-avatar {
-  width: 100px; height: 100px; border-radius: 50%;
-  object-fit: cover;
-  border: 3px solid var(--primary, #6c63ff);
-  box-shadow: 0 4px 24px rgba(108,99,255,.35);
-}
-.gi-cam-btn {
-  position: absolute; bottom: 18px; right: calc(50% - 58px);
-  width: 32px; height: 32px; border-radius: 50%;
-  background: var(--primary, #6c63ff);
-  display: flex; align-items: center; justify-content: center;
-  color: #fff; font-size: 16px; cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0,0,0,.4);
-  transition: opacity .15s;
-}
-.gi-cam-btn:hover { opacity: .85; }
-
-.gi-name {
-  text-align: center; font-size: 22px; font-weight: 800;
-  color: var(--text); padding: 0 20px 4px;
-}
-.gi-desc {
-  text-align: center; font-size: 14px;
-  color: var(--text-mute, rgba(255,255,255,.55));
-  padding: 0 24px 18px; line-height: 1.5; min-height: 20px;
-}
-
-.gi-meta {
-  display: flex; flex-direction: column; gap: 0;
-  background: var(--bg2, #1a1a2e);
-  border-top: 1px solid var(--border, rgba(255,255,255,.07));
-  border-bottom: 1px solid var(--border, rgba(255,255,255,.07));
-}
-.gi-meta-item {
-  display: flex; align-items: center; gap: 14px;
-  padding: 14px 20px; font-size: 14px;
-  color: var(--text-mute, rgba(255,255,255,.6));
-  border-bottom: 1px solid var(--border, rgba(255,255,255,.05));
-}
-.gi-meta-item:last-child { border-bottom: none; }
-.gi-meta-item i { font-size: 18px; color: var(--primary, #6c63ff); flex-shrink: 0; }
-
-.gi-section {
-  margin-top: 12px; background: var(--bg2, #1a1a2e);
-  border-top: 1px solid var(--border, rgba(255,255,255,.07));
-  border-bottom: 1px solid var(--border, rgba(255,255,255,.07));
-}
-.gi-section-title {
-  display: flex; align-items: center; gap: 8px;
-  padding: 14px 20px 8px; font-size: 12px; font-weight: 700;
-  letter-spacing: .6px; text-transform: uppercase;
-  color: var(--primary, #6c63ff);
-}
-
-.gi-members { display: flex; flex-direction: column; }
-.gi-member-row {
-  display: flex; align-items: center; gap: 12px;
-  padding: 11px 20px; cursor: pointer;
-  border-bottom: 1px solid var(--border, rgba(255,255,255,.05));
-  transition: background .15s;
-}
-.gi-member-row:last-child { border-bottom: none; }
-.gi-member-row:hover { background: rgba(255,255,255,.04); }
-.gi-member-info { flex: 1; min-width: 0; }
-.gi-member-name {
-  font-size: 14px; font-weight: 600; color: var(--text);
-  display: flex; align-items: center; gap: 6px;
-}
-.gi-member-sub { font-size: 12px; color: var(--text-mute, rgba(255,255,255,.5)); margin-top: 2px; }
-.gi-badge {
-  font-size: 10px; font-weight: 700; padding: 2px 7px;
-  border-radius: 20px; letter-spacing: .4px;
-}
-.gi-badge.admin {
-  background: rgba(108,99,255,.18); color: var(--primary, #6c63ff);
-  border: 1px solid rgba(108,99,255,.3);
-}
-.gi-member-menu-btn { width: 32px; height: 32px; flex-shrink: 0; color: var(--text-mute, rgba(255,255,255,.4)); }
-
-.gi-edit-overlay {
-  position: fixed; inset: 0; z-index: 4000;
-  background: rgba(0,0,0,.6);
-  display: flex; align-items: flex-end; justify-content: center;
-}
-.gi-edit-sheet {
-  background: var(--bg2, #1a1a2e); border-radius: 20px 20px 0 0;
-  padding: 20px 18px 36px; width: 100%; max-width: 480px;
-  transform: translateY(100%);
-  transition: transform .3s cubic-bezier(.32,1,.32,1);
-}
-.gi-edit-sheet.open { transform: translateY(0); }
-.gi-edit-label {
-  font-size: 11px; font-weight: 700; letter-spacing: .6px;
-  text-transform: uppercase; color: var(--text-mute); margin: 14px 0 6px;
-}
-.gi-edit-input {
-  width: 100%; padding: 11px 14px;
-  border: 1px solid var(--border, rgba(255,255,255,.12));
-  border-radius: 12px; background: var(--bg3, #2a2a3a);
-  color: var(--text); font-size: 14px; outline: none; box-sizing: border-box;
-}
-.gi-edit-input:focus { border-color: var(--primary, #6c63ff); }
-textarea.gi-edit-input { resize: none; min-height: 80px; line-height: 1.5; }
-
-.gi-danger { margin: 12px 0 32px; padding: 4px 0; }
-.gi-danger-btn {
-  display: flex; align-items: center; justify-content: center;
-  gap: 8px; width: calc(100% - 40px); margin: 8px 20px;
-  padding: 13px; border-radius: 14px; font-size: 15px; font-weight: 600;
-  background: rgba(239,68,68,.12); color: #ef4444;
-  border: 1px solid rgba(239,68,68,.25); cursor: pointer; transition: background .15s;
-}
-.gi-danger-btn:hover { background: rgba(239,68,68,.22); }
-
-.gi-member-action-overlay {
-  position: fixed; inset: 0; z-index: 5000;
-  background: rgba(0,0,0,.55);
-  display: flex; align-items: flex-end; justify-content: center;
-}
-.gi-member-action-sheet {
-  background: var(--bg2, #1a1a2e); border-radius: 20px 20px 0 0;
-  width: 100%; max-width: 480px; padding: 10px 0 28px;
-  transform: translateY(100%);
-  transition: transform .28s cubic-bezier(.32,1,.32,1);
-}
-.gi-member-action-sheet.open { transform: translateY(0); }
-.gi-maction-header {
-  display: flex; align-items: center; gap: 12px;
-  padding: 14px 18px 10px;
-  border-bottom: 1px solid var(--border, rgba(255,255,255,.07));
-}
-.gi-maction-name { font-weight: 700; font-size: 15px; flex: 1; color: var(--text); }
-.gi-maction-row {
-  display: flex; align-items: center; gap: 14px;
-  padding: 14px 20px; font-size: 15px; color: var(--text);
-  cursor: pointer; transition: background .15s;
-}
-.gi-maction-row:hover { background: rgba(255,255,255,.05); }
-.gi-maction-row i { font-size: 20px; color: var(--text-mute); }
-.gi-maction-row.danger { color: #ef4444; }
-.gi-maction-row.danger i { color: #ef4444; }
-  `;
-  document.head.appendChild(s);
-};
-
-// ── Member action bottom-sheet (admin only) ──────────────────────────────
-const _openMemberMenu = (u, group, chatId, onRefresh) => {
-  const isOwner = u.uid === group.ownerUid;
-  const overlay = document.createElement("div");
-  overlay.className = "gi-member-action-overlay";
-  const sheet = document.createElement("div");
-  sheet.className = "gi-member-action-sheet";
-  overlay.appendChild(sheet);
-
-  const close = () => { sheet.classList.remove("open"); setTimeout(() => overlay.remove(), 280); };
-  overlay.addEventListener("click", e => { if (e.target === overlay) close(); });
-
-  sheet.innerHTML = `
-    <div class="gi-maction-header">
-      <img class="avatar sm" src="${avatarFor(u)}" alt="" />
-      <div class="gi-maction-name">${u.name || "User"}</div>
-      <div style="font-size:12px;color:var(--text-mute);">@${u.username || "user"}</div>
-    </div>`;
-
-  const mkRow = (icon, label, danger, onclick) => {
-    const row = document.createElement("div");
-    row.className = "gi-maction-row" + (danger ? " danger" : "");
-    row.innerHTML = `<i class="${icon}"></i><span>${label}</span>`;
-    row.onclick = () => { close(); onclick(); };
-    sheet.appendChild(row);
-  };
-
-  mkRow("ri-user-line", "View profile", false, () => { location.hash = `#profile/${u.uid}`; });
-
-  if (!isOwner) {
-    mkRow("ri-shield-user-line", "Make admin", false, async () => {
-      await updateDoc(doc(db, "groups", chatId), { ownerUid: u.uid });
-      toast(`${u.name || "User"} is now admin`);
-      onRefresh();
-    });
-    mkRow("ri-user-unfollow-line", "Remove from group", true, async () => {
-      if (!confirm(`Remove ${u.name || "User"} from the group?`)) return;
-      await updateDoc(doc(db, "groups", chatId), { members: arrayRemove(u.uid) });
-      toast(`${u.name || "User"} removed`);
-      onRefresh();
-    });
-  }
-
-  document.body.appendChild(overlay);
-  requestAnimationFrame(() => sheet.classList.add("open"));
-};
-
-// ── Admin edit sheet ─────────────────────────────────────────────────────
-const _openGroupEdit = (chatId, group, onRefresh) => {
-  const editOverlay = document.createElement("div");
-  editOverlay.className = "gi-edit-overlay";
-  const sheet = document.createElement("div");
-  sheet.className = "gi-edit-sheet";
-  editOverlay.appendChild(sheet);
-
-  const closeEdit = () => { sheet.classList.remove("open"); setTimeout(() => editOverlay.remove(), 300); };
-  editOverlay.addEventListener("click", e => { if (e.target === editOverlay) closeEdit(); });
-
-  sheet.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-      <h3 style="margin:0;font-size:17px;font-weight:700;">Edit Group Info</h3>
-      <button class="icon-btn gi-edit-close-btn"><i class="ri-close-line"></i></button>
-    </div>
-    <div class="gi-edit-label">Group Name</div>
-    <input class="gi-edit-input" id="giEditName" type="text" maxlength="60"
-      value="${(group.name || "").replace(/"/g, "&quot;")}" placeholder="Group name" />
-    <div class="gi-edit-label">Description</div>
-    <textarea class="gi-edit-input" id="giEditDesc" maxlength="200"
-      placeholder="What's this group about?">${group.description || ""}</textarea>
-    <button class="btn primary" id="giSaveBtn" style="width:100%;margin-top:18px;">Save changes</button>`;
-
-  sheet.querySelector(".gi-edit-close-btn").onclick = closeEdit;
-
-  sheet.querySelector("#giSaveBtn").onclick = async () => {
-    const name = sheet.querySelector("#giEditName").value.trim();
-    const description = sheet.querySelector("#giEditDesc").value.trim();
-    if (!name) { toast("Group name cannot be empty"); return; }
-    const saveBtn = sheet.querySelector("#giSaveBtn");
-    saveBtn.disabled = true; saveBtn.textContent = "Saving…";
-    try {
-      await updateDoc(doc(db, "groups", chatId), { name, description });
-      toast("Group info updated!");
-      closeEdit();
-      onRefresh();
-    } catch {
-      toast("Save failed — try again");
-      saveBtn.disabled = false; saveBtn.textContent = "Save changes";
-    }
-  };
-
-  document.body.appendChild(editOverlay);
-  requestAnimationFrame(() => sheet.classList.add("open"));
-};
-
-// ── Main export ──────────────────────────────────────────────────────────
-export const openGroupInfo = async (chatId, groupData = {}) => {
-  _injectGroupInfoStyles();
-
-  const snap = await getDoc(doc(db, "groups", chatId)).catch(() => null);
-  if (!snap?.exists()) { toast("Group not found"); return; }
-
-  document.getElementById("groupInfoOverlay")?.remove();
-
-  const overlay = document.createElement("div");
-  overlay.id = "groupInfoOverlay";
-  overlay.className = "gi-overlay";
-  document.body.appendChild(overlay);
-  requestAnimationFrame(() => overlay.classList.add("gi-open"));
-
-  const close = () => {
-    overlay.classList.remove("gi-open");
-    setTimeout(() => overlay.remove(), 340);
-  };
-
-  const render = async () => {
-    const freshSnap = await getDoc(doc(db, "groups", chatId)).catch(() => null);
-    const g = freshSnap?.exists() ? { id: chatId, ...freshSnap.data() } : { id: chatId, ...groupData };
-    const isAdmin = g.ownerUid === state.uid;
-
-    overlay.innerHTML = "";
-
-    // ── Top bar ──────────────────────────────────────────────────────────
-    const topBar = document.createElement("div");
-    topBar.className = "gi-topbar";
-    const backBtn = document.createElement("button");
-    backBtn.className = "icon-btn";
-    backBtn.innerHTML = '<i class="ri-arrow-left-line"></i>';
-    backBtn.onclick = close;
-    topBar.appendChild(backBtn);
-    const titleEl = document.createElement("span");
-    titleEl.className = "gi-topbar-title";
-    titleEl.textContent = "Group Info";
-    topBar.appendChild(titleEl);
-    if (isAdmin) {
-      const editBtn = document.createElement("button");
-      editBtn.className = "btn ghost";
-      editBtn.style.cssText = "padding:6px 12px;font-size:13px;gap:6px;";
-      editBtn.innerHTML = '<i class="ri-edit-line"></i> Edit';
-      editBtn.onclick = () => _openGroupEdit(chatId, g, render);
-      topBar.appendChild(editBtn);
-    }
-    overlay.appendChild(topBar);
-
-    // ── Avatar hero ──────────────────────────────────────────────────────
-    const avatarWrap = document.createElement("div");
-    avatarWrap.className = "gi-avatar-wrap";
-    const avatarImg = document.createElement("img");
-    avatarImg.className = "gi-avatar";
-    avatarImg.src = g.photoURL || `https://api.dicebear.com/7.x/shapes/svg?seed=${chatId}`;
-    avatarImg.alt = g.name || "Group";
-    avatarWrap.appendChild(avatarImg);
-
-    if (isAdmin) {
-      const fileInput = document.createElement("input");
-      fileInput.type = "file"; fileInput.accept = "image/*";
-      fileInput.style.display = "none";
-      fileInput.onchange = async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        toast("Uploading photo…");
-        try {
-          const up = await uploadToCloudinary(file, "image");
-          await updateDoc(doc(db, "groups", chatId), { photoURL: up.url });
-          toast("Group photo updated!");
-          render();
-        } catch { toast("Upload failed — try again"); }
-      };
-      const camBtn = document.createElement("div");
-      camBtn.className = "gi-cam-btn";
-      camBtn.innerHTML = '<i class="ri-camera-line"></i>';
-      camBtn.title = "Change group photo";
-      camBtn.onclick = () => fileInput.click();
-      avatarWrap.appendChild(camBtn);
-      avatarWrap.appendChild(fileInput);
-    }
-    overlay.appendChild(avatarWrap);
-
-    // ── Name & description ───────────────────────────────────────────────
-    const nameEl = document.createElement("div");
-    nameEl.className = "gi-name";
-    nameEl.textContent = g.name || "Group";
-    overlay.appendChild(nameEl);
-
-    const descEl = document.createElement("div");
-    descEl.className = "gi-desc";
-    descEl.textContent = g.description || (isAdmin ? "Tap Edit to add a description" : "No description");
-    overlay.appendChild(descEl);
-
-    // ── Meta pills ───────────────────────────────────────────────────────
-    const meta = document.createElement("div");
-    meta.className = "gi-meta";
-
-    const memberMeta = document.createElement("div");
-    memberMeta.className = "gi-meta-item";
-    memberMeta.innerHTML = `<i class="ri-group-line"></i><span>${(g.members || []).length} members · ${g.isPublic ? "Public group" : "Private group"}</span>`;
-    meta.appendChild(memberMeta);
-
-    if (g.createdAt?.seconds) {
-      const dateMeta = document.createElement("div");
-      dateMeta.className = "gi-meta-item";
-      const dateStr = new Date(g.createdAt.seconds * 1000).toLocaleDateString([], { year: "numeric", month: "long", day: "numeric" });
-      dateMeta.innerHTML = `<i class="ri-calendar-line"></i><span>Created ${dateStr}</span>`;
-      meta.appendChild(dateMeta);
-    }
-    overlay.appendChild(meta);
-
-    // ── Members section ──────────────────────────────────────────────────
-    const membersSection = document.createElement("div");
-    membersSection.className = "gi-section";
-    const secTitle = document.createElement("div");
-    secTitle.className = "gi-section-title";
-    secTitle.innerHTML = `<i class="ri-group-line"></i> Members (${(g.members || []).length})`;
-    membersSection.appendChild(secTitle);
-
-    const membersList = document.createElement("div");
-    membersList.className = "gi-members";
-    membersList.innerHTML = `<div style="padding:16px 20px;font-size:13px;color:var(--text-mute);"><i class="ri-loader-4-line" style="animation:spin 1s linear infinite;font-size:18px;"></i></div>`;
-    membersSection.appendChild(membersList);
-    overlay.appendChild(membersSection);
-
-    Promise.all((g.members || []).map(uid => fetchUser(uid))).then(users => {
-      membersList.innerHTML = "";
-      const sorted = users.filter(Boolean).sort((a, b) => {
-        if (a.uid === g.ownerUid) return -1;
-        if (b.uid === g.ownerUid) return 1;
-        return 0;
-      });
-      sorted.forEach(u => {
-        const isOwner = u.uid === g.ownerUid;
-        const row = document.createElement("div");
-        row.className = "gi-member-row";
-        row.innerHTML = `
-          <img class="avatar sm" src="${avatarFor(u)}" alt="" style="flex-shrink:0;" />
-          <div class="gi-member-info">
-            <div class="gi-member-name">
-              ${u.name || "User"}
-              ${isOwner ? '<span class="gi-badge admin">Admin</span>' : ""}
-            </div>
-            <div class="gi-member-sub">@${u.username || "user"}${u.online ? " · Online" : ""}</div>
-          </div>`;
-        row.onclick = () => { close(); location.hash = `#profile/${u.uid}`; };
-        if (isAdmin && !isOwner) {
-          const mBtn = document.createElement("button");
-          mBtn.className = "icon-btn gi-member-menu-btn";
-          mBtn.innerHTML = '<i class="ri-more-2-line"></i>';
-          mBtn.onclick = (e) => { e.stopPropagation(); _openMemberMenu(u, g, chatId, render); };
-          row.appendChild(mBtn);
-        }
-        membersList.appendChild(row);
-      });
-    }).catch(() => {});
-
-    // ── Danger zone ──────────────────────────────────────────────────────
-    const danger = document.createElement("div");
-    danger.className = "gi-danger";
-    if (isAdmin) {
-      const delBtn = document.createElement("button");
-      delBtn.className = "gi-danger-btn";
-      delBtn.innerHTML = '<i class="ri-delete-bin-line"></i> Delete Group';
-      delBtn.onclick = async () => {
-        if (!confirm("Delete this group for everyone?")) return;
-        try {
-          const { deleteDoc } = await import("https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js");
-          await deleteDoc(doc(db, "groups", chatId));
-          close();
-          location.hash = "#chats";
-        } catch { toast("Delete failed — try again"); }
-      };
-      danger.appendChild(delBtn);
-    } else {
-      const leaveBtn = document.createElement("button");
-      leaveBtn.className = "gi-danger-btn";
-      leaveBtn.innerHTML = '<i class="ri-logout-box-line"></i> Leave Group';
-      leaveBtn.onclick = async () => {
-        if (!confirm("Leave this group?")) return;
-        await updateDoc(doc(db, "groups", chatId), { members: arrayRemove(state.uid) });
-        close();
-        location.hash = "#chats";
-      };
-      danger.appendChild(leaveBtn);
-    }
-    overlay.appendChild(danger);
-  };
-
-  await render();
-};
-
 // 4. INIT
 // =========================================================================
 document.addEventListener("orbit:auth-ready", () => {
@@ -2007,7 +1560,7 @@ document.addEventListener("orbit:auth-ready", () => {
   const contentEl = document.getElementById("content") || document.body;
   const feedObserver = new MutationObserver(() => {
     const fw = contentEl.querySelector(".feed-wrap");
-    if (fw && !fw.querySelector(".community-bar")) injectCommunityBar(fw);
+    if (fw && !fw.querySelector(".story-bar")) injectStoryBar(fw);
   });
   feedObserver.observe(contentEl, { childList: true, subtree: true });
 });
