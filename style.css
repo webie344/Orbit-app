@@ -406,9 +406,14 @@ textarea { resize: vertical; min-height: 80px; }
   margin: 0 -16px 10px;
   border-top: 1px solid var(--line-soft);
   border-bottom: 1px solid var(--line-soft);
-  background: var(--bg-elev);
+  background: #000;
+  overflow: hidden;
 }
-.post-media img { width: 100%; max-height: 720px; object-fit: cover; display: block; }
+.post-media img { width: 100%; max-height: 85vh; object-fit: contain; display: block; background: #000; }
+
+/* Feed video player — full width, full frame, no cropping */
+.post-media .vid-player { width: 100% !important; max-width: none !important; background: #000; }
+.post-media .vid-player video { width: 100% !important; max-height: 85vh; object-fit: contain; display: block; background: #000; }
 
 .post-actions {
   display: flex; align-items: center; gap: 4px;
@@ -434,15 +439,28 @@ textarea { resize: vertical; min-height: 80px; }
 }
 .count strong { color: var(--text-dim); font-weight: 600; }
 
-/* Comments */
-.comments { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
-.comment { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
-.comment .body { background: var(--bg-elev-2); padding: 8px 12px; border-radius: var(--radius); }
+/* Comments — flat Threads-style (no bubble) */
+.comments { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.comment { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 16px; position: relative; }
+/* Vertical thread connector line */
+.comment::before {
+  content: ""; position: absolute; left: 17px; top: 40px; bottom: -8px;
+  width: 2px; background: var(--line); border-radius: 1px;
+}
+.comment:last-child::before { display: none; }
+/* Remove the bubble */
+.comment .body { background: none; padding: 0; border-radius: 0; flex: 1; min-width: 0; }
 .comment .name { font-weight: 600; font-size: 13px; display: inline-flex; align-items: center; gap: 4px; }
-.comment .text { font-size: 14px; color: var(--text); margin-top: 2px; }
-.comment-form { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
-.comment-form input { background: var(--bg-elev-2); border-radius: var(--radius-pill); }
-.cmt-time { color: var(--text-mute); font-size: 11px; font-weight: 400; margin-left: 6px; }
+.comment .text { font-size: 14px; color: var(--text); margin-top: 2px; line-height: 1.5; word-break: break-word; }
+/* Comment input — underline style, no pill */
+.comment-form { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
+.comment-form input {
+  flex: 1; background: transparent !important; border-radius: 0 !important;
+  border: none !important; border-bottom: 1px solid var(--line) !important;
+  padding: 8px 0 !important; font-size: 14px;
+}
+.comment-form input:focus { border-bottom-color: var(--primary) !important; }
+.cmt-time { color: var(--text-mute); font-size: 11px; font-weight: 400; display: block; margin-top: 4px; }
 
 /* Hashtag / mention links */
 .post-text a.hashtag { color: var(--primary); font-weight: 600; }
@@ -452,7 +470,7 @@ textarea { resize: vertical; min-height: 80px; }
 /* Post media carousel */
 .post-media.carousel { position: relative; }
 .carousel-slide { width: 100%; }
-.carousel-slide img, .carousel-slide video { width: 100%; max-height: 480px; object-fit: cover; border-radius: var(--radius); }
+.carousel-slide img, .carousel-slide video { width: 100%; max-height: 85vh; object-fit: contain; border-radius: 0; background: #000; display: block; }
 .carousel-arrow {
   position: absolute; top: 50%; transform: translateY(-50%);
   background: rgba(0,0,0,.55); color: white; border-radius: 50%;
@@ -505,7 +523,28 @@ textarea { resize: vertical; min-height: 80px; }
 }
 .detail-cmt-list { display: flex; flex-direction: column; gap: 10px; padding: 4px 16px; }
 .detail-cmt .body { flex: 1; }
-.detail-cmt-form { padding: 12px 16px; border-top: 1px solid var(--line); position: sticky; bottom: 0; background: var(--bg-elev); }
+/* Detail comment form — fixed to viewport bottom, aware of sidebar/rightrail */
+.detail-cmt-form {
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+  position: fixed;
+  bottom: 0;
+  left: var(--sidebar-w);
+  right: var(--rightrail-w);
+  z-index: 30;
+  background: var(--bg-elev);
+  box-shadow: 0 -2px 12px rgba(0,0,0,0.08);
+}
+/* Shrunk sidebar breakpoint */
+@media (max-width: 1180px) {
+  .detail-cmt-form { right: 0; }
+}
+@media (max-width: 820px) {
+  .detail-cmt-form { left: 72px; right: 0; }
+}
+@media (max-width: 640px) {
+  .detail-cmt-form { left: 0; right: 0; bottom: var(--bottomnav-h); }
+}
 
 /* ============================================================ */
 /* REELS                                                          */

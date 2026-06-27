@@ -387,6 +387,149 @@ const openVideoViewer = (mediaItems, startIndex = 0) => {
   document.body.appendChild(backdrop);
   show(cur);
 };
+// =========================================================================
+// IMAGE ZOOM VIEWER — fullscreen modal with pinch / scroll zoom
+// =========================================================================
+const openImageZoom = (src) => {
+  let scale = 1, originX = 0.5, originY = 0.5;
+  let isDragging = false, dragStartX = 0, dragStartY = 0, translateX = 0, translateY = 0;
+
+  const backdrop = document.createElement("div");
+  Object.assign(backdrop.style, {
+    position: "fixed", inset: "0", zIndex: "3000",
+    background: "rgba(0,0,0,0.96)", display: "flex",
+    alignItems: "center", justifyContent: "center",
+    animation: "vvFadeIn .18s ease",
+    cursor: "zoom-out", userSelect: "none",
+    WebkitUserSelect: "none",
+  });
+
+  const img = document.createElement("img");
+  Object.assign(img.style, {
+    maxWidth: "100%", maxHeight: "100dvh",
+    objectFit: "contain", display: "block",
+    transition: "transform .12s ease",
+    transformOrigin: "center center",
+    cursor: "inherit", willChange: "transform",
+    userSelect: "none", WebkitUserDrag: "none",
+  });
+  img.src = src;
+  img.draggable = false;
+
+  const closeBtn = document.createElement("button");
+  closeBtn.innerHTML = '<i class="ri-close-line"></i>';
+  Object.assign(closeBtn.style, {
+    position: "fixed", top: "14px", right: "14px",
+    background: "rgba(255,255,255,0.14)", border: "none",
+    borderRadius: "50%", width: "38px", height: "38px",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    color: "#fff", fontSize: "20px", cursor: "pointer", zIndex: "1",
+  });
+
+  const zoomHint = document.createElement("div");
+  zoomHint.textContent = "Scroll or pinch to zoom";
+  Object.assign(zoomHint.style, {
+    position: "fixed", bottom: "20px", left: "50%",
+    transform: "translateX(-50%)",
+    background: "rgba(0,0,0,0.5)", color: "rgba(255,255,255,0.7)",
+    padding: "6px 14px", borderRadius: "999px", fontSize: "12px",
+    pointerEvents: "none", transition: "opacity .3s",
+  });
+  setTimeout(() => { zoomHint.style.opacity = "0"; }, 2000);
+
+  const applyTransform = () => {
+    img.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+    img.style.transition = isDragging ? "none" : "transform .12s ease";
+  };
+
+  const close = () => {
+    backdrop.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+
+  // Scroll-to-zoom (desktop)
+  backdrop.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? 0.85 : 1.18;
+    scale = Math.min(Math.max(scale * delta, 1), 6);
+    if (scale === 1) { translateX = 0; translateY = 0; }
+    applyTransform();
+  }, { passive: false });
+
+  // Click backdrop to close only when not zoomed / not dragging
+  backdrop.addEventListener("click", (e) => {
+    if (e.target === backdrop || e.target === img) {
+      if (scale <= 1) close();
+    }
+  });
+
+  // Drag-to-pan (when zoomed)
+  img.addEventListener("mousedown", (e) => {
+    if (scale <= 1) return;
+    isDragging = true;
+    dragStartX = e.clientX - translateX;
+    dragStartY = e.clientY - translateY;
+    img.style.cursor = "grabbing";
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!isDragging) return;
+    translateX = e.clientX - dragStartX;
+    translateY = e.clientY - dragStartY;
+    applyTransform();
+  });
+  window.addEventListener("mouseup", () => {
+    isDragging = false;
+    img.style.cursor = scale > 1 ? "grab" : "inherit";
+  });
+
+  // Pinch-to-zoom (mobile)
+  let lastDist = 0;
+  backdrop.addEventListener("touchstart", (e) => {
+    if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      lastDist = Math.hypot(dx, dy);
+    }
+  }, { passive: true });
+  backdrop.addEventListener("touchmove", (e) => {
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const dist = Math.hypot(dx, dy);
+      if (lastDist) {
+        scale = Math.min(Math.max(scale * (dist / lastDist), 1), 6);
+        if (scale === 1) { translateX = 0; translateY = 0; }
+        applyTransform();
+      }
+      lastDist = dist;
+    }
+  }, { passive: false });
+  backdrop.addEventListener("touchend", () => { lastDist = 0; });
+
+  // Double-tap to toggle 2× zoom
+  let _lastTap = 0;
+  img.addEventListener("click", () => {
+    const now = Date.now();
+    if (now - _lastTap < 300) {
+      scale = scale > 1 ? 1 : 2.5;
+      if (scale === 1) { translateX = 0; translateY = 0; }
+      applyTransform();
+    }
+    _lastTap = now;
+  });
+
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", onKey);
+
+  closeBtn.onclick = close;
+  backdrop.appendChild(img);
+  backdrop.appendChild(closeBtn);
+  backdrop.appendChild(zoomHint);
+  document.body.appendChild(backdrop);
+};
+
 export const el = (tag, attrs = {}, ...children) => {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -985,10 +1128,12 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
         player.style.borderRadius = "0";
         stack.appendChild(player);
       } else {
-        stack.appendChild(el("img", {
+        const img = el("img", {
           src: m.url, loading: "lazy",
-          style: "width:100%;display:block;max-height:600px;object-fit:cover;",
-        }));
+          style: "width:100%;display:block;max-height:85vh;object-fit:contain;background:#000;cursor:zoom-in;",
+        });
+        img.addEventListener("click", () => openImageZoom(m.url));
+        stack.appendChild(img);
       }
     });
     return stack;
@@ -1005,7 +1150,9 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
       wrap.appendChild(player);
       return wrap;
     }
-    return el("div", { class: "post-media" }, el("img", { src: m.url, loading: "lazy" }));
+    const singleImg = el("img", { src: m.url, loading: "lazy", style: detailView ? "cursor:zoom-in;" : "" });
+    if (detailView) singleImg.addEventListener("click", () => openImageZoom(m.url));
+    return el("div", { class: "post-media" }, singleImg);
   }
 
   // ── 2 items: side-by-side ──────────────────────────────────────
