@@ -1450,7 +1450,7 @@ const renderPost = (p, author, opts = {}) => {
       if (!text) return;
       const commentData = {
         text, authorUid: state.uid, createdAt: serverTimestamp(), likes: [],
-        ..._replyTo ? { replyToUid: _replyTo.uid, replyToName: _replyTo.name } : {},
+        ..._replyTo ? { replyToUid: _replyTo.uid, replyToName: _replyTo.name, replyToUsername: _replyTo.username } : {},
       };
       input.value = "";
       _replyTo = null;
@@ -1489,10 +1489,10 @@ const renderPost = (p, author, opts = {}) => {
       }}, likeIconEl, likeCountEl);
 
       const replyBtn = el("button", { class: "cmt-reply-btn", onclick: () => {
-        _replyTo = { uid: a?.uid, name: a?.name || "user" };
-        replyBanner.querySelector(".reply-banner-text").textContent = `Replying to ${a?.name || "user"}`;
+        _replyTo = { uid: a?.uid, name: a?.name || "user", username: a?.username || "" };
+        replyBanner.querySelector(".reply-banner-text").textContent = `Replying to @${a?.username || a?.name || "user"}`;
         replyBanner.classList.remove("hidden");
-        cForm.querySelector("input").placeholder = `Reply to ${a?.name || "user"}…`;
+        cForm.querySelector("input").placeholder = `Reply to @${a?.username || a?.name || "user"}…`;
         cForm.querySelector("input").focus();
       }}, "Reply");
 
@@ -1501,7 +1501,7 @@ const renderPost = (p, author, opts = {}) => {
         el("div", { class: "body" },
           el("div", { class: "name" }, a?.name || "User",
             a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null),
-          c.replyToName ? el("div", { class: "reply-to-label" }, el("i", { class: "ri-corner-down-right-line" }), ` ${c.replyToName}`) : null,
+          (c.replyToUsername || c.replyToName) ? el("div", { class: "reply-to-label" }, el("i", { class: "ri-corner-down-right-line" }), el("a", { class: "mention", href: `#profile-u/${c.replyToUsername || c.replyToName}` }, `@${c.replyToUsername || c.replyToName}`)) : null,
           el("div", { class: "text", text: c.text }),
           el("div", { class: "cmt-meta-row" }, replyBtn, likeBtn),
         ),
@@ -1592,11 +1592,11 @@ const renderPostDetail = async (root, postId) => {
     }}, likeIconEl, likeCountEl);
 
     const replyBtn = el("button", { class: "cmt-reply-btn", onclick: () => {
-      _detailReplyTo = { uid: a?.uid, name: a?.name || "user" };
-      detailReplyBanner.querySelector(".reply-banner-text").textContent = `Replying to ${a?.name || "user"}`;
+      _detailReplyTo = { uid: a?.uid, name: a?.name || "user", username: a?.username || "" };
+      detailReplyBanner.querySelector(".reply-banner-text").textContent = `Replying to @${a?.username || a?.name || "user"}`;
       detailReplyBanner.classList.remove("hidden");
       const inp = cmtSection.querySelector("input");
-      inp.placeholder = `Reply to ${a?.name || "user"}…`;
+      inp.placeholder = `Reply to @${a?.username || a?.name || "user"}…`;
       inp.focus();
     }}, "Reply");
 
@@ -1607,7 +1607,7 @@ const renderPostDetail = async (root, postId) => {
           a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
           el("span", { class: "cmt-time" }, fmtTime(c.createdAt)),
         ),
-        c.replyToName ? el("div", { class: "reply-to-label" }, el("i", { class: "ri-corner-down-right-line" }), ` ${c.replyToName}`) : null,
+        (c.replyToUsername || c.replyToName) ? el("div", { class: "reply-to-label" }, el("i", { class: "ri-corner-down-right-line" }), el("a", { class: "mention", href: `#profile-u/${c.replyToUsername || c.replyToName}` }, `@${c.replyToUsername || c.replyToName}`)) : null,
         el("div", { class: "text", text: c.text }),
         el("div", { class: "cmt-meta-row" }, replyBtn, likeBtn),
       ),
@@ -1693,7 +1693,7 @@ const renderPostDetail = async (root, postId) => {
     if (!text) return;
     const commentData = {
       text, authorUid: state.uid, createdAt: serverTimestamp(), likes: [],
-      ..._detailReplyTo ? { replyToUid: _detailReplyTo.uid, replyToName: _detailReplyTo.name } : {},
+      ..._detailReplyTo ? { replyToUid: _detailReplyTo.uid, replyToName: _detailReplyTo.name, replyToUsername: _detailReplyTo.username } : {},
     };
     input.value = "";
     _detailReplyTo = null;

@@ -257,7 +257,8 @@ export const initBuildCompose = () => {
   const form = document.getElementById("buildForm");
   if (!form) return;
 
-  form.addEventListener("submit", async (e) => {
+  // Use onsubmit (not addEventListener) so re-calling this never stacks duplicate listeners
+  form.onsubmit = async (e) => {
     e.preventDefault();
     const fd     = new FormData(form);
     const title  = (fd.get("buildTitle") || "").trim();
@@ -284,7 +285,7 @@ export const initBuildCompose = () => {
       toast("Build update posted!");
     } catch (err) { toast("Failed: " + (err.message || "error")); }
     finally { btn.disabled = false; btn.textContent = "Post update"; }
-  });
+  };
 
   // Live progress preview
   const prog = form.querySelector("input[name='buildProgress']");
@@ -338,7 +339,8 @@ export const initProjectCompose = () => {
   const form = document.getElementById("projectForm");
   if (!form) return;
 
-  form.addEventListener("submit", async (e) => {
+  // Use onsubmit (not addEventListener) so re-calling this never stacks duplicate listeners
+  form.onsubmit = async (e) => {
     e.preventDefault();
     const fd      = new FormData(form);
     const title   = (fd.get("projectTitle") || "").trim();
@@ -368,7 +370,7 @@ export const initProjectCompose = () => {
       toast("Project showcased!");
     } catch (err) { toast("Failed: " + (err.message || "error")); }
     finally { btn.disabled = false; btn.textContent = "Showcase"; }
-  });
+  };
 };
 
 export const renderProjectPost = (p, author) => {

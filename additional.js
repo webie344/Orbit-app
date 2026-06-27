@@ -1,8 +1,7 @@
 // =========================================================================
-// Orbit — additional.js  (v4 — no token server needed)
-// Stories (24 hr), Notifications full-page view,
-// Group Voice Calls via Agora (browser-side token generation),
-// 1-on-1 Voice + Video Calls via WebRTC + TURN relay.
+// Orbit — additional.js
+// Stories (24 hr), Notifications full-page view, Voice + Video Calls (WebRTC)
+// Drop this file alongside app.js, chat.js, etc. — it self-wires via events.
 // =========================================================================
 
 import {
@@ -11,21 +10,10 @@ import {
 } from "./app.js";
 
 import {
-  sfxCallEnd, sfxCallConnect, sfxNotification, sfxCallRing,
-} from "./sounds.js";
-
-import {
-  doc, setDoc, getDoc, updateDoc, addDoc,
+  doc, setDoc, getDoc, updateDoc, addDoc, deleteDoc,
   collection, query, where, orderBy, limit, onSnapshot, getDocs,
   serverTimestamp, arrayUnion, arrayRemove, Timestamp,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
-
-// =========================================================================
-// GROUP CALL CONFIG
-// WebRTC mesh — no third-party SDK or account required.
-// Up to GROUP_CALL_MAX participants per call.
-// =========================================================================
-const GROUP_CALL_MAX = 20;
 
 // =========================================================================
 // 1. STORIES
@@ -51,28 +39,36 @@ export const injectStoryBar = (feedWrap) => {
   myBtn.onclick = () => openStoryUploader();
   bar.appendChild(myBtn);
 
+  // allGroups is shared across snapshot updates so swiping always uses latest data
+  let _allGroups = [];
+
   const cutoff = Timestamp.fromMillis(Date.now() - STORY_TTL_MS);
   onSnapshot(
-    query(collection(db, "stories"), where("expiresAt", ">", cutoff), orderBy("expiresAt", "asc"), limit(60)),
+    query(collection(db, "stories"), where("expiresAt", ">", cutoff), limit(60)),
     async (snap) => {
       bar.querySelectorAll(".story-item:not(.my-story)").forEach(n => n.remove());
+      _allGroups = [];
+
+      const sorted = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (a.expiresAt?.toMillis?.() || 0) - (b.expiresAt?.toMillis?.() || 0));
 
       const byUser = new Map();
-      snap.docs.forEach(d => {
-        const s = { id: d.id, ...d.data() };
+      sorted.forEach(s => {
         if (!byUser.has(s.authorUid)) byUser.set(s.authorUid, []);
         byUser.get(s.authorUid).push(s);
       });
 
+      // Own stories go first in the group list
       if (byUser.has(state.uid)) {
         const mine = byUser.get(state.uid);
+        _allGroups.push({ uid: state.uid, stories: mine });
         const hasUnseen = mine.some(s => !(s.viewers || []).includes(state.uid));
-        const ring = myBtn.querySelector(".story-ring");
-        ring.className = `story-ring ${hasUnseen ? "has-story" : "seen-story"}`;
-        myBtn.onclick = () => openStoryViewer(state.uid, mine);
+        myBtn.querySelector(".story-ring").className =
+          `story-ring ${hasUnseen ? "has-story" : "seen-story"}`;
+        myBtn.onclick = () => openStoryViewer([..._allGroups], 0);
       } else {
-        const ring = myBtn.querySelector(".story-ring");
-        ring.className = "story-ring no-story";
+        myBtn.querySelector(".story-ring").className = "story-ring no-story";
         myBtn.onclick = () => openStoryUploader();
       }
 
@@ -84,6 +80,8 @@ export const injectStoryBar = (feedWrap) => {
         const user = userMap[uid];
         if (!user) return;
         const stories = byUser.get(uid);
+        _allGroups.push({ uid, stories });
+        const gIdx = _allGroups.length - 1;
         const allSeen = stories.every(s => (s.viewers || []).includes(state.uid));
         const item = document.createElement("div");
         item.className = "story-item";
@@ -92,7 +90,7 @@ export const injectStoryBar = (feedWrap) => {
             <img class="story-av" src="${avatarFor(user)}" alt="" />
           </div>
           <span class="story-name">${(user.name || "User").split(" ")[0]}</span>`;
-        item.onclick = () => openStoryViewer(uid, stories);
+        item.onclick = () => openStoryViewer([..._allGroups], gIdx);
         bar.appendChild(item);
       });
     }
@@ -171,66 +169,278 @@ const openStoryUploader = () => {
   };
 };
 
-const openStoryViewer = (uid, stories) => {
-  if (!stories?.length) return;
-  let idx = 0;
+// allGroups: [{ uid, stories: [...] }, ...]
+// startGroupIdx: which user's stories to open first
+const openStoryViewer = (allGroups, startGroupIdx = 0) => {
+  if (!allGroups?.length) return;
+
+  let groupIdx = Math.min(startGroupIdx, allGroups.length - 1);
+  let storyIdx = 0;
   let timer = null;
+  let isPaused = false;
+  let elapsed = 0;
+  let timerStart = null;
+  const DURATION = 5000;
 
   const overlay = document.createElement("div");
   overlay.className = "story-viewer-overlay";
   document.body.appendChild(overlay);
 
-  const render = async () => {
+  // ── Pause / Resume ───────────────────────────────────────────────────────
+  const pauseStory = () => {
+    if (isPaused) return;
+    isPaused = true;
     clearTimeout(timer);
-    const s = stories[idx];
-    if (!s) { overlay.remove(); return; }
+    if (timerStart) { elapsed += Date.now() - timerStart; timerStart = null; }
+    const fill = overlay.querySelector(".story-seg.active .story-seg-fill");
+    if (fill) fill.style.animationPlayState = "paused";
+    const vid = overlay.querySelector("video");
+    if (vid && !vid.paused) vid.pause();
+  };
 
-    const segs = stories.map((_, i) =>
-      `<div class="story-seg ${i < idx ? "done" : i === idx ? "active" : ""}"><div class="story-seg-fill" style="${i === idx ? "animation:story-prog 5s linear forwards;" : ""}"></div></div>`
+  const resumeStory = () => {
+    if (!isPaused) return;
+    isPaused = false;
+    const fill = overlay.querySelector(".story-seg.active .story-seg-fill");
+    if (fill) fill.style.animationPlayState = "running";
+    const vid = overlay.querySelector("video");
+    if (vid) { vid.play().catch(() => {}); return; }
+    const remaining = Math.max(300, DURATION - elapsed);
+    timerStart = Date.now();
+    timer = setTimeout(() => { elapsed = 0; goNext(); }, remaining);
+  };
+
+  // ── Two-level navigation ─────────────────────────────────────────────────
+  const goNext = () => {
+    clearTimeout(timer); elapsed = 0;
+    const group = allGroups[groupIdx];
+    if (storyIdx < group.stories.length - 1) {
+      storyIdx++;
+      render(null);
+    } else if (groupIdx < allGroups.length - 1) {
+      groupIdx++; storyIdx = 0;
+      render("left"); // next user slides in from right
+    } else {
+      overlay.remove(); // end of all stories
+    }
+  };
+
+  const goPrev = () => {
+    clearTimeout(timer); elapsed = 0;
+    if (storyIdx > 0) {
+      storyIdx--;
+      render(null);
+    } else if (groupIdx > 0) {
+      groupIdx--; storyIdx = 0;
+      render("right"); // previous user slides in from left
+    }
+  };
+
+  // ── Touch: swipe between users + hold-to-pause ───────────────────────────
+  let _tx = 0, _ty = 0, _isSwipe = false, _wasHold = false, _holdTimer = null;
+
+  overlay.addEventListener("touchstart", (e) => {
+    _tx = e.touches[0].clientX;
+    _ty = e.touches[0].clientY;
+    _isSwipe = false; _wasHold = false;
+    _holdTimer = setTimeout(() => { _wasHold = true; pauseStory(); }, 200);
+  }, { passive: true });
+
+  overlay.addEventListener("touchmove", (e) => {
+    if (Math.abs(e.touches[0].clientX - _tx) > 12) {
+      _isSwipe = true; clearTimeout(_holdTimer);
+    }
+  }, { passive: true });
+
+  overlay.addEventListener("touchend", (e) => {
+    clearTimeout(_holdTimer);
+    if (_wasHold) { resumeStory(); return; }     // release from hold
+    if (_isSwipe) {                               // horizontal swipe → change user
+      const dx = e.changedTouches[0].clientX - _tx;
+      const dy = e.changedTouches[0].clientY - _ty;
+      if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
+        dx < 0 ? goNext() : goPrev();
+      }
+    }
+    // plain tap handled by click on tap-zones below
+  });
+
+  // Desktop hold-to-pause
+  let _mHold = null;
+  overlay.addEventListener("mousedown", () => { _mHold = setTimeout(pauseStory, 200); });
+  overlay.addEventListener("mouseup",   () => { clearTimeout(_mHold); resumeStory(); });
+
+  // ── Main render ──────────────────────────────────────────────────────────
+  const render = async (slideDir) => {
+    clearTimeout(timer);
+    isPaused = false; elapsed = 0; timerStart = null;
+
+    const group = allGroups[groupIdx];
+    if (!group) { overlay.remove(); return; }
+    const s = group.stories[storyIdx];
+    if (!s) { overlay.remove(); return; }
+    const isOwn = group.uid === state.uid;
+    const viewers = s.viewers || [];
+
+    const user = await fetchUser(group.uid).catch(() => null);
+
+    const segs = group.stories.map((_, i) =>
+      `<div class="story-seg ${i < storyIdx ? "done" : i === storyIdx ? "active" : ""}">` +
+      `<div class="story-seg-fill" style="${i === storyIdx ? `animation:story-prog ${DURATION / 1000}s linear forwards;` : ""}"></div></div>`
     ).join("");
 
-    const user = await fetchUser(uid).catch(() => null);
+    const menuBtnHtml = isOwn
+      ? `<button class="icon-btn story-menu-btn" style="color:#fff;margin-left:4px;"><i class="ri-more-line"></i></button>`
+      : "";
+
+    const viewerBarHtml = isOwn && viewers.length > 0
+      ? `<div class="story-viewer-bar" id="storyViewerBar">
+           <div class="story-viewer-bar-avatars"></div>
+           <span class="story-viewer-bar-count"><i class="ri-eye-line"></i> ${viewers.length}</span>
+         </div>`
+      : "";
 
     overlay.innerHTML = `
-      <div class="story-viewer">
+      <div class="story-viewer${slideDir ? ` story-slide-${slideDir}` : ""}">
         <div class="story-segs">${segs}</div>
         <div class="story-viewer-head">
           <img class="story-av" src="${avatarFor(user)}" style="width:36px;height:36px;border-radius:50%;border:2px solid white;" />
           <div class="story-viewer-uname">${user?.name || "User"}</div>
           <div style="margin-left:auto;font-size:12px;color:rgba(255,255,255,.7);">${fmtTime(s.createdAt)}</div>
+          ${menuBtnHtml}
           <button class="icon-btn story-viewer-close" style="color:#fff;margin-left:8px;"><i class="ri-close-line"></i></button>
         </div>
         <div class="story-viewer-media">
           ${s.mediaType === "video" && s.mediaUrl
-            ? `<video src="${s.mediaUrl}" autoplay muted playsinline loop style="width:100%;height:100%;object-fit:cover;"></video>`
+            ? `<video src="${s.mediaUrl}" autoplay playsinline style="width:100%;height:100%;object-fit:cover;"></video>`
             : s.mediaUrl
             ? `<img src="${s.mediaUrl}" style="width:100%;height:100%;object-fit:cover;" />`
             : `<div class="story-text-card">${s.caption || ""}</div>`}
         </div>
         ${s.caption && s.mediaUrl ? `<div class="story-viewer-caption">${s.caption}</div>` : ""}
+        ${viewerBarHtml}
         <div class="story-tap-zones">
           <div class="story-tap-prev"></div>
           <div class="story-tap-next"></div>
         </div>
       </div>`;
 
-    overlay.querySelector(".story-viewer-close").onclick = () => { clearTimeout(timer); overlay.remove(); };
-    overlay.querySelector(".story-tap-prev").onclick = () => { idx = Math.max(0, idx - 1); render(); };
-    overlay.querySelector(".story-tap-next").onclick = () => { idx++; render(); };
+    overlay.querySelector(".story-viewer-close").onclick = (e) => {
+      e.stopPropagation(); clearTimeout(timer); overlay.remove();
+    };
 
-    if (s.mediaType !== "video") {
-      timer = setTimeout(() => { idx++; render(); }, 5000);
-    } else {
-      const vid = overlay.querySelector("video");
-      if (vid) vid.onended = () => { idx++; render(); };
+    // Click-based tap nav (desktop + mobile tap — swipe handled by touchend)
+    overlay.querySelector(".story-tap-prev").addEventListener("click", (e) => {
+      if (_isSwipe || _wasHold) return; // swipe/hold already handled
+      e.stopPropagation(); goPrev();
+    });
+    overlay.querySelector(".story-tap-next").addEventListener("click", (e) => {
+      if (_isSwipe || _wasHold) return;
+      e.stopPropagation(); goNext();
+    });
+
+    // ── 3-dot menu ────────────────────────────────────────────────────────
+    if (isOwn) {
+      const mb = overlay.querySelector(".story-menu-btn");
+      if (mb) {
+        mb.onclick = (e) => {
+          e.stopPropagation(); pauseStory();
+          const ex = overlay.querySelector(".story-ctx-menu");
+          if (ex) { ex.remove(); resumeStory(); return; }
+          const menu = document.createElement("div");
+          menu.className = "story-ctx-menu";
+          menu.innerHTML = `
+            <button class="story-ctx-item"><i class="ri-add-circle-line"></i> Add to story</button>
+            <button class="story-ctx-item story-ctx-danger"><i class="ri-delete-bin-line"></i> Delete this story</button>`;
+          menu.querySelector(".story-ctx-item").onclick = (e) => {
+            e.stopPropagation(); clearTimeout(timer); overlay.remove(); openStoryUploader();
+          };
+          menu.querySelector(".story-ctx-danger").onclick = async (e) => {
+            e.stopPropagation();
+            try {
+              await deleteDoc(doc(db, "stories", s.id));
+              group.stories.splice(storyIdx, 1);
+              if (!group.stories.length) {
+                allGroups.splice(groupIdx, 1);
+                if (!allGroups.length) { clearTimeout(timer); overlay.remove(); return; }
+                if (groupIdx >= allGroups.length) groupIdx = allGroups.length - 1;
+                storyIdx = 0;
+              } else {
+                if (storyIdx >= group.stories.length) storyIdx = group.stories.length - 1;
+              }
+              render(null);
+            } catch { toast("Delete failed"); resumeStory(); }
+          };
+          mb.insertAdjacentElement("afterend", menu);
+        };
+      }
+
+      // ── Viewer avatars ─────────────────────────────────────────────────
+      const vBar = overlay.querySelector("#storyViewerBar");
+      if (vBar && viewers.length > 0) {
+        const avatarWrap = vBar.querySelector(".story-viewer-bar-avatars");
+        Promise.all(viewers.slice(0, 3).map(vUid => fetchUser(vUid).catch(() => null))).then(us => {
+          avatarWrap.innerHTML = "";
+          us.filter(Boolean).forEach(u => {
+            avatarWrap.appendChild(Object.assign(document.createElement("img"), {
+              className: "story-viewer-av", src: avatarFor(u), title: u.name || "User",
+            }));
+          });
+          const rest = viewers.length - 3;
+          if (rest > 0) avatarWrap.appendChild(Object.assign(document.createElement("span"), {
+            className: "story-viewer-more", textContent: `+${rest}`,
+          }));
+        });
+        vBar.style.cursor = "pointer";
+        vBar.onclick = (e) => { e.stopPropagation(); pauseStory(); _showAllViewers(viewers, overlay, resumeStory); };
+      }
     }
 
-    if (!(s.viewers || []).includes(state.uid)) {
+    // ── Video: audio ON, autoplay with mute fallback ─────────────────────
+    if (s.mediaType === "video") {
+      const vid = overlay.querySelector("video");
+      if (vid) {
+        vid.play().catch(() => { vid.muted = true; vid.play().catch(() => {}); });
+        vid.onended = () => goNext();
+      }
+    } else {
+      timerStart = Date.now();
+      timer = setTimeout(() => { elapsed = 0; goNext(); }, DURATION);
+    }
+
+    // Mark viewed
+    if (!viewers.includes(state.uid)) {
       updateDoc(doc(db, "stories", s.id), { viewers: arrayUnion(state.uid) }).catch(() => {});
     }
   };
 
-  render();
+  render(null);
+};
+
+// Full viewer list sheet
+const _showAllViewers = async (viewerUids, overlay, onClose) => {
+  const existing = overlay.querySelector(".story-viewers-sheet");
+  if (existing) { existing.remove(); onClose(); return; }
+  const sheet = document.createElement("div");
+  sheet.className = "story-viewers-sheet";
+  sheet.innerHTML = `
+    <div class="story-viewers-head">
+      <span><i class="ri-eye-line"></i> Viewed by ${viewerUids.length}</span>
+      <button class="icon-btn" style="color:#fff;"><i class="ri-close-line"></i></button>
+    </div>
+    <div class="story-viewers-list"><div style="color:rgba(255,255,255,.6);padding:20px;text-align:center;">Loading…</div></div>`;
+  sheet.querySelector("button").onclick = (e) => { e.stopPropagation(); sheet.remove(); onClose(); };
+  overlay.querySelector(".story-viewer").appendChild(sheet);
+  const list = sheet.querySelector(".story-viewers-list");
+  const users = await Promise.all(viewerUids.map(vUid => fetchUser(vUid).catch(() => null)));
+  list.innerHTML = "";
+  users.filter(Boolean).forEach(u => {
+    const row = document.createElement("div");
+    row.className = "story-viewer-row";
+    row.innerHTML = `<img class="avatar sm" src="${avatarFor(u)}" /><span>${u.name || "User"}</span>`;
+    row.onclick = (e) => { e.stopPropagation(); overlay.remove(); location.hash = `#profile/${u.uid}`; };
+    list.appendChild(row);
+  });
 };
 
 // =========================================================================
@@ -332,589 +542,20 @@ export const renderNotifications = (root) => {
 };
 
 // =========================================================================
-// 3. VOICE CALLS
-//
-// GROUP calls  → Agora RTC, token generated in browser (no server needed)
-// 1-on-1 calls → WebRTC P2P + TURN relay + Firebase signaling
+// 3. VOICE + VIDEO CALLS (WebRTC, Firebase signaling)
 // =========================================================================
 
-let _activeCall = null;
-
-// =========================================================================
-// GROUP VOICE CALL  (WebRTC mesh — up to GROUP_CALL_MAX participants)
-// Uses the same ICE / TURN servers as 1-on-1 calls.
-// Firebase Firestore is used for signaling (offers, answers, ICE candidates).
-// =========================================================================
-
-// ICE servers shared by both group and 1-on-1 calls
 const ICE_SERVERS = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
-    { urls: "turn:openrelay.metered.ca:80",                username: "openrelayproject", credential: "openrelayproject" },
-    { urls: "turn:openrelay.metered.ca:443",               username: "openrelayproject", credential: "openrelayproject" },
-    { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "stun:stun2.l.google.com:19302" },
   ],
 };
 
-export const startGroupVoiceCall = async ({ chatId, groupName = "Group" }) => {
-  if (_activeCall) { toast("You're already in a call"); return; }
-
-  const existing = await getDocs(
-    query(collection(db, "calls"),
-      where("chatId", "==", chatId),
-      where("status", "==", "active"),
-      where("isGroup", "==", true),
-      limit(1))
-  );
-
-  let callId;
-  if (!existing.empty) {
-    const callData = existing.docs[0].data();
-    if ((callData.participants || []).length >= GROUP_CALL_MAX) {
-      toast(`Call is full — max ${GROUP_CALL_MAX} participants`);
-      return;
-    }
-    callId = existing.docs[0].id;
-    await updateDoc(doc(db, "calls", callId), { participants: arrayUnion(state.uid) }).catch(() => {});
-  } else {
-    const callRef = await addDoc(collection(db, "calls"), {
-      createdAt: serverTimestamp(),
-      callerId: state.uid,
-      callerName: state.me?.name || "Someone",
-      callerAvatar: state.me?.photoURL || "",
-      type: "voice",
-      chatId,
-      isGroup: true,
-      groupName,
-      participants: [state.uid],
-      raisedHands: [],
-      status: "active",
-    });
-    callId = callRef.id;
-
-    const gSnap = await getDoc(doc(db, "groups", chatId)).catch(() => null);
-    const members = (gSnap?.data()?.members || []).filter(u => u !== state.uid);
-    for (const uid of members) {
-      writeNotif(uid, "call", {
-        text: `${state.me?.name || "Someone"} started a voice call in ${groupName}`,
-        callId, chatId, groupName,
-      }).catch(() => {});
-    }
-  }
-
-  await _joinWebRTCGroupCall({ callId, groupName });
-};
-
-export const joinGroupVoiceCall = async ({ callId, chatId, groupName = "Group" }) => {
-  if (_activeCall) { toast("Already in a call"); return; }
-  const callSnap = await getDoc(doc(db, "calls", callId)).catch(() => null);
-  if (!callSnap?.exists()) { toast("Call no longer available"); return; }
-  const callData = callSnap.data();
-  if ((callData.participants || []).length >= GROUP_CALL_MAX) {
-    toast(`Call is full — max ${GROUP_CALL_MAX} participants`);
-    return;
-  }
-  await updateDoc(doc(db, "calls", callId), { participants: arrayUnion(state.uid) }).catch(() => {});
-  await _joinWebRTCGroupCall({ callId, groupName });
-};
-
-const _joinWebRTCGroupCall = async ({ callId, groupName }) => {
-  let localStream;
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    });
-  } catch {
-    toast("Microphone access denied — allow mic and try again");
-    await updateDoc(doc(db, "calls", callId), { participants: arrayRemove(state.uid) }).catch(() => {});
-    return;
-  }
-
-  const panel = _buildGroupCallPanel({ callId, groupName });
-  document.body.appendChild(panel);
-  requestAnimationFrame(() => panel.classList.add("vc-visible"));
-
-  const peers  = {};   // peerId → RTCPeerConnection
-  const unsubs = [];
-  let muted      = false;
-  let handRaised = false;
-
-  _activeCall = { type: "group", callId, localStream, peers, unsubs, panel };
-  _groupCallAddParticipant(panel, state.uid);
-
-  // ── Build a peer connection to a remote participant ─────────────────────
-  const _makePC = (peerId) => {
-    if (peers[peerId] || peerId === state.uid) return null;
-    const pc = new RTCPeerConnection(ICE_SERVERS);
-    peers[peerId] = pc;
-    localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
-
-    pc.ontrack = (e) => {
-      const stream = e.streams[0];
-      if (!stream) return;
-      // Re-use existing audio element if already attached
-      const tile = panel.querySelector(`.vc-tile[data-uid="${peerId}"]`);
-      let audio = tile?.querySelector("audio");
-      if (!audio) {
-        audio = document.createElement("audio");
-        audio.autoplay = true;
-        audio.setAttribute("playsinline", "");
-        (tile || panel).appendChild(audio);
-      }
-      audio.srcObject = stream;
-      _watchGroupSpeaking(stream, peerId, panel);
-    };
-
-    const iceCandCol = collection(db, "calls", callId, `gcand_${state.uid}_${peerId}`);
-    pc.onicecandidate = e => {
-      if (e.candidate) addDoc(iceCandCol, e.candidate.toJSON()).catch(() => {});
-    };
-
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
-        _groupCallRemoveParticipant(panel, peerId);
-        _groupCallUpdateCount(panel);
-        try { pc.close(); } catch {}
-        delete peers[peerId];
-      }
-    };
-
-    // Listen for ICE candidates from the remote side
-    const candUnsub = onSnapshot(
-      query(collection(db, "calls", callId, `gcand_${peerId}_${state.uid}`), orderBy("__name__")),
-      snap => {
-        snap.docChanges().filter(c => c.type === "added").forEach(c => {
-          pc.addIceCandidate(new RTCIceCandidate(c.doc.data())).catch(() => {});
-        });
-      }
-    );
-    unsubs.push(candUnsub);
-    return pc;
-  };
-
-  // ── Send an offer to a participant (we are the later joiner) ───────────
-  const _offerPeer = async (peerId) => {
-    const pc = _makePC(peerId);
-    if (!pc) return;
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    await setDoc(doc(db, "calls", callId, "goffers", `${state.uid}_to_${peerId}`), {
-      from: state.uid, to: peerId, sdp: offer.sdp, type: offer.type,
-    });
-    // Listen for the answer
-    const ansUnsub = onSnapshot(doc(db, "calls", callId, "ganswers", `${peerId}_to_${state.uid}`), async snap => {
-      if (!snap.exists() || pc.remoteDescription) return;
-      const data = snap.data();
-      if (data.from !== peerId) return;
-      await pc.setRemoteDescription(new RTCSessionDescription(data)).catch(() => {});
-    });
-    unsubs.push(ansUnsub);
-  };
-
-  // ── Listen for offers addressed to us and answer them ─────────────────
-  const offerUnsub = onSnapshot(
-    query(collection(db, "calls", callId, "goffers"), where("to", "==", state.uid)),
-    async (snap) => {
-      snap.docChanges().filter(c => c.type === "added").forEach(async (change) => {
-        const offer = change.doc.data();
-        const peerId = offer.from;
-        if (!peerId || peerId === state.uid) return;
-
-        const pc = _makePC(peerId);
-        if (!pc) return; // already connected
-
-        _groupCallAddParticipant(panel, peerId);
-
-        await pc.setRemoteDescription(new RTCSessionDescription(offer)).catch(() => {});
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        await setDoc(doc(db, "calls", callId, "ganswers", `${state.uid}_to_${peerId}`), {
-          from: state.uid, to: peerId, sdp: answer.sdp, type: answer.type,
-        });
-      });
-    }
-  );
-  unsubs.push(offerUnsub);
-
-  // ── Watch the call document for participant list / status changes ───────
-  const callUnsub = onSnapshot(doc(db, "calls", callId), async (snap) => {
-    if (!snap.exists() || snap.data().status === "ended") {
-      await _leaveGroupCall();
-      return;
-    }
-    const data = snap.data();
-    const currentParticipants = data.participants || [];
-
-    // Offer to any participant who joined before us (they wait for our offer)
-    for (const peerId of currentParticipants) {
-      if (peerId !== state.uid && !peers[peerId]) {
-        _groupCallAddParticipant(panel, peerId);
-        await _offerPeer(peerId);
-      }
-    }
-
-    // Remove tiles for participants who left
-    panel.querySelectorAll(".vc-tile").forEach(tile => {
-      const uid = tile.dataset.uid;
-      if (uid && uid !== state.uid && !currentParticipants.includes(uid)) {
-        _groupCallRemoveParticipant(panel, uid);
-        if (peers[uid]) { try { peers[uid].close(); } catch {} delete peers[uid]; }
-      }
-    });
-
-    _groupCallSyncParticipants(panel, currentParticipants);
-    _groupCallSyncRaisedHands(panel, data.raisedHands || []);
-  });
-  unsubs.push(callUnsub);
-
-  // ── Leave handler ───────────────────────────────────────────────────────
-  const _leaveGroupCall = async () => {
-    if (!_activeCall) return;
-    const ac = _activeCall;
-    _activeCall = null;
-    ac.unsubs?.forEach(u => { try { u(); } catch {} });
-    Object.values(ac.peers || {}).forEach(pc => { try { pc.close(); } catch {} });
-    ac.localStream?.getTracks().forEach(t => t.stop());
-    await updateDoc(doc(db, "calls", ac.callId), {
-      participants: arrayRemove(state.uid),
-      raisedHands:  arrayRemove(state.uid),
-    }).catch(() => {});
-    const snap = await getDoc(doc(db, "calls", ac.callId)).catch(() => null);
-    if (snap?.exists() && (snap.data().participants || []).filter(u => u !== state.uid).length === 0) {
-      await updateDoc(doc(db, "calls", ac.callId), { status: "ended" }).catch(() => {});
-    }
-    ac.panel.classList.remove("vc-visible");
-    setTimeout(() => ac.panel.remove(), 380);
-    sfxCallEnd();
-    toast("Left the call");
-  };
-
-  // ── Panel controls ──────────────────────────────────────────────────────
-  panel.querySelector("#vcMute").addEventListener("click", () => {
-    muted = !muted;
-    localStream.getAudioTracks().forEach(t => { t.enabled = !muted; });
-    const btn = panel.querySelector("#vcMute");
-    btn.querySelector("i").className = muted ? "ri-mic-off-fill" : "ri-mic-fill";
-    btn.classList.toggle("vc-btn-active", muted);
-    // label is a sibling <span> outside the button — go up to .vc-ctrl-col first
-    btn.closest(".vc-ctrl-col").querySelector(".vc-btn-label").textContent = muted ? "Unmute" : "Mute";
-    panel.querySelector(`.vc-tile[data-uid="${state.uid}"]`)?.classList.toggle("vc-muted", muted);
-  });
-
-  panel.querySelector("#vcHand").addEventListener("click", async () => {
-    handRaised = !handRaised;
-    const btn = panel.querySelector("#vcHand");
-    btn.classList.toggle("vc-btn-active", handRaised);
-    btn.querySelector("i").className = handRaised ? "ri-hand-coin-fill" : "ri-hand-coin-line";
-    // label is a sibling <span> outside the button — go up to .vc-ctrl-col first
-    btn.closest(".vc-ctrl-col").querySelector(".vc-btn-label").textContent = handRaised ? "Lower hand" : "Raise hand";
-    await updateDoc(doc(db, "calls", callId), {
-      raisedHands: handRaised ? arrayUnion(state.uid) : arrayRemove(state.uid),
-    }).catch(() => {});
-    if (handRaised) toast("✋ Hand raised — the host can see this");
-  });
-
-  panel.querySelector("#vcLeave").addEventListener("click", () => _leaveGroupCall());
-
-  panel.querySelector("#vcMinimise").addEventListener("click", () => {
-    panel.classList.toggle("vc-minimised");
-    panel.querySelector("#vcMinimise i").className =
-      panel.classList.contains("vc-minimised") ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line";
-  });
-};
-
-// ── Speaking indicator for group call participants ─────────────────────────
-const _watchGroupSpeaking = (stream, uid, panel) => {
-  try {
-    const ctx = new AudioContext();
-    const src = ctx.createMediaStreamSource(stream);
-    const analyser = ctx.createAnalyser();
-    analyser.fftSize = 512;
-    src.connect(analyser);
-    const data = new Uint8Array(analyser.frequencyBinCount);
-    const check = () => {
-      const tile = panel.querySelector(`.vc-tile[data-uid="${uid}"]`);
-      if (!tile || !document.body.contains(panel)) { ctx.close(); return; }
-      analyser.getByteFrequencyData(data);
-      const avg = data.reduce((a, b) => a + b, 0) / data.length;
-      tile.classList.toggle("vc-speaking", avg > 8);
-      requestAnimationFrame(check);
-    };
-    check();
-  } catch {}
-};
-
-// ── Inject group-call CSS once ─────────────────────────────────────────────
-let _vcStylesReady = false;
-const _injectVCStyles = () => {
-  if (_vcStylesReady) return;
-  _vcStylesReady = true;
-  const s = document.createElement("style");
-  s.textContent = `
-    /* ── Group voice-call panel ───────────────────────────────────────── */
-    .vc-panel {
-      position: fixed;
-      bottom: 0; left: 0; right: 0;
-      max-height: 65vh;
-      background: var(--bg-elev, #1e1e2e);
-      border-top: 1px solid var(--line, rgba(255,255,255,.12));
-      border-radius: 20px 20px 0 0;
-      box-shadow: 0 -8px 40px rgba(0,0,0,.45);
-      z-index: 4000;
-      display: flex;
-      flex-direction: column;
-      transform: translateY(100%);
-      transition: transform .32s cubic-bezier(.32,1,.32,1);
-      overflow: hidden;
-    }
-    .vc-panel.vc-visible { transform: translateY(0); }
-    .vc-panel.vc-minimised { max-height: 72px; }
-    .vc-handle-bar {
-      width: 36px; height: 4px;
-      background: var(--line, rgba(255,255,255,.2));
-      border-radius: 4px;
-      margin: 10px auto 0;
-      flex-shrink: 0;
-    }
-    .vc-header {
-      display: flex; align-items: center;
-      padding: 10px 16px 8px;
-      flex-shrink: 0;
-    }
-    .vc-header-left { flex: 1; min-width: 0; }
-    .vc-title {
-      display: flex; align-items: center; gap: 6px;
-      font-weight: 700; font-size: 15px;
-      color: var(--text, #fff);
-    }
-    .vc-subtitle {
-      display: flex; align-items: center; gap: 6px;
-      font-size: 12px; color: var(--text-mute, rgba(255,255,255,.55));
-      margin-top: 2px;
-    }
-    .vc-dot-sep { opacity: .5; }
-    .vc-header-right { display: flex; gap: 4px; }
-    .vc-icon-btn {
-      width: 32px; height: 32px; border-radius: 50%;
-      display: grid; place-items: center;
-      background: none; border: none; cursor: pointer;
-      color: var(--text-mute, rgba(255,255,255,.55));
-      font-size: 18px;
-      transition: background .15s;
-    }
-    .vc-icon-btn:hover { background: rgba(255,255,255,.08); }
-    .vc-hands-queue {
-      display: flex; align-items: center; gap: 8px;
-      padding: 6px 16px;
-      background: rgba(246,201,14,.1);
-      font-size: 13px; color: #f6c90e;
-      flex-shrink: 0;
-    }
-    .vc-hands-queue.hidden { display: none !important; }
-    .vc-participants {
-      display: flex; flex-wrap: wrap; gap: 10px;
-      padding: 12px 16px;
-      overflow-y: auto;
-      flex: 1;
-    }
-    .vc-tile {
-      display: flex; flex-direction: column; align-items: center; gap: 4px;
-      width: 72px;
-    }
-    .vc-av-wrap { position: relative; width: 56px; height: 56px; }
-    .vc-av {
-      width: 56px; height: 56px; border-radius: 50%;
-      object-fit: cover;
-      border: 2px solid rgba(255,255,255,.15);
-    }
-    .vc-speaking-ring {
-      position: absolute; inset: -3px; border-radius: 50%;
-      border: 2.5px solid transparent;
-      pointer-events: none;
-      transition: border-color .15s, box-shadow .15s;
-    }
-    .vc-tile.vc-speaking .vc-speaking-ring {
-      border-color: #4ade80;
-      box-shadow: 0 0 10px rgba(74,222,128,.5);
-    }
-    .vc-hand-badge {
-      position: absolute; top: -2px; right: -2px;
-      font-size: 14px; line-height: 1;
-    }
-    .vc-hand-badge.hidden { display: none !important; }
-    .vc-tile-name {
-      font-size: 11px; color: var(--text-mute, rgba(255,255,255,.6));
-      text-align: center; max-width: 72px;
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    }
-    .vc-tile-mic { font-size: 12px; color: var(--text-mute, rgba(255,255,255,.4)); }
-    .vc-tile.vc-muted .vc-tile-mic { color: #f87171; }
-    .vc-controls {
-      display: flex; justify-content: center; gap: 24px;
-      padding: 12px 16px 22px;
-      border-top: 1px solid var(--line, rgba(255,255,255,.1));
-      flex-shrink: 0;
-    }
-    .vc-ctrl-col { display: flex; flex-direction: column; align-items: center; gap: 5px; }
-    .vc-ctrl-btn {
-      width: 52px; height: 52px; border-radius: 50%;
-      background: rgba(255,255,255,.1); border: none; cursor: pointer;
-      color: #fff; font-size: 22px;
-      display: grid; place-items: center;
-      transition: background .15s, transform .1s;
-    }
-    .vc-ctrl-btn:active { transform: scale(.93); }
-    .vc-ctrl-btn.vc-btn-active { background: rgba(255,255,255,.28); }
-    .vc-ctrl-btn.vc-leave-btn { background: #ef4444; }
-    .vc-ctrl-btn.vc-leave-btn:hover { background: #dc2626; }
-    .vc-btn-label { font-size: 11px; color: var(--text-mute, rgba(255,255,255,.55)); }
-  `;
-  document.head.appendChild(s);
-};
-
-// ── Panel builder ─────────────────────────────────────────────────────────
-const _buildGroupCallPanel = ({ groupName }) => {
-  _injectVCStyles();
-  const panel = document.createElement("div");
-  panel.className = "vc-panel";
-  panel.id = "vcPanel";
-  panel.innerHTML = `
-    <div class="vc-handle-bar"></div>
-    <div class="vc-header">
-      <div class="vc-header-left">
-        <div class="vc-title">
-          <i class="ri-mic-fill" style="color:var(--primary);font-size:16px;"></i>
-          <span class="vc-title-text">${groupName}</span>
-        </div>
-        <div class="vc-subtitle">
-          <span class="vc-count">1 participant</span>
-          <span class="vc-dot-sep">·</span>
-          <span class="vc-timer" id="vcTimer">00:00</span>
-        </div>
-      </div>
-      <div class="vc-header-right">
-        <button class="vc-icon-btn" id="vcMinimise" title="Minimise">
-          <i class="ri-arrow-down-s-line"></i>
-        </button>
-      </div>
-    </div>
-    <div class="vc-hands-queue hidden" id="vcHandsQueue">
-      <i class="ri-hand-coin-fill" style="color:#f6c90e;"></i>
-      <span class="vc-hands-text" id="vcHandsText"></span>
-    </div>
-    <div class="vc-participants" id="vcParticipants"></div>
-    <div class="vc-controls">
-      <div class="vc-ctrl-col">
-        <button class="vc-ctrl-btn" id="vcMute"><i class="ri-mic-fill"></i></button>
-        <span class="vc-btn-label">Mute</span>
-      </div>
-      <div class="vc-ctrl-col">
-        <button class="vc-ctrl-btn" id="vcHand" title="Raise hand"><i class="ri-hand-coin-line"></i></button>
-        <span class="vc-btn-label">Raise hand</span>
-      </div>
-      <div class="vc-ctrl-col">
-        <button class="vc-ctrl-btn vc-leave-btn" id="vcLeave">
-          <i class="ri-phone-fill" style="transform:rotate(135deg);display:inline-block;"></i>
-        </button>
-        <span class="vc-btn-label">Leave</span>
-      </div>
-    </div>`;
-
-  const startMs = Date.now();
-  const timerEl = panel.querySelector("#vcTimer");
-  const timerInterval = setInterval(() => {
-    if (!document.body.contains(panel)) { clearInterval(timerInterval); return; }
-    const s = Math.floor((Date.now() - startMs) / 1000);
-    timerEl.textContent = `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
-  }, 1000);
-
-  return panel;
-};
-
-// ── Participant tile helpers ───────────────────────────────────────────────
-const _groupCallAddParticipant = async (panel, uid) => {
-  const grid = panel.querySelector("#vcParticipants");
-  if (!grid || grid.querySelector(`.vc-tile[data-uid="${uid}"]`)) return;
-  const isMe = uid === state.uid;
-  const tile = document.createElement("div");
-  tile.className = "vc-tile";
-  tile.dataset.uid = uid;
-  tile.innerHTML = `
-    <div class="vc-av-wrap">
-      <img class="vc-av" src="${avatarFor(isMe ? state.me : { uid })}" alt="" />
-      <div class="vc-speaking-ring"></div>
-      <div class="vc-hand-badge hidden" title="Hand raised">✋</div>
-    </div>
-    <div class="vc-tile-name">${isMe ? (state.me?.name?.split(" ")[0] || "You") : "…"}</div>
-    <div class="vc-tile-mic"><i class="ri-mic-off-fill"></i></div>`;
-  if (!isMe) {
-    fetchUser(uid).then(u => {
-      if (!u) return;
-      tile.querySelector(".vc-av").src = avatarFor(u);
-      tile.querySelector(".vc-tile-name").textContent = (u.name || "User").split(" ")[0];
-    });
-  }
-  grid.appendChild(tile);
-  _groupCallUpdateCount(panel);
-};
-
-const _groupCallRemoveParticipant = (panel, uid) => {
-  panel.querySelector(`.vc-tile[data-uid="${uid}"]`)?.remove();
-};
-
-const _groupCallUpdateCount = (panel) => {
-  const count = panel.querySelectorAll(".vc-tile").length;
-  const el2 = panel.querySelector(".vc-count");
-  if (el2) el2.textContent = `${count} participant${count !== 1 ? "s" : ""}`;
-};
-
-const _groupCallSyncParticipants = (panel, uids) => {
-  uids.forEach(uid => _groupCallAddParticipant(panel, uid));
-  panel.querySelectorAll(".vc-tile").forEach(tile => {
-    if (!uids.includes(tile.dataset.uid)) tile.remove();
-  });
-  _groupCallUpdateCount(panel);
-};
-
-const _groupCallSyncRaisedHands = async (panel, raisedUids) => {
-  panel.querySelectorAll(".vc-tile").forEach(tile => {
-    const badge = tile.querySelector(".vc-hand-badge");
-    if (!badge) return;
-    const hasHand = raisedUids.includes(tile.dataset.uid);
-    badge.classList.toggle("hidden", !hasHand);
-    tile.classList.toggle("vc-hand-raised", hasHand);
-  });
-  const queue = panel.querySelector("#vcHandsQueue");
-  const queueText = panel.querySelector("#vcHandsText");
-  if (!queue || !queueText) return;
-  if (raisedUids.length === 0) { queue.classList.add("hidden"); return; }
-  queue.classList.remove("hidden");
-  const names = await Promise.all(
-    raisedUids.slice(0, 3).map(uid =>
-      uid === state.uid
-        ? Promise.resolve(state.me?.name?.split(" ")[0] || "You")
-        : fetchUser(uid).then(u => (u?.name || "Someone").split(" ")[0]).catch(() => "Someone")
-    )
-  );
-  const extra = raisedUids.length > 3 ? ` +${raisedUids.length - 3} more` : "";
-  queueText.textContent = `${names.join(", ")}${extra} raised hand${raisedUids.length > 1 ? "s" : ""}`;
-};
-
-// =========================================================================
-// 1-ON-1 VOICE + VIDEO CALLS  (WebRTC + TURN relay)
-// TURN servers added so calls work through firewalls and mobile networks.
-// =========================================================================
-
-// ICE_SERVERS defined above in the group call section
+let _activeCall = null;
 
 export const startCall = async ({ peerId, chatId, isGroup, type = "voice" }) => {
-  if (isGroup) {
-    const gSnap = await getDoc(doc(db, "groups", chatId)).catch(() => null);
-    const groupName = gSnap?.data()?.name || "Group";
-    return startGroupVoiceCall({ chatId, groupName });
-  }
-
   if (_activeCall) { toast("You're already in a call"); return; }
   const hasVideo = type === "video";
   let localStream;
@@ -930,46 +571,54 @@ export const startCall = async ({ peerId, chatId, isGroup, type = "voice" }) => 
     callerId: state.uid,
     callerName: state.me?.name || "Someone",
     callerAvatar: state.me?.photoURL || "",
-    type, chatId, isGroup: false,
+    type, chatId, isGroup,
     participants: [state.uid],
     status: "ringing",
   });
   const callId = callRef.id;
 
-  writeNotif(peerId, "call", {
-    text: `${state.me?.name || "Someone"} is calling you`,
-    callId,
-  }).catch(() => {});
+  // Notify peer(s)
+  if (isGroup) {
+    const gSnap = await getDoc(doc(db, "groups", chatId)).catch(() => null);
+    const members = (gSnap?.data()?.members || []).filter(u => u !== state.uid);
+    for (const uid of members.slice(0, 14)) {
+      writeNotif(uid, "call", {
+        text: `${state.me?.name || "Someone"} started a group call`,
+        callId,
+      }).catch(() => {});
+    }
+  } else {
+    writeNotif(peerId, "call", {
+      text: `${state.me?.name || "Someone"} is calling you`,
+      callId,
+    }).catch(() => {});
+  }
 
-  const overlay = _buildDMCallOverlay({ callId, localStream, type, role: "caller" });
+  const overlay = _buildCallOverlay({ callId, localStream, isGroup, type, chatId, role: "caller" });
   document.body.appendChild(overlay);
-  _activeCall = { type: "dm", callId, overlay, localStream, peers: {}, unsubs: [] };
+  _activeCall = { callId, overlay, localStream, peers: {}, unsubs: [] };
 
-  _connectPeer({ callId, localStream, peerId, overlay });
-
-  // Watch for decline / hang-up from the other side
-  const statusUnsub = onSnapshot(doc(db, "calls", callId), snap => {
-    if (!snap.exists()) return;
-    const status = snap.data().status;
-    if (status === "declined") { toast("Call declined"); _endDMCall(callId, overlay, localStream); statusUnsub(); }
-    else if (status === "ended") { _endDMCall(callId, overlay, localStream); statusUnsub(); }
-  });
-  if (_activeCall) _activeCall.unsubs.push(statusUnsub);
+  if (!isGroup) {
+    _connectPeer({ callId, localStream, peerId, overlay, type });
+  } else {
+    const gSnap = await getDoc(doc(db, "groups", chatId)).catch(() => null);
+    const members = (gSnap?.data()?.members || []).filter(u => u !== state.uid).slice(0, 14);
+    for (const uid of members) {
+      _connectPeer({ callId, localStream, peerId: uid, overlay, type });
+    }
+  }
 };
 
-const _connectPeer = async ({ callId, localStream, peerId, overlay }) => {
+const _connectPeer = async ({ callId, localStream, peerId, overlay, type }) => {
   const pc = new RTCPeerConnection(ICE_SERVERS);
   if (_activeCall) _activeCall.peers[peerId] = pc;
 
   localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
-  pc.ontrack = e => _addDMRemoteStream(overlay, peerId, e.streams[0]);
+  pc.ontrack = e => _addRemoteStream(overlay, peerId, e.streams[0]);
 
   const candCol = collection(db, "calls", callId, `cand_${state.uid}_${peerId}`);
   pc.onicecandidate = e => {
     if (e.candidate) addDoc(candCol, e.candidate.toJSON()).catch(() => {});
-  };
-  pc.onconnectionstatechange = () => {
-    if (pc.connectionState === "failed") toast("Connection failed — check your internet connection");
   };
 
   const offer = await pc.createOffer();
@@ -978,6 +627,7 @@ const _connectPeer = async ({ callId, localStream, peerId, overlay }) => {
     from: state.uid, sdp: offer.sdp, type: offer.type,
   });
 
+  // Wait for answer
   const u1 = onSnapshot(doc(db, "calls", callId, "answers", state.uid), async snap => {
     if (!snap.exists()) return;
     const ans = snap.data();
@@ -985,6 +635,7 @@ const _connectPeer = async ({ callId, localStream, peerId, overlay }) => {
     await pc.setRemoteDescription(new RTCSessionDescription(ans)).catch(() => {});
   });
 
+  // Remote ICE candidates
   const u2 = onSnapshot(
     query(collection(db, "calls", callId, `cand_${peerId}_${state.uid}`), orderBy("__name__")),
     snap => {
@@ -994,20 +645,15 @@ const _connectPeer = async ({ callId, localStream, peerId, overlay }) => {
     }
   );
 
-  if (_activeCall) _activeCall.unsubs.push(u1, u2);
+  if (_activeCall) { _activeCall.unsubs.push(u1, u2); }
 };
 
 export const answerCall = async (callId) => {
   const callSnap = await getDoc(doc(db, "calls", callId)).catch(() => null);
-  if (!callSnap?.exists()) { toast("Call no longer available"); return; }
-  const call = callSnap.data();
-
-  if (call.isGroup) {
-    if (call.status === "ended") { toast("This call has ended"); return; }
-    return joinGroupVoiceCall({ callId, chatId: call.chatId, groupName: call.groupName || "Group" });
+  if (!callSnap?.exists() || callSnap.data().status !== "ringing") {
+    toast("Call no longer available"); return;
   }
-
-  if (call.status !== "ringing") { toast("Call no longer available"); return; }
+  const call = callSnap.data();
   if (_activeCall) { toast("Already in a call"); return; }
 
   let localStream;
@@ -1021,10 +667,14 @@ export const answerCall = async (callId) => {
     participants: arrayUnion(state.uid), status: "active",
   });
 
-  const overlay = _buildDMCallOverlay({ callId, localStream, type: call.type, role: "callee" });
+  const overlay = _buildCallOverlay({
+    callId, localStream, isGroup: call.isGroup, type: call.type,
+    chatId: call.chatId, role: "callee",
+  });
   document.body.appendChild(overlay);
-  _activeCall = { type: "dm", callId, overlay, localStream, peers: {}, unsubs: [] };
+  _activeCall = { callId, overlay, localStream, peers: {}, unsubs: [] };
 
+  // Watch for incoming offers (caller sends us one)
   const u0 = onSnapshot(doc(db, "calls", callId, "offers", state.uid), async snap => {
     if (!snap.exists()) return;
     const offer = snap.data();
@@ -1035,14 +685,11 @@ export const answerCall = async (callId) => {
     if (_activeCall) _activeCall.peers[peerId] = pc;
 
     localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
-    pc.ontrack = e => _addDMRemoteStream(overlay, peerId, e.streams[0]);
+    pc.ontrack = e => _addRemoteStream(overlay, peerId, e.streams[0]);
 
     const candCol = collection(db, "calls", callId, `cand_${state.uid}_${peerId}`);
     pc.onicecandidate = e => {
       if (e.candidate) addDoc(candCol, e.candidate.toJSON()).catch(() => {});
-    };
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "failed") toast("Connection failed — check your internet connection");
     };
 
     await pc.setRemoteDescription(new RTCSessionDescription(offer)).catch(() => {});
@@ -1065,6 +712,7 @@ export const answerCall = async (callId) => {
   if (_activeCall) _activeCall.unsubs.push(u0);
 };
 
+// Speaking detection — glows the tile border when audio is detected
 const _watchSpeaking = (stream, tileEl) => {
   try {
     const ctx = new AudioContext();
@@ -1084,9 +732,18 @@ const _watchSpeaking = (stream, tileEl) => {
   } catch {}
 };
 
-const _addDMRemoteStream = (overlay, peerId, stream) => {
+const _updateParticipantCount = (overlay) => {
   const grid = overlay.querySelector(".call-remote-grid");
-  if (!grid || grid.querySelector(`[data-peer="${peerId}"]`)) return;
+  const count = (grid ? grid.querySelectorAll(".call-remote-peer").length : 0) + 1;
+  const badge = overlay.querySelector(".call-participant-count");
+  if (badge) badge.textContent = `${count} participant${count !== 1 ? "s" : ""}`;
+};
+
+const _addRemoteStream = (overlay, peerId, stream) => {
+  const grid = overlay.querySelector(".call-remote-grid");
+  if (!grid) return;
+  if (grid.querySelector(`[data-peer="${peerId}"]`)) return;
+
   overlay.querySelector(".call-status-wrap")?.remove();
 
   const peerEl = document.createElement("div");
@@ -1100,12 +757,6 @@ const _addDMRemoteStream = (overlay, peerId, stream) => {
     vid.style.cssText = "width:100%;height:100%;object-fit:cover;border-radius:inherit;";
     peerEl.appendChild(vid);
   } else {
-    // Audio-only: MUST create an <audio> element so the remote stream is heard
-    const aud = document.createElement("audio");
-    aud.autoplay = true;
-    aud.srcObject = stream;
-    peerEl.appendChild(aud);
-
     const box = document.createElement("div");
     box.className = "call-audio-peer";
     peerEl.appendChild(box);
@@ -1114,6 +765,7 @@ const _addDMRemoteStream = (overlay, peerId, stream) => {
     });
   }
 
+  // Name + mic label pinned to bottom of tile
   const label = document.createElement("div");
   label.className = "call-tile-label";
   label.innerHTML = `<i class="ri-mic-line call-tile-mic"></i><span class="call-tile-name">…</span>`;
@@ -1121,95 +773,13 @@ const _addDMRemoteStream = (overlay, peerId, stream) => {
     label.querySelector(".call-tile-name").textContent = (u?.name || "User").split(" ")[0];
   });
   peerEl.appendChild(label);
+
   _watchSpeaking(stream, peerEl);
   grid.appendChild(peerEl);
-  sfxCallConnect();
+  _updateParticipantCount(overlay);
 };
 
-const _injectDMCallStyles = (() => {
-  let _done = false;
-  return () => {
-    if (_done) return; _done = true;
-    const s = document.createElement("style");
-    s.textContent = `
-/* ── DM Call overlay ───────────────────────────────────────────────────── */
-.call-overlay{position:fixed;inset:0;z-index:9000;display:flex;align-items:center;
-  justify-content:center;background:rgba(0,0,0,.88);backdrop-filter:blur(8px);
-  animation:coFadeIn .25s ease;}
-@keyframes coFadeIn{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}
-.call-overlay-exit{animation:coFadeOut .3s ease forwards!important}
-@keyframes coFadeOut{to{opacity:0;transform:scale(.94)}}
-.call-container{position:relative;width:min(520px,96vw);max-height:92vh;
-  display:flex;flex-direction:column;align-items:center;gap:12px;padding:20px 16px 16px;
-  background:linear-gradient(160deg,#1a1a2e 0%,#16213e 100%);
-  border-radius:24px;border:1px solid rgba(255,255,255,.08);overflow:hidden;}
-.call-topbar{width:100%;display:flex;align-items:center;justify-content:space-between;
-  font-size:13px;color:rgba(255,255,255,.5);}
-.call-timer{font-size:15px;font-weight:600;color:#fff;letter-spacing:.05em;}
-.call-type-badge{display:flex;align-items:center;gap:5px;
-  background:rgba(255,255,255,.08);padding:3px 10px;border-radius:20px;font-size:12px;}
-.call-remote-grid{width:100%;display:flex;flex-wrap:wrap;gap:10px;
-  justify-content:center;min-height:0;}
-.call-remote-peer{position:relative;width:220px;height:180px;flex:1 1 180px;
-  background:rgba(255,255,255,.06);border-radius:16px;overflow:hidden;
-  display:flex;align-items:center;justify-content:center;}
-.call-self-tile{position:relative;width:220px;height:180px;flex:1 1 180px;
-  background:rgba(255,255,255,.06);border-radius:16px;overflow:hidden;
-  display:flex;align-items:center;justify-content:center;}
-.call-audio-peer{display:flex;flex-direction:column;align-items:center;gap:10px;padding:12px;}
-.call-audio-peer .avatar{width:72px;height:72px;border-radius:50%;object-fit:cover;
-  border:2px solid rgba(255,255,255,.2);}
-.call-peer-name{font-size:14px;font-weight:500;color:#fff;text-align:center;}
-.call-tile-label{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);
-  display:flex;align-items:center;gap:4px;background:rgba(0,0,0,.55);
-  padding:3px 10px;border-radius:20px;white-space:nowrap;}
-.call-tile-mic{font-size:12px;color:rgba(255,255,255,.7);}
-.call-tile-mic.muted{color:#f87171;}
-.call-tile-name{font-size:12px;color:rgba(255,255,255,.85);}
-.call-status-wrap{display:flex;flex-direction:column;align-items:center;gap:14px;
-  padding:24px 0;}
-.call-waiting-wrap{position:relative;width:90px;height:90px;
-  display:flex;align-items:center;justify-content:center;}
-.call-waiting-av{width:80px;height:80px;border-radius:50%;object-fit:cover;
-  position:relative;z-index:1;border:3px solid rgba(255,255,255,.25);}
-.call-ripple{position:absolute;inset:-10px;border-radius:50%;
-  border:2px solid rgba(99,179,237,.5);animation:ripple 1.8s ease-out infinite;}
-@keyframes ripple{0%{transform:scale(1);opacity:.7}100%{transform:scale(1.9);opacity:0}}
-.call-status-text{font-size:15px;color:rgba(255,255,255,.6);letter-spacing:.03em;}
-.call-local-video{width:110px;height:80px;border-radius:12px;object-fit:cover;
-  border:2px solid rgba(255,255,255,.15);position:absolute;bottom:72px;right:18px;}
-.call-controls{display:flex;align-items:center;gap:14px;padding:8px 0 4px;width:100%;
-  justify-content:center;}
-.call-ctrl-group{display:flex;flex-direction:column;align-items:center;gap:5px;}
-.call-ctrl{width:52px;height:52px;border-radius:50%;border:none;cursor:pointer;
-  display:flex;align-items:center;justify-content:center;font-size:20px;
-  background:rgba(255,255,255,.12);color:#fff;transition:background .2s,transform .15s;}
-.call-ctrl:hover{background:rgba(255,255,255,.22);transform:scale(1.08);}
-.call-ctrl.active{background:rgba(99,179,237,.3);color:#63b3ed;}
-.call-ctrl.danger{background:#dc2626;color:#fff;}
-.call-ctrl.danger:hover{background:#b91c1c;}
-.call-ctrl.accept{background:#16a34a;color:#fff;}
-.call-ctrl.accept:hover{background:#15803d;}
-.call-ctrl-label{font-size:11px;color:rgba(255,255,255,.55);white-space:nowrap;}
-/* ── Incoming call banner ───────────────────────────────────────────────── */
-.incoming-call-banner{position:fixed;top:16px;right:16px;z-index:9100;
-  display:flex;align-items:center;gap:12px;padding:14px 16px;
-  background:linear-gradient(135deg,#1e293b,#0f172a);
-  border:1px solid rgba(255,255,255,.12);border-radius:18px;
-  box-shadow:0 8px 32px rgba(0,0,0,.5);
-  animation:bannerSlide .3s cubic-bezier(.32,1,.32,1);}
-@keyframes bannerSlide{from{opacity:0;transform:translateY(-20px)}to{opacity:1;transform:translateY(0)}}
-.incoming-call-banner .avatar{width:44px;height:44px;border-radius:50%;object-fit:cover;flex-shrink:0;}
-.icb-info{flex:1;min-width:0;}
-.icb-name{font-size:14px;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.icb-type{font-size:12px;color:rgba(255,255,255,.5);margin-top:2px;}
-`.trim();
-    document.head.appendChild(s);
-  };
-})();
-
-const _buildDMCallOverlay = ({ callId, localStream, type, role }) => {
-  _injectDMCallStyles();
+const _buildCallOverlay = ({ callId, localStream, isGroup, type, chatId, role }) => {
   const overlay = document.createElement("div");
   overlay.className = "call-overlay";
   const hasVideo = type === "video";
@@ -1220,19 +790,24 @@ const _buildDMCallOverlay = ({ callId, localStream, type, role }) => {
 
   overlay.innerHTML = `
     <div class="call-container">
+
       <div class="call-topbar">
         <div class="call-participant-count">1 participant</div>
         <div class="call-timer" id="callTimer">00:00</div>
         <div class="call-type-badge"><i class="ri-${hasVideo ? "vidicon" : "phone"}-fill"></i> ${hasVideo ? "Video" : "Voice"}</div>
       </div>
+
       <div class="call-remote-grid"></div>
+
       <div class="call-status-wrap">
         <div class="call-waiting-wrap">
           <img class="avatar xl call-waiting-av" src="${avatarFor(state.me)}" />
           <div class="call-ripple"></div>
         </div>
         <div class="call-status-text">${role === "caller" ? "Calling…" : "Connecting…"}</div>
+        ${isGroup ? `<div class="call-status-sub">Waiting for others to join</div>` : ""}
       </div>
+
       ${hasVideo
         ? `<video id="callLocalVid" autoplay muted playsinline class="call-local-video"></video>`
         : `<div class="call-self-tile call-remote-peer">
@@ -1245,6 +820,7 @@ const _buildDMCallOverlay = ({ callId, localStream, type, role }) => {
                <span class="call-tile-name">You</span>
              </div>
            </div>`}
+
       <div class="call-controls">
         <div class="call-ctrl-group">
           <button class="call-ctrl" id="ccMute"><i class="ri-mic-line"></i></button>
@@ -1262,12 +838,13 @@ const _buildDMCallOverlay = ({ callId, localStream, type, role }) => {
           <span class="call-ctrl-label">End</span>
         </div>
       </div>
+
     </div>`;
 
   timerInterval = setInterval(() => {
     const s = Math.floor((Date.now() - startTime) / 1000);
     const el2 = overlay.querySelector("#callTimer");
-    if (el2) el2.textContent = `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+    if (el2) el2.textContent = `${String(Math.floor(s / 60)).padStart(2,"0")}:${String(s % 60).padStart(2,"0")}`;
   }, 1000);
 
   if (hasVideo) {
@@ -1298,28 +875,24 @@ const _buildDMCallOverlay = ({ callId, localStream, type, role }) => {
 
   overlay.querySelector("#ccEnd").onclick = () => {
     clearInterval(timerInterval);
-    _endDMCall(callId, overlay, localStream);
+    _endCall(callId, overlay, localStream);
   };
 
   return overlay;
 };
 
-const _endDMCall = async (callId, overlay, localStream) => {
+const _endCall = async (callId, overlay, localStream) => {
   localStream?.getTracks().forEach(t => t.stop());
   if (_activeCall) {
     Object.values(_activeCall.peers || {}).forEach(pc => { try { pc.close(); } catch {} });
     (_activeCall.unsubs || []).forEach(u => { try { u(); } catch {} });
     _activeCall = null;
   }
-  sfxCallEnd();
-  overlay.classList.add("call-overlay-exit");
-  setTimeout(() => overlay.remove(), 320);
+  overlay.remove();
   await updateDoc(doc(db, "calls", callId), { status: "ended" }).catch(() => {});
 };
 
-// =========================================================================
-// Incoming call listener
-// =========================================================================
+// Incoming call notification listener
 const initCallListener = () => {
   onSnapshot(
     query(
@@ -1344,16 +917,10 @@ const _showIncomingBanner = async (n) => {
   if (document.getElementById(`icb_${n.callId}`)) return;
 
   const callSnap = await getDoc(doc(db, "calls", n.callId)).catch(() => null);
-  if (!callSnap?.exists()) return;
+  if (!callSnap?.exists() || callSnap.data().status !== "ringing") return;
   const call = callSnap.data();
-  if (!call.isGroup && call.status !== "ringing") return;
-  if (call.status === "ended") return;
 
   const caller = await fetchUser(call.callerId).catch(() => null);
-  const isGroup = !!call.isGroup;
-
-  sfxNotification();
-  const _stopRing = sfxCallRing();
 
   const banner = document.createElement("div");
   banner.className = "incoming-call-banner";
@@ -1362,12 +929,12 @@ const _showIncomingBanner = async (n) => {
     <img class="avatar md" src="${avatarFor(caller)}" alt="" />
     <div class="icb-info">
       <div class="icb-name">${caller?.name || n.fromName || "Someone"}</div>
-      <div class="icb-type">${isGroup ? "Voice" : (call.type === "video" ? "Video" : "Voice")} call${isGroup ? ` · ${call.groupName || "Group"}` : ""}</div>
+      <div class="icb-type">${call.type === "video" ? "Video" : "Voice"} call${call.isGroup ? " (Group)" : ""}</div>
     </div>
     <button class="call-ctrl danger" id="icbDecline_${n.callId}" title="Decline">
       <i class="ri-phone-fill" style="transform:rotate(135deg);"></i>
     </button>
-    <button class="call-ctrl accept" id="icbAccept_${n.callId}" title="${isGroup ? "Join" : "Answer"}">
+    <button class="call-ctrl accept" id="icbAccept_${n.callId}" title="Answer">
       <i class="ri-phone-fill"></i>
     </button>`;
   document.body.appendChild(banner);
@@ -1375,188 +942,30 @@ const _showIncomingBanner = async (n) => {
   const dismiss = setTimeout(() => banner.remove(), 30000);
 
   banner.querySelector(`#icbDecline_${n.callId}`).onclick = () => {
-    _stopRing(); clearTimeout(dismiss); banner.remove();
-    if (!isGroup) updateDoc(doc(db, "calls", n.callId), { status: "declined" }).catch(() => {});
+    clearTimeout(dismiss); banner.remove();
+    updateDoc(doc(db, "calls", n.callId), { status: "declined" }).catch(() => {});
   };
 
   banner.querySelector(`#icbAccept_${n.callId}`).onclick = async () => {
-    _stopRing(); clearTimeout(dismiss); banner.remove();
+    clearTimeout(dismiss); banner.remove();
     await answerCall(n.callId);
   };
 
-  if (!isGroup) {
-    const u = onSnapshot(doc(db, "calls", n.callId), snap => {
-      if (!snap.exists() || snap.data().status !== "ringing") {
-        _stopRing(); clearTimeout(dismiss); banner.remove(); u();
-      }
-    });
-  }
-};
-
-// =========================================================================
-// TIKTOK-STYLE TOAST NOTIFICATION POPUP
-// =========================================================================
-const _injectToastNotifStyles = (() => {
-  let _done = false;
-  return () => {
-    if (_done) return; _done = true;
-    const s = document.createElement("style");
-    s.textContent = `
-.orbit-toast-stack{position:fixed;top:0;left:50%;transform:translateX(-50%);
-  z-index:9500;display:flex;flex-direction:column;align-items:center;
-  gap:8px;padding-top:12px;pointer-events:none;width:min(420px,96vw);}
-.orbit-toast{pointer-events:all;display:flex;align-items:center;gap:12px;
-  padding:12px 16px;border-radius:20px;cursor:pointer;
-  background:rgba(15,15,25,.92);backdrop-filter:blur(16px) saturate(1.6);
-  border:1px solid rgba(255,255,255,.1);
-  box-shadow:0 8px 32px rgba(0,0,0,.45),0 2px 8px rgba(0,0,0,.3);
-  width:100%;max-width:420px;box-sizing:border-box;
-  transform:translateY(-110%);opacity:0;
-  transition:transform .38s cubic-bezier(.32,1,.32,1),opacity .28s ease;}
-.orbit-toast.orbit-toast-in{transform:translateY(0);opacity:1;}
-.orbit-toast.orbit-toast-out{transform:translateY(-115%);opacity:0;
-  transition:transform .3s cubic-bezier(.6,0,.4,1),opacity .22s ease;}
-.orbit-toast-av{width:42px;height:42px;border-radius:50%;object-fit:cover;
-  flex-shrink:0;border:2px solid rgba(255,255,255,.15);}
-.orbit-toast-av-icon{width:42px;height:42px;border-radius:50%;flex-shrink:0;
-  background:linear-gradient(135deg,#7c5cff,#ff5cae);
-  display:flex;align-items:center;justify-content:center;font-size:20px;}
-.orbit-toast-body{flex:1;min-width:0;}
-.orbit-toast-name{font-size:13px;font-weight:700;color:#fff;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.orbit-toast-msg{font-size:13px;color:rgba(255,255,255,.65);margin-top:2px;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.orbit-toast-app{font-size:11px;color:rgba(255,255,255,.35);margin-bottom:2px;
-  text-transform:uppercase;letter-spacing:.06em;}
-.orbit-toast-close{background:none;border:none;color:rgba(255,255,255,.4);
-  font-size:18px;cursor:pointer;padding:4px;flex-shrink:0;line-height:1;}
-.orbit-toast-close:hover{color:rgba(255,255,255,.8);}
-.orbit-toast-progress{position:absolute;bottom:0;left:0;height:2px;
-  border-radius:0 0 20px 20px;background:var(--primary,#7c5cff);
-  animation:toastProgress var(--tp-dur,4s) linear forwards;}
-@keyframes toastProgress{from{width:100%}to{width:0%}}
-    `.trim();
-    document.head.appendChild(s);
-  };
-})();
-
-let _toastStack = null;
-const _getToastStack = () => {
-  if (!_toastStack || !document.body.contains(_toastStack)) {
-    _toastStack = document.createElement("div");
-    _toastStack.className = "orbit-toast-stack";
-    document.body.appendChild(_toastStack);
-  }
-  return _toastStack;
-};
-
-export const showToastNotif = ({ avatar, icon, name, app = "Orbit", body, href, duration = 4000 }) => {
-  _injectToastNotifStyles();
-  const stack = _getToastStack();
-
-  const wrap = document.createElement("div");
-  wrap.className = "orbit-toast";
-  wrap.style.setProperty("--tp-dur", duration + "ms");
-  wrap.style.position = "relative";
-  wrap.style.overflow = "hidden";
-
-  const avEl = avatar
-    ? Object.assign(document.createElement("img"), { className: "orbit-toast-av", src: avatar, alt: "" })
-    : Object.assign(document.createElement("div"), { className: "orbit-toast-av-icon", textContent: icon || "🔔" });
-
-  const bodyEl = document.createElement("div");
-  bodyEl.className = "orbit-toast-body";
-  bodyEl.innerHTML = `
-    <div class="orbit-toast-app">${app}</div>
-    <div class="orbit-toast-name">${name || ""}</div>
-    <div class="orbit-toast-msg">${body || ""}</div>
-  `;
-
-  const closeBtn = document.createElement("button");
-  closeBtn.className = "orbit-toast-close";
-  closeBtn.innerHTML = '<i class="ri-close-line"></i>';
-
-  const progress = document.createElement("div");
-  progress.className = "orbit-toast-progress";
-
-  wrap.appendChild(avEl);
-  wrap.appendChild(bodyEl);
-  wrap.appendChild(closeBtn);
-  wrap.appendChild(progress);
-  stack.appendChild(wrap);
-
-  // Slide in
-  requestAnimationFrame(() => requestAnimationFrame(() => wrap.classList.add("orbit-toast-in")));
-
-  const dismiss = () => {
-    wrap.classList.add("orbit-toast-out");
-    wrap.classList.remove("orbit-toast-in");
-    setTimeout(() => wrap.remove(), 350);
-  };
-
-  const timer = setTimeout(dismiss, duration);
-
-  closeBtn.onclick = (e) => { e.stopPropagation(); clearTimeout(timer); dismiss(); };
-
-  if (href) {
-    wrap.onclick = () => { clearTimeout(timer); dismiss(); location.hash = href; };
-    wrap.style.cursor = "pointer";
-  }
-};
-
-// General notification listener — shows toast for messages, orbits, comments
-const _initToastListener = () => {
-  // Firebase functions are already imported at the top of this file
-  onSnapshot(
-    query(
-      collection(db, "notifications", state.uid, "items"),
-      where("read", "==", false),
-      limit(10),
-    ),
-    async snap => {
-      for (const change of snap.docChanges()) {
-        if (change.type !== "added") continue;
-        const n = { id: change.doc.id, ...change.doc.data() };
-        if (n.type === "call") continue; // handled separately in initCallListener
-
-        // Mark read so it doesn't re-fire on next load
-        updateDoc(doc(db, "notifications", state.uid, "items", n.id), { read: true }).catch(() => {});
-
-        let avatar = null, name = "Orbit", body = n.text || "", href = "";
-        try {
-          if (n.fromUid || n.fromName) {
-            const sender = n.fromUid ? await fetchUser(n.fromUid) : null;
-            avatar = sender ? avatarFor(sender) : null;
-            name = sender?.name || n.fromName || "Someone";
-          }
-          if (n.type === "message") {
-            href = "chats";
-            body = n.text || "Sent you a message";
-          } else if (n.type === "orbit") {
-            href = n.postId ? `post/${n.postId}` : "";
-            body = body || "Orbited your post 🔥";
-          } else if (n.type === "comment") {
-            href = n.postId ? `post/${n.postId}` : "";
-            body = body || "Commented on your post";
-          } else if (n.type === "follow") {
-            href = n.fromUid ? `profile/${n.fromUid}` : "";
-            body = body || "Started following you";
-          }
-        } catch {}
-
-        showToastNotif({ avatar, name, body, href, app: "Orbit" });
-      }
+  // Auto-dismiss when call state changes
+  const u = onSnapshot(doc(db, "calls", n.callId), snap => {
+    if (!snap.exists() || snap.data().status !== "ringing") {
+      clearTimeout(dismiss); banner.remove(); u();
     }
-  );
+  });
 };
 
 // =========================================================================
-// 4. INIT
+// 4. INIT — fires once auth is ready
 // =========================================================================
 document.addEventListener("orbit:auth-ready", () => {
   initCallListener();
-  _initToastListener();
 
+  // Watch for .feed-wrap appearing in #content and inject story bar
   const contentEl = document.getElementById("content") || document.body;
   const feedObserver = new MutationObserver(() => {
     const fw = contentEl.querySelector(".feed-wrap");
@@ -1564,15 +973,3 @@ document.addEventListener("orbit:auth-ready", () => {
   });
   feedObserver.observe(contentEl, { childList: true, subtree: true });
 });
-
-// ── Typing sound — fires on keydown inside any chat/comment input ─────────
-document.addEventListener("keydown", (e) => {
-  const tag = e.target.tagName;
-  if (tag !== "INPUT" && tag !== "TEXTAREA") return;
-  if (e.ctrlKey || e.metaKey || e.altKey) return;
-  if (e.key === "Enter" || e.key === "Tab") return;
-  // Only trigger inside message/comment inputs (not search, username, etc.)
-  const el = e.target;
-  const inChat = el.closest(".chat-input-area, .cmt-form, .comment-form, .compose-box, [data-chat-input]");
-  if (inChat) window.sfxTyping?.();
-}, { passive: true });
