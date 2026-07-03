@@ -28,7 +28,6 @@ export const injectStoryBar = (feedWrap) => {
   const bar = document.createElement("div");
   bar.className = "story-bar";
 
-  // "Your story" tile
   const myBtn = document.createElement("div");
   myBtn.className = "story-item my-story";
   myBtn.innerHTML = `
@@ -40,29 +39,36 @@ export const injectStoryBar = (feedWrap) => {
   myBtn.onclick = () => openStoryUploader();
   bar.appendChild(myBtn);
 
+  // allGroups is shared across snapshot updates so swiping always uses latest data
+  let _allGroups = [];
+
   const cutoff = Timestamp.fromMillis(Date.now() - STORY_TTL_MS);
   onSnapshot(
-    query(collection(db, "stories"), where("expiresAt", ">", cutoff), orderBy("expiresAt", "asc"), limit(60)),
+    query(collection(db, "stories"), where("expiresAt", ">", cutoff), limit(60)),
     async (snap) => {
       bar.querySelectorAll(".story-item:not(.my-story)").forEach(n => n.remove());
+      _allGroups = [];
+
+      const sorted = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (a.expiresAt?.toMillis?.() || 0) - (b.expiresAt?.toMillis?.() || 0));
 
       const byUser = new Map();
-      snap.docs.forEach(d => {
-        const s = { id: d.id, ...d.data() };
+      sorted.forEach(s => {
         if (!byUser.has(s.authorUid)) byUser.set(s.authorUid, []);
         byUser.get(s.authorUid).push(s);
       });
 
-      // My stories
+      // Own stories go first in the group list
       if (byUser.has(state.uid)) {
         const mine = byUser.get(state.uid);
+        _allGroups.push({ uid: state.uid, stories: mine });
         const hasUnseen = mine.some(s => !(s.viewers || []).includes(state.uid));
-        const ring = myBtn.querySelector(".story-ring");
-        ring.className = `story-ring ${hasUnseen ? "has-story" : "seen-story"}`;
-        myBtn.onclick = () => openStoryViewer(state.uid, mine);
+        myBtn.querySelector(".story-ring").className =
+          `story-ring ${hasUnseen ? "has-story" : "seen-story"}`;
+        myBtn.onclick = () => openStoryViewer([..._allGroups], 0);
       } else {
-        const ring = myBtn.querySelector(".story-ring");
-        ring.className = "story-ring no-story";
+        myBtn.querySelector(".story-ring").className = "story-ring no-story";
         myBtn.onclick = () => openStoryUploader();
       }
 
@@ -74,6 +80,8 @@ export const injectStoryBar = (feedWrap) => {
         const user = userMap[uid];
         if (!user) return;
         const stories = byUser.get(uid);
+        _allGroups.push({ uid, stories });
+        const gIdx = _allGroups.length - 1;
         const allSeen = stories.every(s => (s.viewers || []).includes(state.uid));
         const item = document.createElement("div");
         item.className = "story-item";
@@ -82,7 +90,7 @@ export const injectStoryBar = (feedWrap) => {
             <img class="story-av" src="${avatarFor(user)}" alt="" />
           </div>
           <span class="story-name">${(user.name || "User").split(" ")[0]}</span>`;
-        item.onclick = () => openStoryViewer(uid, stories);
+        item.onclick = () => openStoryViewer([..._allGroups], gIdx);
         bar.appendChild(item);
       });
     }
@@ -161,66 +169,278 @@ const openStoryUploader = () => {
   };
 };
 
-const openStoryViewer = (uid, stories) => {
-  if (!stories?.length) return;
-  let idx = 0;
+// allGroups: [{ uid, stories: [...] }, ...]
+// startGroupIdx: which user's stories to open first
+const openStoryViewer = (allGroups, startGroupIdx = 0) => {
+  if (!allGroups?.length) return;
+
+  let groupIdx = Math.min(startGroupIdx, allGroups.length - 1);
+  let storyIdx = 0;
   let timer = null;
+  let isPaused = false;
+  let elapsed = 0;
+  let timerStart = null;
+  const DURATION = 5000;
 
   const overlay = document.createElement("div");
   overlay.className = "story-viewer-overlay";
   document.body.appendChild(overlay);
 
-  const render = async () => {
+  // ── Pause / Resume ───────────────────────────────────────────────────────
+  const pauseStory = () => {
+    if (isPaused) return;
+    isPaused = true;
     clearTimeout(timer);
-    const s = stories[idx];
-    if (!s) { overlay.remove(); return; }
+    if (timerStart) { elapsed += Date.now() - timerStart; timerStart = null; }
+    const fill = overlay.querySelector(".story-seg.active .story-seg-fill");
+    if (fill) fill.style.animationPlayState = "paused";
+    const vid = overlay.querySelector("video");
+    if (vid && !vid.paused) vid.pause();
+  };
 
-    const segs = stories.map((_, i) =>
-      `<div class="story-seg ${i < idx ? "done" : i === idx ? "active" : ""}"><div class="story-seg-fill" style="${i === idx ? "animation:story-prog 5s linear forwards;" : ""}"></div></div>`
+  const resumeStory = () => {
+    if (!isPaused) return;
+    isPaused = false;
+    const fill = overlay.querySelector(".story-seg.active .story-seg-fill");
+    if (fill) fill.style.animationPlayState = "running";
+    const vid = overlay.querySelector("video");
+    if (vid) { vid.play().catch(() => {}); return; }
+    const remaining = Math.max(300, DURATION - elapsed);
+    timerStart = Date.now();
+    timer = setTimeout(() => { elapsed = 0; goNext(); }, remaining);
+  };
+
+  // ── Two-level navigation ─────────────────────────────────────────────────
+  const goNext = () => {
+    clearTimeout(timer); elapsed = 0;
+    const group = allGroups[groupIdx];
+    if (storyIdx < group.stories.length - 1) {
+      storyIdx++;
+      render(null);
+    } else if (groupIdx < allGroups.length - 1) {
+      groupIdx++; storyIdx = 0;
+      render("left"); // next user slides in from right
+    } else {
+      overlay.remove(); // end of all stories
+    }
+  };
+
+  const goPrev = () => {
+    clearTimeout(timer); elapsed = 0;
+    if (storyIdx > 0) {
+      storyIdx--;
+      render(null);
+    } else if (groupIdx > 0) {
+      groupIdx--; storyIdx = 0;
+      render("right"); // previous user slides in from left
+    }
+  };
+
+  // ── Touch: swipe between users + hold-to-pause ───────────────────────────
+  let _tx = 0, _ty = 0, _isSwipe = false, _wasHold = false, _holdTimer = null;
+
+  overlay.addEventListener("touchstart", (e) => {
+    _tx = e.touches[0].clientX;
+    _ty = e.touches[0].clientY;
+    _isSwipe = false; _wasHold = false;
+    _holdTimer = setTimeout(() => { _wasHold = true; pauseStory(); }, 200);
+  }, { passive: true });
+
+  overlay.addEventListener("touchmove", (e) => {
+    if (Math.abs(e.touches[0].clientX - _tx) > 12) {
+      _isSwipe = true; clearTimeout(_holdTimer);
+    }
+  }, { passive: true });
+
+  overlay.addEventListener("touchend", (e) => {
+    clearTimeout(_holdTimer);
+    if (_wasHold) { resumeStory(); return; }     // release from hold
+    if (_isSwipe) {                               // horizontal swipe → change user
+      const dx = e.changedTouches[0].clientX - _tx;
+      const dy = e.changedTouches[0].clientY - _ty;
+      if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
+        dx < 0 ? goNext() : goPrev();
+      }
+    }
+    // plain tap handled by click on tap-zones below
+  });
+
+  // Desktop hold-to-pause
+  let _mHold = null;
+  overlay.addEventListener("mousedown", () => { _mHold = setTimeout(pauseStory, 200); });
+  overlay.addEventListener("mouseup",   () => { clearTimeout(_mHold); resumeStory(); });
+
+  // ── Main render ──────────────────────────────────────────────────────────
+  const render = async (slideDir) => {
+    clearTimeout(timer);
+    isPaused = false; elapsed = 0; timerStart = null;
+
+    const group = allGroups[groupIdx];
+    if (!group) { overlay.remove(); return; }
+    const s = group.stories[storyIdx];
+    if (!s) { overlay.remove(); return; }
+    const isOwn = group.uid === state.uid;
+    const viewers = s.viewers || [];
+
+    const user = await fetchUser(group.uid).catch(() => null);
+
+    const segs = group.stories.map((_, i) =>
+      `<div class="story-seg ${i < storyIdx ? "done" : i === storyIdx ? "active" : ""}">` +
+      `<div class="story-seg-fill" style="${i === storyIdx ? `animation:story-prog ${DURATION / 1000}s linear forwards;` : ""}"></div></div>`
     ).join("");
 
-    const user = await fetchUser(uid).catch(() => null);
+    const menuBtnHtml = isOwn
+      ? `<button class="icon-btn story-menu-btn" style="color:#fff;margin-left:4px;"><i class="ri-more-line"></i></button>`
+      : "";
+
+    const viewerBarHtml = isOwn && viewers.length > 0
+      ? `<div class="story-viewer-bar" id="storyViewerBar">
+           <div class="story-viewer-bar-avatars"></div>
+           <span class="story-viewer-bar-count"><i class="ri-eye-line"></i> ${viewers.length}</span>
+         </div>`
+      : "";
 
     overlay.innerHTML = `
-      <div class="story-viewer">
+      <div class="story-viewer${slideDir ? ` story-slide-${slideDir}` : ""}">
         <div class="story-segs">${segs}</div>
         <div class="story-viewer-head">
           <img class="story-av" src="${avatarFor(user)}" style="width:36px;height:36px;border-radius:50%;border:2px solid white;" />
           <div class="story-viewer-uname">${user?.name || "User"}</div>
           <div style="margin-left:auto;font-size:12px;color:rgba(255,255,255,.7);">${fmtTime(s.createdAt)}</div>
+          ${menuBtnHtml}
           <button class="icon-btn story-viewer-close" style="color:#fff;margin-left:8px;"><i class="ri-close-line"></i></button>
         </div>
         <div class="story-viewer-media">
           ${s.mediaType === "video" && s.mediaUrl
-            ? `<video src="${s.mediaUrl}" autoplay muted playsinline loop style="width:100%;height:100%;object-fit:cover;"></video>`
+            ? `<video src="${s.mediaUrl}" autoplay playsinline style="width:100%;height:100%;object-fit:cover;"></video>`
             : s.mediaUrl
             ? `<img src="${s.mediaUrl}" style="width:100%;height:100%;object-fit:cover;" />`
             : `<div class="story-text-card">${s.caption || ""}</div>`}
         </div>
         ${s.caption && s.mediaUrl ? `<div class="story-viewer-caption">${s.caption}</div>` : ""}
+        ${viewerBarHtml}
         <div class="story-tap-zones">
           <div class="story-tap-prev"></div>
           <div class="story-tap-next"></div>
         </div>
       </div>`;
 
-    overlay.querySelector(".story-viewer-close").onclick = () => { clearTimeout(timer); overlay.remove(); };
-    overlay.querySelector(".story-tap-prev").onclick = () => { idx = Math.max(0, idx - 1); render(); };
-    overlay.querySelector(".story-tap-next").onclick = () => { idx++; render(); };
+    overlay.querySelector(".story-viewer-close").onclick = (e) => {
+      e.stopPropagation(); clearTimeout(timer); overlay.remove();
+    };
 
-    if (s.mediaType !== "video") {
-      timer = setTimeout(() => { idx++; render(); }, 5000);
-    } else {
-      const vid = overlay.querySelector("video");
-      if (vid) vid.onended = () => { idx++; render(); };
+    // Click-based tap nav (desktop + mobile tap — swipe handled by touchend)
+    overlay.querySelector(".story-tap-prev").addEventListener("click", (e) => {
+      if (_isSwipe || _wasHold) return; // swipe/hold already handled
+      e.stopPropagation(); goPrev();
+    });
+    overlay.querySelector(".story-tap-next").addEventListener("click", (e) => {
+      if (_isSwipe || _wasHold) return;
+      e.stopPropagation(); goNext();
+    });
+
+    // ── 3-dot menu ────────────────────────────────────────────────────────
+    if (isOwn) {
+      const mb = overlay.querySelector(".story-menu-btn");
+      if (mb) {
+        mb.onclick = (e) => {
+          e.stopPropagation(); pauseStory();
+          const ex = overlay.querySelector(".story-ctx-menu");
+          if (ex) { ex.remove(); resumeStory(); return; }
+          const menu = document.createElement("div");
+          menu.className = "story-ctx-menu";
+          menu.innerHTML = `
+            <button class="story-ctx-item"><i class="ri-add-circle-line"></i> Add to story</button>
+            <button class="story-ctx-item story-ctx-danger"><i class="ri-delete-bin-line"></i> Delete this story</button>`;
+          menu.querySelector(".story-ctx-item").onclick = (e) => {
+            e.stopPropagation(); clearTimeout(timer); overlay.remove(); openStoryUploader();
+          };
+          menu.querySelector(".story-ctx-danger").onclick = async (e) => {
+            e.stopPropagation();
+            try {
+              await deleteDoc(doc(db, "stories", s.id));
+              group.stories.splice(storyIdx, 1);
+              if (!group.stories.length) {
+                allGroups.splice(groupIdx, 1);
+                if (!allGroups.length) { clearTimeout(timer); overlay.remove(); return; }
+                if (groupIdx >= allGroups.length) groupIdx = allGroups.length - 1;
+                storyIdx = 0;
+              } else {
+                if (storyIdx >= group.stories.length) storyIdx = group.stories.length - 1;
+              }
+              render(null);
+            } catch { toast("Delete failed"); resumeStory(); }
+          };
+          mb.insertAdjacentElement("afterend", menu);
+        };
+      }
+
+      // ── Viewer avatars ─────────────────────────────────────────────────
+      const vBar = overlay.querySelector("#storyViewerBar");
+      if (vBar && viewers.length > 0) {
+        const avatarWrap = vBar.querySelector(".story-viewer-bar-avatars");
+        Promise.all(viewers.slice(0, 3).map(vUid => fetchUser(vUid).catch(() => null))).then(us => {
+          avatarWrap.innerHTML = "";
+          us.filter(Boolean).forEach(u => {
+            avatarWrap.appendChild(Object.assign(document.createElement("img"), {
+              className: "story-viewer-av", src: avatarFor(u), title: u.name || "User",
+            }));
+          });
+          const rest = viewers.length - 3;
+          if (rest > 0) avatarWrap.appendChild(Object.assign(document.createElement("span"), {
+            className: "story-viewer-more", textContent: `+${rest}`,
+          }));
+        });
+        vBar.style.cursor = "pointer";
+        vBar.onclick = (e) => { e.stopPropagation(); pauseStory(); _showAllViewers(viewers, overlay, resumeStory); };
+      }
     }
 
-    if (!(s.viewers || []).includes(state.uid)) {
+    // ── Video: audio ON, autoplay with mute fallback ─────────────────────
+    if (s.mediaType === "video") {
+      const vid = overlay.querySelector("video");
+      if (vid) {
+        vid.play().catch(() => { vid.muted = true; vid.play().catch(() => {}); });
+        vid.onended = () => goNext();
+      }
+    } else {
+      timerStart = Date.now();
+      timer = setTimeout(() => { elapsed = 0; goNext(); }, DURATION);
+    }
+
+    // Mark viewed
+    if (!viewers.includes(state.uid)) {
       updateDoc(doc(db, "stories", s.id), { viewers: arrayUnion(state.uid) }).catch(() => {});
     }
   };
 
-  render();
+  render(null);
+};
+
+// Full viewer list sheet
+const _showAllViewers = async (viewerUids, overlay, onClose) => {
+  const existing = overlay.querySelector(".story-viewers-sheet");
+  if (existing) { existing.remove(); onClose(); return; }
+  const sheet = document.createElement("div");
+  sheet.className = "story-viewers-sheet";
+  sheet.innerHTML = `
+    <div class="story-viewers-head">
+      <span><i class="ri-eye-line"></i> Viewed by ${viewerUids.length}</span>
+      <button class="icon-btn" style="color:#fff;"><i class="ri-close-line"></i></button>
+    </div>
+    <div class="story-viewers-list"><div style="color:rgba(255,255,255,.6);padding:20px;text-align:center;">Loading…</div></div>`;
+  sheet.querySelector("button").onclick = (e) => { e.stopPropagation(); sheet.remove(); onClose(); };
+  overlay.querySelector(".story-viewer").appendChild(sheet);
+  const list = sheet.querySelector(".story-viewers-list");
+  const users = await Promise.all(viewerUids.map(vUid => fetchUser(vUid).catch(() => null)));
+  list.innerHTML = "";
+  users.filter(Boolean).forEach(u => {
+    const row = document.createElement("div");
+    row.className = "story-viewer-row";
+    row.innerHTML = `<img class="avatar sm" src="${avatarFor(u)}" /><span>${u.name || "User"}</span>`;
+    row.onclick = (e) => { e.stopPropagation(); overlay.remove(); location.hash = `#profile/${u.uid}`; };
+    list.appendChild(row);
+  });
 };
 
 // =========================================================================
@@ -509,9 +729,6 @@ export const startCall = async ({ peerId, chatId, isGroup, type = "voice" }) => 
       text: `${state.me?.name || "Someone"} is calling you`,
       callId,
     }).catch(() => {});
-    import("./notifications.js").then(({ notifyUser }) =>
-      notifyUser(peerId, state.me?.name || "Someone", `is calling you`, "/#chats")
-    ).catch(() => {});
   }
 
   const overlay = _buildCallOverlay({ callId, localStream, isGroup, type, chatId, role: "caller" });
