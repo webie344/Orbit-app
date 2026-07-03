@@ -117,7 +117,14 @@ html[data-theme="light"] .chat-view { --chat-veil: rgba(255, 255, 255, 0.55); }
 }
 /* On mobile (≤640px) the topbar is hidden so chats fill full viewport */
 @media (max-width: 640px) {
-  .chats-route { height: 100dvh; }
+  .chats-route {
+    height: 100dvh;
+    overscroll-behavior: contain;
+  }
+  /* Prevent the on-screen keyboard from pushing/scrolling the whole page —
+     chat.js pins this element's height to window.visualViewport at runtime. */
+  .chat-view { overscroll-behavior: contain; }
+  .messages { overscroll-behavior: contain; }
 }
 
 /* ---------- Messages list ---------- */

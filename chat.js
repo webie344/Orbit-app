@@ -492,10 +492,20 @@ const renderChatView = ({ isGroup, chatId, peer, group }) => {
     el("button", { class: "icon-btn back", onclick: () => $("#chatsRoute").classList.remove("is-open") },
       el("i", { class: "ri-arrow-left-line" })),
     el("img", { class: "avatar md",
-      src: isGroup ? `https://api.dicebear.com/7.x/shapes/svg?seed=${chatId}` : avatarFor(peer),
-      onclick: () => isGroup ? null : (location.hash = `#profile/${peer.uid}`),
+      src: isGroup
+        ? (group.photoURL || `https://api.dicebear.com/7.x/shapes/svg?seed=${chatId}`)
+        : avatarFor(peer),
+      style: "cursor:pointer;",
+      onclick: () => isGroup
+        ? import("./additional.js").then(m => m.openGroupInfo(chatId, group))
+        : (location.hash = `#profile/${peer.uid}`),
     }),
-    el("div", { class: "info" },
+    el("div", { class: "info",
+      style: isGroup ? "cursor:pointer;" : "",
+      onclick: isGroup
+        ? () => import("./additional.js").then(m => m.openGroupInfo(chatId, group))
+        : null,
+    },
       el("div", { class: "name" }, isGroup ? group.name : peer.name,
         !isGroup && peer.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null),
       el("div", { class: "sub", id: "chatSub" },
@@ -506,7 +516,6 @@ const renderChatView = ({ isGroup, chatId, peer, group }) => {
       el("button", { class: "icon-btn call-btn-desktop", title: "Voice call",
         onclick: () => import("./additional.js").then(m => m.startCall({ peerId: isGroup ? null : peer?.uid, chatId, isGroup, type: "voice" })) },
         el("i", { class: "ri-phone-line" })),
-      // Video call — DMs only, hidden for group chats
       !isGroup ? el("button", { class: "icon-btn call-btn-desktop", title: "Video call",
         onclick: () => import("./additional.js").then(m => m.startCall({ peerId: peer?.uid, chatId, isGroup: false, type: "video" })) },
         el("i", { class: "ri-vidicon-line" })) : null,
@@ -590,6 +599,35 @@ const renderChatView = ({ isGroup, chatId, peer, group }) => {
   bottomBar.appendChild(composer);
   view.appendChild(bottomBar);
 
+  // ── Mobile keyboard fix ──────────────────────────────────────────────
+  // On mobile, focusing the composer opens the on-screen keyboard which
+  // shrinks the visual viewport. Some browsers respond by scrolling the
+  // whole document instead of just the message list, which detaches the
+  // header/composer from view. Pin the chats route to the live visual
+  // viewport height and keep the page scroll locked at 0 while the
+  // keyboard is open.
+  const chatsRouteEl = $("#chatsRoute");
+  const vv = window.visualViewport;
+  if (vv && chatsRouteEl) {
+    const syncViewport = () => {
+      chatsRouteEl.style.height = vv.height + "px";
+      window.scrollTo(0, 0);
+      const msgsEl = $("#messages");
+      if (msgsEl) msgsEl.scrollTop = msgsEl.scrollHeight;
+    };
+    vv.addEventListener("resize", syncViewport);
+    vv.addEventListener("scroll", syncViewport);
+    composerField.addEventListener("focus", syncViewport);
+    // Clean up when this chat view is torn down (route change / new chat opened)
+    const cleanup = () => {
+      vv.removeEventListener("resize", syncViewport);
+      vv.removeEventListener("scroll", syncViewport);
+      chatsRouteEl.style.height = "";
+    };
+    window.addEventListener("hashchange", cleanup, { once: true });
+    syncViewport();
+  }
+
   // Restore draft
   const draft = localStorage.getItem(`orbit:draft:${chatId}`);
   if (draft) {
@@ -668,6 +706,16 @@ const renderChatView = ({ isGroup, chatId, peer, group }) => {
 
       if (isGroup) {
         await updateDoc(doc(db, "groups", chatId), { lastMessage: text || "[media]", lastMessageAt: serverTimestamp() });
+        // Notify all other group members — in-app bell + push notification
+        const otherMembers = (group?.members || []).filter((uid) => uid !== state.uid);
+        const preview = (text || "[media]").slice(0, 60);
+        const groupName = group?.name || "your group";
+        otherMembers.forEach((uid) => {
+          writeNotif(uid, "groupMessage", { groupId: chatId, text: `${state.me?.name || "Someone"} in ${groupName}: "${preview}"` }).catch(() => {});
+        });
+        import("./notifications.js").then(({ notifyUser }) => {
+          otherMembers.forEach((uid) => notifyUser(uid, groupName, `${state.me?.name || "Someone"}: ${preview}`, "/#chats/" + chatId).catch(() => {}));
+        }).catch(() => {});
       } else {
         const updateMeta = async (forUid, otherUid, isMe) => {
           const ref = doc(db, "users", forUid, "chats", chatId);
@@ -1411,6 +1459,17 @@ const chatHeaderMenu = ({ isGroup, chatId, peer, group }) => {
   // Video call button only for DMs — groups use voice-only via Agora
   if (!isGroup) {
     callRow.appendChild(mkCallBtn("ri-vidicon-line", "Video", "video"));
+  }
+  // Group Info button — groups only, sits right next to the call button
+  if (isGroup) {
+    const infoBtn = document.createElement("button");
+    infoBtn.className = "cis-call-btn";
+    infoBtn.innerHTML = `<span class="cis-call-icon"><i class="ri-information-line"></i></span><span>Group Info</span>`;
+    infoBtn.onclick = () => {
+      close();
+      import("./additional.js").then(m => m.openGroupInfo(chatId, group));
+    };
+    callRow.appendChild(infoBtn);
   }
   sheet.appendChild(callRow);
 

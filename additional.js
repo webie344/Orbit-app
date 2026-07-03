@@ -28,6 +28,7 @@ export const injectStoryBar = (feedWrap) => {
   const bar = document.createElement("div");
   bar.className = "story-bar";
 
+  // "Your story" tile
   const myBtn = document.createElement("div");
   myBtn.className = "story-item my-story";
   myBtn.innerHTML = `
@@ -39,36 +40,29 @@ export const injectStoryBar = (feedWrap) => {
   myBtn.onclick = () => openStoryUploader();
   bar.appendChild(myBtn);
 
-  // allGroups is shared across snapshot updates so swiping always uses latest data
-  let _allGroups = [];
-
   const cutoff = Timestamp.fromMillis(Date.now() - STORY_TTL_MS);
   onSnapshot(
-    query(collection(db, "stories"), where("expiresAt", ">", cutoff), limit(60)),
+    query(collection(db, "stories"), where("expiresAt", ">", cutoff), orderBy("expiresAt", "asc"), limit(60)),
     async (snap) => {
       bar.querySelectorAll(".story-item:not(.my-story)").forEach(n => n.remove());
-      _allGroups = [];
-
-      const sorted = snap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .sort((a, b) => (a.expiresAt?.toMillis?.() || 0) - (b.expiresAt?.toMillis?.() || 0));
 
       const byUser = new Map();
-      sorted.forEach(s => {
+      snap.docs.forEach(d => {
+        const s = { id: d.id, ...d.data() };
         if (!byUser.has(s.authorUid)) byUser.set(s.authorUid, []);
         byUser.get(s.authorUid).push(s);
       });
 
-      // Own stories go first in the group list
+      // My stories
       if (byUser.has(state.uid)) {
         const mine = byUser.get(state.uid);
-        _allGroups.push({ uid: state.uid, stories: mine });
         const hasUnseen = mine.some(s => !(s.viewers || []).includes(state.uid));
-        myBtn.querySelector(".story-ring").className =
-          `story-ring ${hasUnseen ? "has-story" : "seen-story"}`;
-        myBtn.onclick = () => openStoryViewer([..._allGroups], 0);
+        const ring = myBtn.querySelector(".story-ring");
+        ring.className = `story-ring ${hasUnseen ? "has-story" : "seen-story"}`;
+        myBtn.onclick = () => openStoryViewer(state.uid, mine);
       } else {
-        myBtn.querySelector(".story-ring").className = "story-ring no-story";
+        const ring = myBtn.querySelector(".story-ring");
+        ring.className = "story-ring no-story";
         myBtn.onclick = () => openStoryUploader();
       }
 
@@ -80,8 +74,6 @@ export const injectStoryBar = (feedWrap) => {
         const user = userMap[uid];
         if (!user) return;
         const stories = byUser.get(uid);
-        _allGroups.push({ uid, stories });
-        const gIdx = _allGroups.length - 1;
         const allSeen = stories.every(s => (s.viewers || []).includes(state.uid));
         const item = document.createElement("div");
         item.className = "story-item";
@@ -90,7 +82,7 @@ export const injectStoryBar = (feedWrap) => {
             <img class="story-av" src="${avatarFor(user)}" alt="" />
           </div>
           <span class="story-name">${(user.name || "User").split(" ")[0]}</span>`;
-        item.onclick = () => openStoryViewer([..._allGroups], gIdx);
+        item.onclick = () => openStoryViewer(uid, stories);
         bar.appendChild(item);
       });
     }
@@ -169,278 +161,66 @@ const openStoryUploader = () => {
   };
 };
 
-// allGroups: [{ uid, stories: [...] }, ...]
-// startGroupIdx: which user's stories to open first
-const openStoryViewer = (allGroups, startGroupIdx = 0) => {
-  if (!allGroups?.length) return;
-
-  let groupIdx = Math.min(startGroupIdx, allGroups.length - 1);
-  let storyIdx = 0;
+const openStoryViewer = (uid, stories) => {
+  if (!stories?.length) return;
+  let idx = 0;
   let timer = null;
-  let isPaused = false;
-  let elapsed = 0;
-  let timerStart = null;
-  const DURATION = 5000;
 
   const overlay = document.createElement("div");
   overlay.className = "story-viewer-overlay";
   document.body.appendChild(overlay);
 
-  // ── Pause / Resume ───────────────────────────────────────────────────────
-  const pauseStory = () => {
-    if (isPaused) return;
-    isPaused = true;
+  const render = async () => {
     clearTimeout(timer);
-    if (timerStart) { elapsed += Date.now() - timerStart; timerStart = null; }
-    const fill = overlay.querySelector(".story-seg.active .story-seg-fill");
-    if (fill) fill.style.animationPlayState = "paused";
-    const vid = overlay.querySelector("video");
-    if (vid && !vid.paused) vid.pause();
-  };
-
-  const resumeStory = () => {
-    if (!isPaused) return;
-    isPaused = false;
-    const fill = overlay.querySelector(".story-seg.active .story-seg-fill");
-    if (fill) fill.style.animationPlayState = "running";
-    const vid = overlay.querySelector("video");
-    if (vid) { vid.play().catch(() => {}); return; }
-    const remaining = Math.max(300, DURATION - elapsed);
-    timerStart = Date.now();
-    timer = setTimeout(() => { elapsed = 0; goNext(); }, remaining);
-  };
-
-  // ── Two-level navigation ─────────────────────────────────────────────────
-  const goNext = () => {
-    clearTimeout(timer); elapsed = 0;
-    const group = allGroups[groupIdx];
-    if (storyIdx < group.stories.length - 1) {
-      storyIdx++;
-      render(null);
-    } else if (groupIdx < allGroups.length - 1) {
-      groupIdx++; storyIdx = 0;
-      render("left"); // next user slides in from right
-    } else {
-      overlay.remove(); // end of all stories
-    }
-  };
-
-  const goPrev = () => {
-    clearTimeout(timer); elapsed = 0;
-    if (storyIdx > 0) {
-      storyIdx--;
-      render(null);
-    } else if (groupIdx > 0) {
-      groupIdx--; storyIdx = 0;
-      render("right"); // previous user slides in from left
-    }
-  };
-
-  // ── Touch: swipe between users + hold-to-pause ───────────────────────────
-  let _tx = 0, _ty = 0, _isSwipe = false, _wasHold = false, _holdTimer = null;
-
-  overlay.addEventListener("touchstart", (e) => {
-    _tx = e.touches[0].clientX;
-    _ty = e.touches[0].clientY;
-    _isSwipe = false; _wasHold = false;
-    _holdTimer = setTimeout(() => { _wasHold = true; pauseStory(); }, 200);
-  }, { passive: true });
-
-  overlay.addEventListener("touchmove", (e) => {
-    if (Math.abs(e.touches[0].clientX - _tx) > 12) {
-      _isSwipe = true; clearTimeout(_holdTimer);
-    }
-  }, { passive: true });
-
-  overlay.addEventListener("touchend", (e) => {
-    clearTimeout(_holdTimer);
-    if (_wasHold) { resumeStory(); return; }     // release from hold
-    if (_isSwipe) {                               // horizontal swipe → change user
-      const dx = e.changedTouches[0].clientX - _tx;
-      const dy = e.changedTouches[0].clientY - _ty;
-      if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
-        dx < 0 ? goNext() : goPrev();
-      }
-    }
-    // plain tap handled by click on tap-zones below
-  });
-
-  // Desktop hold-to-pause
-  let _mHold = null;
-  overlay.addEventListener("mousedown", () => { _mHold = setTimeout(pauseStory, 200); });
-  overlay.addEventListener("mouseup",   () => { clearTimeout(_mHold); resumeStory(); });
-
-  // ── Main render ──────────────────────────────────────────────────────────
-  const render = async (slideDir) => {
-    clearTimeout(timer);
-    isPaused = false; elapsed = 0; timerStart = null;
-
-    const group = allGroups[groupIdx];
-    if (!group) { overlay.remove(); return; }
-    const s = group.stories[storyIdx];
+    const s = stories[idx];
     if (!s) { overlay.remove(); return; }
-    const isOwn = group.uid === state.uid;
-    const viewers = s.viewers || [];
 
-    const user = await fetchUser(group.uid).catch(() => null);
-
-    const segs = group.stories.map((_, i) =>
-      `<div class="story-seg ${i < storyIdx ? "done" : i === storyIdx ? "active" : ""}">` +
-      `<div class="story-seg-fill" style="${i === storyIdx ? `animation:story-prog ${DURATION / 1000}s linear forwards;` : ""}"></div></div>`
+    const segs = stories.map((_, i) =>
+      `<div class="story-seg ${i < idx ? "done" : i === idx ? "active" : ""}"><div class="story-seg-fill" style="${i === idx ? "animation:story-prog 5s linear forwards;" : ""}"></div></div>`
     ).join("");
 
-    const menuBtnHtml = isOwn
-      ? `<button class="icon-btn story-menu-btn" style="color:#fff;margin-left:4px;"><i class="ri-more-line"></i></button>`
-      : "";
-
-    const viewerBarHtml = isOwn && viewers.length > 0
-      ? `<div class="story-viewer-bar" id="storyViewerBar">
-           <div class="story-viewer-bar-avatars"></div>
-           <span class="story-viewer-bar-count"><i class="ri-eye-line"></i> ${viewers.length}</span>
-         </div>`
-      : "";
+    const user = await fetchUser(uid).catch(() => null);
 
     overlay.innerHTML = `
-      <div class="story-viewer${slideDir ? ` story-slide-${slideDir}` : ""}">
+      <div class="story-viewer">
         <div class="story-segs">${segs}</div>
         <div class="story-viewer-head">
           <img class="story-av" src="${avatarFor(user)}" style="width:36px;height:36px;border-radius:50%;border:2px solid white;" />
           <div class="story-viewer-uname">${user?.name || "User"}</div>
           <div style="margin-left:auto;font-size:12px;color:rgba(255,255,255,.7);">${fmtTime(s.createdAt)}</div>
-          ${menuBtnHtml}
           <button class="icon-btn story-viewer-close" style="color:#fff;margin-left:8px;"><i class="ri-close-line"></i></button>
         </div>
         <div class="story-viewer-media">
           ${s.mediaType === "video" && s.mediaUrl
-            ? `<video src="${s.mediaUrl}" autoplay playsinline style="width:100%;height:100%;object-fit:cover;"></video>`
+            ? `<video src="${s.mediaUrl}" autoplay muted playsinline loop style="width:100%;height:100%;object-fit:cover;"></video>`
             : s.mediaUrl
             ? `<img src="${s.mediaUrl}" style="width:100%;height:100%;object-fit:cover;" />`
             : `<div class="story-text-card">${s.caption || ""}</div>`}
         </div>
         ${s.caption && s.mediaUrl ? `<div class="story-viewer-caption">${s.caption}</div>` : ""}
-        ${viewerBarHtml}
         <div class="story-tap-zones">
           <div class="story-tap-prev"></div>
           <div class="story-tap-next"></div>
         </div>
       </div>`;
 
-    overlay.querySelector(".story-viewer-close").onclick = (e) => {
-      e.stopPropagation(); clearTimeout(timer); overlay.remove();
-    };
+    overlay.querySelector(".story-viewer-close").onclick = () => { clearTimeout(timer); overlay.remove(); };
+    overlay.querySelector(".story-tap-prev").onclick = () => { idx = Math.max(0, idx - 1); render(); };
+    overlay.querySelector(".story-tap-next").onclick = () => { idx++; render(); };
 
-    // Click-based tap nav (desktop + mobile tap — swipe handled by touchend)
-    overlay.querySelector(".story-tap-prev").addEventListener("click", (e) => {
-      if (_isSwipe || _wasHold) return; // swipe/hold already handled
-      e.stopPropagation(); goPrev();
-    });
-    overlay.querySelector(".story-tap-next").addEventListener("click", (e) => {
-      if (_isSwipe || _wasHold) return;
-      e.stopPropagation(); goNext();
-    });
-
-    // ── 3-dot menu ────────────────────────────────────────────────────────
-    if (isOwn) {
-      const mb = overlay.querySelector(".story-menu-btn");
-      if (mb) {
-        mb.onclick = (e) => {
-          e.stopPropagation(); pauseStory();
-          const ex = overlay.querySelector(".story-ctx-menu");
-          if (ex) { ex.remove(); resumeStory(); return; }
-          const menu = document.createElement("div");
-          menu.className = "story-ctx-menu";
-          menu.innerHTML = `
-            <button class="story-ctx-item"><i class="ri-add-circle-line"></i> Add to story</button>
-            <button class="story-ctx-item story-ctx-danger"><i class="ri-delete-bin-line"></i> Delete this story</button>`;
-          menu.querySelector(".story-ctx-item").onclick = (e) => {
-            e.stopPropagation(); clearTimeout(timer); overlay.remove(); openStoryUploader();
-          };
-          menu.querySelector(".story-ctx-danger").onclick = async (e) => {
-            e.stopPropagation();
-            try {
-              await deleteDoc(doc(db, "stories", s.id));
-              group.stories.splice(storyIdx, 1);
-              if (!group.stories.length) {
-                allGroups.splice(groupIdx, 1);
-                if (!allGroups.length) { clearTimeout(timer); overlay.remove(); return; }
-                if (groupIdx >= allGroups.length) groupIdx = allGroups.length - 1;
-                storyIdx = 0;
-              } else {
-                if (storyIdx >= group.stories.length) storyIdx = group.stories.length - 1;
-              }
-              render(null);
-            } catch { toast("Delete failed"); resumeStory(); }
-          };
-          mb.insertAdjacentElement("afterend", menu);
-        };
-      }
-
-      // ── Viewer avatars ─────────────────────────────────────────────────
-      const vBar = overlay.querySelector("#storyViewerBar");
-      if (vBar && viewers.length > 0) {
-        const avatarWrap = vBar.querySelector(".story-viewer-bar-avatars");
-        Promise.all(viewers.slice(0, 3).map(vUid => fetchUser(vUid).catch(() => null))).then(us => {
-          avatarWrap.innerHTML = "";
-          us.filter(Boolean).forEach(u => {
-            avatarWrap.appendChild(Object.assign(document.createElement("img"), {
-              className: "story-viewer-av", src: avatarFor(u), title: u.name || "User",
-            }));
-          });
-          const rest = viewers.length - 3;
-          if (rest > 0) avatarWrap.appendChild(Object.assign(document.createElement("span"), {
-            className: "story-viewer-more", textContent: `+${rest}`,
-          }));
-        });
-        vBar.style.cursor = "pointer";
-        vBar.onclick = (e) => { e.stopPropagation(); pauseStory(); _showAllViewers(viewers, overlay, resumeStory); };
-      }
-    }
-
-    // ── Video: audio ON, autoplay with mute fallback ─────────────────────
-    if (s.mediaType === "video") {
-      const vid = overlay.querySelector("video");
-      if (vid) {
-        vid.play().catch(() => { vid.muted = true; vid.play().catch(() => {}); });
-        vid.onended = () => goNext();
-      }
+    if (s.mediaType !== "video") {
+      timer = setTimeout(() => { idx++; render(); }, 5000);
     } else {
-      timerStart = Date.now();
-      timer = setTimeout(() => { elapsed = 0; goNext(); }, DURATION);
+      const vid = overlay.querySelector("video");
+      if (vid) vid.onended = () => { idx++; render(); };
     }
 
-    // Mark viewed
-    if (!viewers.includes(state.uid)) {
+    if (!(s.viewers || []).includes(state.uid)) {
       updateDoc(doc(db, "stories", s.id), { viewers: arrayUnion(state.uid) }).catch(() => {});
     }
   };
 
-  render(null);
-};
-
-// Full viewer list sheet
-const _showAllViewers = async (viewerUids, overlay, onClose) => {
-  const existing = overlay.querySelector(".story-viewers-sheet");
-  if (existing) { existing.remove(); onClose(); return; }
-  const sheet = document.createElement("div");
-  sheet.className = "story-viewers-sheet";
-  sheet.innerHTML = `
-    <div class="story-viewers-head">
-      <span><i class="ri-eye-line"></i> Viewed by ${viewerUids.length}</span>
-      <button class="icon-btn" style="color:#fff;"><i class="ri-close-line"></i></button>
-    </div>
-    <div class="story-viewers-list"><div style="color:rgba(255,255,255,.6);padding:20px;text-align:center;">Loading…</div></div>`;
-  sheet.querySelector("button").onclick = (e) => { e.stopPropagation(); sheet.remove(); onClose(); };
-  overlay.querySelector(".story-viewer").appendChild(sheet);
-  const list = sheet.querySelector(".story-viewers-list");
-  const users = await Promise.all(viewerUids.map(vUid => fetchUser(vUid).catch(() => null)));
-  list.innerHTML = "";
-  users.filter(Boolean).forEach(u => {
-    const row = document.createElement("div");
-    row.className = "story-viewer-row";
-    row.innerHTML = `<img class="avatar sm" src="${avatarFor(u)}" /><span>${u.name || "User"}</span>`;
-    row.onclick = (e) => { e.stopPropagation(); overlay.remove(); location.hash = `#profile/${u.uid}`; };
-    list.appendChild(row);
-  });
+  render();
 };
 
 // =========================================================================
@@ -466,15 +246,15 @@ export const renderNotifications = (root) => {
 
   const iconMap = {
     orbit: "ri-fire-fill", follow: "ri-user-follow-fill", message: "ri-chat-1-fill",
-    comment: "ri-chat-4-fill", experience: "ri-sparkling-fill", call: "ri-phone-fill",
+    comment: "ri-chat-4-fill", commentLike: "ri-heart-fill", groupMessage: "ri-group-2-fill", call: "ri-phone-fill",
   };
   const colMap = {
     orbit: "var(--grad-2)", follow: "var(--primary)", message: "var(--good)",
-    comment: "var(--grad-3)", experience: "var(--grad-1)", call: "#3fdca0",
+    comment: "var(--grad-3)", commentLike: "var(--danger)", groupMessage: "var(--good)", call: "#3fdca0",
   };
   const descMap = {
     orbit: "orbited your post", follow: "followed you", message: "sent you a message",
-    comment: "commented on your post", experience: "replied to your experience", call: "called you",
+    comment: "commented on your post", commentLike: "liked your comment", groupMessage: "sent a message in the group", call: "called you",
   };
 
   const q = query(
@@ -527,7 +307,9 @@ export const renderNotifications = (root) => {
         item.classList.remove("unread");
         item.querySelector(".nfi-dot")?.remove();
         if (n.type === "message" && n.fromUid) location.hash = "#chats/" + n.fromUid;
+        else if (n.type === "groupMessage" && n.groupId) location.hash = "#chats/" + n.groupId;
         else if (n.type === "follow" && n.fromUid) location.hash = "#profile/" + n.fromUid;
+        else if ((n.type === "comment" || n.type === "commentLike") && n.postId) location.hash = "#post/" + n.postId;
         else if (n.type === "call" && n.callId) { /* handled by call banner */ }
         else location.hash = "#feed";
       });
@@ -539,6 +321,141 @@ export const renderNotifications = (root) => {
   });
 
   window.addEventListener("hashchange", () => { if (_unsub) _unsub(); }, { once: true });
+};
+
+// =========================================================================
+// 2b. GROUP INFO — full member list, rename, invite link, leave/delete
+// =========================================================================
+export const openGroupInfo = async (chatId, group) => {
+  const overlay = document.createElement("div");
+  overlay.className = "chat-info-overlay";
+  const sheet = document.createElement("div");
+  sheet.className = "chat-info-sheet";
+  overlay.appendChild(sheet);
+
+  const close = () => { sheet.classList.remove("open"); setTimeout(() => overlay.remove(), 280); };
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+  const isOwner = group.ownerUid === state.uid;
+
+  const hdr = document.createElement("div");
+  hdr.className = "cis-header";
+  hdr.innerHTML = `
+    <button class="icon-btn cis-close"><i class="ri-close-line"></i></button>
+    <div class="cis-avatar-wrap">
+      <img class="cis-avatar" src="${group.photoURL || `https://api.dicebear.com/7.x/shapes/svg?seed=${chatId}`}" alt="" />
+    </div>
+    <div class="cis-name">${group.name || "Group"}</div>
+    <div class="cis-sub">${(group.members || []).length} members</div>
+    ${group.description ? `<div class="cis-bio">${group.description}</div>` : ""}`;
+  hdr.querySelector(".cis-close").onclick = close;
+  sheet.appendChild(hdr);
+
+  if (isOwner) {
+    const editRow = document.createElement("div");
+    editRow.className = "cis-call-row";
+    const renameBtn = document.createElement("button");
+    renameBtn.className = "cis-call-btn";
+    renameBtn.innerHTML = `<span class="cis-call-icon"><i class="ri-edit-line"></i></span><span>Rename</span>`;
+    renameBtn.onclick = async () => {
+      const name = prompt("Group name", group.name || "")?.trim();
+      if (!name) return;
+      await updateDoc(doc(db, "groups", chatId), { name }).catch(() => {});
+      group.name = name;
+      hdr.querySelector(".cis-name").textContent = name;
+      toast("Group renamed");
+    };
+    editRow.appendChild(renameBtn);
+    const inviteBtn = document.createElement("button");
+    inviteBtn.className = "cis-call-btn";
+    inviteBtn.innerHTML = `<span class="cis-call-icon"><i class="ri-links-line"></i></span><span>Invite</span>`;
+    inviteBtn.onclick = async () => {
+      await navigator.clipboard.writeText(`${location.origin}${location.pathname}#chats/${chatId}`);
+      toast("Invite link copied");
+    };
+    editRow.appendChild(inviteBtn);
+    sheet.appendChild(editRow);
+  }
+
+  const membersSection = document.createElement("div");
+  membersSection.className = "cis-section";
+  membersSection.innerHTML = `<div class="cis-section-title"><i class="ri-group-line"></i> Members (${(group.members || []).length})</div>`;
+  const membersList = document.createElement("div");
+  membersList.className = "cis-members-list";
+  membersSection.appendChild(membersList);
+  sheet.appendChild(membersSection);
+
+  const users = await Promise.all((group.members || []).map((uid) => fetchUser(uid)));
+  users.filter(Boolean).forEach((u) => {
+    const isThatOwner = u.uid === group.ownerUid;
+    const row = document.createElement("div");
+    row.className = "cis-member-row";
+    row.innerHTML = `
+      <img class="avatar sm" src="${avatarFor(u)}" alt="" />
+      <div class="cis-member-info">
+        <div class="cis-member-name">${u.name || "User"}${isThatOwner ? ' <span class="cis-owner-badge">Admin</span>' : ""}</div>
+        <div class="cis-member-sub">@${u.username || "user"}${u.online ? " · Online" : ""}</div>
+      </div>
+      ${isOwner && !isThatOwner ? '<button class="icon-btn cis-remove-member" title="Remove from group"><i class="ri-close-circle-line"></i></button>' : ""}`;
+    row.addEventListener("click", (e) => {
+      if (e.target.closest(".cis-remove-member")) return;
+      close(); location.hash = `#profile/${u.uid}`;
+    });
+    const removeBtn = row.querySelector(".cis-remove-member");
+    if (removeBtn) {
+      removeBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (!confirm(`Remove ${u.name || "this member"} from the group?`)) return;
+        await updateDoc(doc(db, "groups", chatId), { members: arrayRemove(u.uid) }).catch(() => {});
+        group.members = (group.members || []).filter((x) => x !== u.uid);
+        row.remove();
+        toast("Member removed");
+      });
+    }
+    membersList.appendChild(row);
+  });
+
+  const actSection = document.createElement("div");
+  actSection.className = "cis-section cis-actions";
+  const muted = (state.me.mutedChats || []).includes(chatId);
+  const actions = [{
+    icon: muted ? "ri-notification-off-line" : "ri-notification-3-line",
+    label: muted ? "Unmute notifications" : "Mute notifications",
+    onclick: async () => {
+      await updateDoc(doc(db, "users", state.uid), { mutedChats: muted ? arrayRemove(chatId) : arrayUnion(chatId) });
+      toast(muted ? "Unmuted" : "Muted"); close();
+    },
+  }];
+  if (isOwner) {
+    actions.push({
+      icon: "ri-delete-bin-line", label: "Delete group", danger: true,
+      onclick: async () => {
+        if (!confirm("Delete group for everyone?")) return;
+        await deleteDoc(doc(db, "groups", chatId));
+        location.hash = "#chats";
+      },
+    });
+  } else {
+    actions.push({
+      icon: "ri-logout-box-line", label: "Leave group", danger: true,
+      onclick: async () => {
+        if (!confirm("Leave this group?")) return;
+        await updateDoc(doc(db, "groups", chatId), { members: arrayRemove(state.uid) });
+        location.hash = "#chats";
+      },
+    });
+  }
+  actions.forEach((a) => {
+    const row = document.createElement("button");
+    row.className = "cis-action-row" + (a.danger ? " danger" : "");
+    row.innerHTML = `<i class="${a.icon}"></i><span>${a.label}</span>`;
+    row.onclick = a.onclick;
+    actSection.appendChild(row);
+  });
+  sheet.appendChild(actSection);
+
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => sheet.classList.add("open"));
 };
 
 // =========================================================================
@@ -592,6 +509,9 @@ export const startCall = async ({ peerId, chatId, isGroup, type = "voice" }) => 
       text: `${state.me?.name || "Someone"} is calling you`,
       callId,
     }).catch(() => {});
+    import("./notifications.js").then(({ notifyUser }) =>
+      notifyUser(peerId, state.me?.name || "Someone", `is calling you`, "/#chats")
+    ).catch(() => {});
   }
 
   const overlay = _buildCallOverlay({ callId, localStream, isGroup, type, chatId, role: "caller" });

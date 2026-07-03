@@ -280,7 +280,6 @@
         </div>
         <div class="compose-tabs">
           <button class="ct active" data-ctab="post"><i class="ri-image-line"></i> Post</button>
-          <button class="ct" data-ctab="experience"><i class="ri-sparkling-line"></i> Experience</button>
           <button class="ct" data-ctab="group"><i class="ri-group-2-line"></i> Group</button>
           <button class="ct" data-ctab="build"><i class="ri-hammer-line"></i> Build</button>
           <button class="ct" data-ctab="project"><i class="ri-folder-5-line"></i> Project</button>
@@ -300,37 +299,6 @@
             <span id="postLocationTag" style="font-size:12px;color:var(--primary);display:none;"></span>
             <span id="postFileCount" style="font-size:12px;color:var(--text-mute);"></span>
             <button type="submit" class="btn primary">Post</button>
-          </div>
-        </form>
-
-        <form id="experienceForm" class="compose-pane hidden">
-          <input type="text" id="expTitle" placeholder="Experience title (e.g. Hiking Yosemite)" maxlength="80" required />
-          <textarea name="description" id="expDesc" rows="3" placeholder="Describe your experience…" maxlength="500"></textarea>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <select id="expCategory" class="exp-select">
-              <option value="travel">&#x1F30D; Travel</option>
-              <option value="food">&#x1F374; Food</option>
-              <option value="adventure">&#x26F0;&#xFE0F; Adventure</option>
-              <option value="music">&#x1F3B5; Music</option>
-              <option value="fitness">&#x1F4AA; Fitness</option>
-              <option value="art">&#x1F3A8; Art</option>
-              <option value="tech">&#x1F4BB; Tech</option>
-              <option value="life">&#x2728; Life</option>
-            </select>
-            <button type="button" class="icon-btn" id="expLocationBtn" title="Tag location">
-              <i class="ri-map-pin-line"></i>
-            </button>
-            <span id="expLocationTag" style="font-size:12px;color:var(--primary);display:none;"></span>
-          </div>
-          <input type="file" id="expMedia" accept="image/*,video/*" hidden />
-          <div class="compose-actions">
-            <button type="button" class="icon-btn" id="expPickMedia" title="Add photo/video">
-              <i class="ri-image-add-line"></i>
-            </button>
-            <span id="expMediaLabel" style="font-size:12px;color:var(--text-mute);flex:1;"></span>
-            <button type="submit" class="btn primary" style="background:linear-gradient(135deg,var(--grad-1),var(--grad-2));">
-              <i class="ri-sparkling-line"></i> Share experience
-            </button>
           </div>
         </form>
 

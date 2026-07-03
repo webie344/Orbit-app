@@ -800,13 +800,13 @@ const toggleNotifPanel = () => {
   getDocs(query(collection(db, "notifications", state.uid, "items"), orderBy("createdAt", "desc"), limit(30)))
   .then((snap) => {
     if (snap.empty) { panel.appendChild(el("div", { class: "notif-empty" }, "No notifications yet.")); return; }
-    const iconMap = { orbit:"ri-fire-fill", follow:"ri-user-follow-fill", message:"ri-chat-1-fill", comment:"ri-chat-4-fill", experience:"ri-sparkling-fill" };
-    const colMap  = { orbit:"var(--grad-2)", follow:"var(--primary)", message:"var(--good)", comment:"var(--grad-3)", experience:"var(--grad-1)" };
+    const iconMap = { orbit:"ri-fire-fill", follow:"ri-user-follow-fill", message:"ri-chat-1-fill", comment:"ri-chat-4-fill", commentLike:"ri-heart-fill", groupMessage:"ri-group-2-fill", call:"ri-phone-fill" };
+    const colMap  = { orbit:"var(--grad-2)", follow:"var(--primary)", message:"var(--good)", comment:"var(--grad-3)", commentLike:"var(--danger)", groupMessage:"var(--good)", call:"var(--primary)" };
     snap.docs.forEach((d) => {
       const n = { id: d.id, ...d.data() };
       const ic = iconMap[n.type] || "ri-notification-3-fill";
       const co = colMap[n.type]  || "var(--primary)";
-      const txt = n.text || (n.fromName || "Someone") + " " + ({ orbit:"orbited your post", follow:"followed you", message:"sent you a message", experience:"replied to your experience" }[n.type] || "interacted");
+      const txt = n.text || (n.fromName || "Someone") + " " + ({ orbit:"orbited your post", follow:"followed you", message:"sent you a message", comment:"commented on your post", commentLike:"liked your comment", groupMessage:"sent a message in your group", call:"called you" }[n.type] || "interacted");
       const item = el("div", { class: "notif-item" + (n.read ? "" : " unread") },
         el("i", { class: ic, style: "color:" + co + ";font-size:20px;flex-shrink:0;margin-top:2px;" }),
         el("div", { style: "min-width:0;" }, el("div", { class: "ni-text" }, txt), el("div", { class: "ni-time" }, fmtTime(n.createdAt))),
@@ -815,7 +815,10 @@ const toggleNotifPanel = () => {
         updateDoc(doc(db, "notifications", state.uid, "items", n.id), { read: true }).catch(() => {});
         panel.remove();
         if (n.type === "message" && n.fromUid) location.hash = "#chats/" + n.fromUid;
+        else if (n.type === "groupMessage" && n.groupId) location.hash = "#chats/" + n.groupId;
         else if (n.type === "follow"  && n.fromUid) location.hash = "#profile/" + n.fromUid;
+        else if ((n.type === "comment" || n.type === "commentLike") && n.postId) location.hash = "#post/" + n.postId;
+        else if (n.type === "call") location.hash = "#chats";
         else location.hash = "#feed";
       });
       panel.appendChild(item);
@@ -956,7 +959,7 @@ const renderFeed = (root) => {
   const wrap = el("div", { class: "feed-wrap" });
 
   const stub = el("div", { class: "composer-stub" },
-    el("img", { class: "avatar sm", src: avatarFor(state.me) }),
+    el("img", { class: "avatar sm", src: avatarFor(state.me), style: "cursor:pointer;", onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${state.uid}`; } }),
     el("button", { onclick: () => openCompose("post") }, `What's orbiting your mind, ${(state.me?.name || "there").split(" ")[0]}?`)
   );
   wrap.appendChild(stub);
@@ -1040,17 +1043,6 @@ const renderFeed = (root) => {
     });
   });
 
-  getDocs(query(collection(db, "experiences"), orderBy("createdAt", "desc"), limit(3))).then(async (snap) => {
-    if (snap.empty) return;
-    const _eb = el("div", { class: "exp-feed-banner" });
-    _eb.appendChild(el("div", { class: "exp-feed-head" }, el("i", { class: "ri-sparkling-line", style: "color:var(--grad-1);" }), el("span", {}, "Experiences"), el("button", { class: "btn sm ghost", onclick: () => openCompose("experience") }, "+ Share yours")));
-    const _sc = el("div", { class: "exp-feed-scroller" }); _eb.appendChild(_sc);
-    const _ea = await Promise.all(snap.docs.map((d) => fetchUser(d.data().authorUid)));
-    const _em = Object.fromEntries(_ea.filter(Boolean).map((u) => [u.uid, u]));
-    snap.docs.forEach((d) => { const ex = { id: d.id, ...d.data() }; _sc.appendChild(renderExperienceMiniCard(ex, _em[ex.authorUid])); });
-    wrap.insertBefore(_eb, list);
-  }).catch(() => {});
-
   // store unsub globally and on root so route changes can clean up
   _feedUnsub = unsub;
   root._unsub = unsub;
@@ -1059,7 +1051,7 @@ const renderFeed = (root) => {
 const renderTrendingCard = (p, author) => {
   return el("div", { class: "trending-card", onclick: () => location.hash = `#feed` /* stays; could open detail */ },
     el("div", { class: "t-head" },
-      el("img", { class: "avatar xs", src: avatarFor(author) }),
+      el("img", { class: "avatar xs", src: avatarFor(author), onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${author?.uid}`; } }),
       el("div", { class: "t-name" }, author?.name || "User"),
     ),
     el("div", { class: "t-text", text: (p.text || "").slice(0, 140) }),
@@ -1246,6 +1238,15 @@ const renderPost = (p, author, opts = {}) => {
   const trending = (p.orbitCount || 0) >= 3;
   const { hideComments = false, detailView: _detailView = false } = opts;
 
+  // View-count tracking: count once per session per post (skip own posts)
+  if (!isMine && p.id) {
+    if (!state._viewedPosts) state._viewedPosts = new Set();
+    if (!state._viewedPosts.has(p.id)) {
+      state._viewedPosts.add(p.id);
+      updateDoc(doc(db, "posts", p.id), { views: increment(1) }).catch(() => {});
+    }
+  }
+
   const post = el("article", { class: `post${trending ? " is-trending" : ""}` });
 
   const head = el("div", { class: "post-head" },
@@ -1316,8 +1317,22 @@ const renderPost = (p, author, opts = {}) => {
       });
       post.appendChild(body);
     } else {
-      const body = el("div", { class: "post-text", onclick: () => location.hash = `#post/${p.id}` });
-      body.innerHTML = linkify(p.text);
+      const body = el("div", { class: "post-text" });
+      const TRUNC_LEN = 280;
+      if (!_detailView && p.text.length > TRUNC_LEN) {
+        let expanded = false;
+        const shortText = p.text.slice(0, TRUNC_LEN).trim();
+        const paint = () => {
+          body.innerHTML = linkify(expanded ? p.text : shortText + "… ");
+          const moreBtn = el("span", { class: "see-more-btn", text: expanded ? "See less" : "See more" });
+          moreBtn.addEventListener("click", (e) => { e.stopPropagation(); expanded = !expanded; paint(); });
+          body.appendChild(moreBtn);
+        };
+        paint();
+      } else {
+        body.innerHTML = linkify(p.text);
+        body.onclick = () => location.hash = `#post/${p.id}`;
+      }
       post.appendChild(body);
     }
   }
@@ -1364,6 +1379,11 @@ const renderPost = (p, author, opts = {}) => {
 
   const saveIcon = (state.me?.saved || []).includes(p.id) ? "ri-bookmark-fill" : "ri-bookmark-line";
 
+  const viewsBadge = el("span", { class: "post-act post-views", title: "Views" },
+    el("i", { class: "ri-eye-line" }),
+    " " + String(p.views || 0),
+  );
+
   const actions = el("div", { class: "post-actions" },
     el("button", { class: "post-act", onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; }},
       el("i", { class: "ri-chat-1-line" }),
@@ -1382,6 +1402,7 @@ const renderPost = (p, author, opts = {}) => {
       el("i", { class: saveIcon }),
     ),
     orbitBtn,
+    viewsBadge,
   );
   post.appendChild(actions);
 
@@ -1438,7 +1459,7 @@ const renderPost = (p, author, opts = {}) => {
     });
 
     const cForm = el("form", { class: "comment-form" },
-      el("img", { class: "avatar xs", src: avatarFor(state.me) }),
+      el("img", { class: "avatar xs", src: avatarFor(state.me), style: "cursor:pointer;", onclick: () => location.hash = `#profile/${state.uid}` }),
       el("input", { type: "text", placeholder: "Write a comment…" }),
       aiSuggestBtn,
       el("button", { class: "icon-btn", type: "submit" }, el("i", { class: "ri-send-plane-fill" })),
@@ -1459,7 +1480,7 @@ const renderPost = (p, author, opts = {}) => {
       // Optimistic UI
       cBox.classList.remove("hidden");
       cBox.appendChild(el("div", { class: "comment" },
-        el("img", { class: "avatar xs", src: avatarFor(state.me) }),
+        el("img", { class: "avatar xs", src: avatarFor(state.me), onclick: () => location.hash = `#profile/${state.uid}` }),
         el("div", { class: "body" },
           el("div", { class: "name" }, state.me?.name || "User"),
           el("div", { class: "text", text: commentData.text }),
@@ -1468,6 +1489,15 @@ const renderPost = (p, author, opts = {}) => {
       sfxComment();
       await addDoc(collection(db, "posts", p.id, "comments"), commentData);
       await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
+      if (author?.uid && author.uid !== state.uid) {
+        writeNotif(author.uid, "comment", {
+          postId: p.id,
+          text: `${state.me?.name || "Someone"} commented: "${commentData.text.slice(0, 60)}"`,
+        }).catch(() => {});
+        import("./notifications.js").then(({ notifyUser }) =>
+          notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id)
+        ).catch(() => {});
+      }
     });
     post.appendChild(cForm);
 
@@ -1486,6 +1516,12 @@ const renderPost = (p, author, opts = {}) => {
         await updateDoc(doc(db, "posts", p.id, "comments", c.id), {
           likes: _liked ? arrayUnion(state.uid) : arrayRemove(state.uid),
         }).catch(() => {});
+        if (_liked && a?.uid && a.uid !== state.uid) {
+          writeNotif(a.uid, "commentLike", { postId: p.id, text: `${state.me?.name || "Someone"} liked your comment` }).catch(() => {});
+          import("./notifications.js").then(({ notifyUser }) =>
+            notifyUser(a.uid, state.me?.name || "Someone", "liked your comment", "/#post/" + p.id)
+          ).catch(() => {});
+        }
       }}, likeIconEl, likeCountEl);
 
       const replyBtn = el("button", { class: "cmt-reply-btn", onclick: () => {
@@ -1497,7 +1533,7 @@ const renderPost = (p, author, opts = {}) => {
       }}, "Reply");
 
       return el("div", { class: "comment" },
-        el("img", { class: "avatar xs", src: avatarFor(a) }),
+        el("img", { class: "avatar xs", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
         el("div", { class: "body" },
           el("div", { class: "name" }, a?.name || "User",
             a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null),
@@ -1589,6 +1625,12 @@ const renderPostDetail = async (root, postId) => {
       await updateDoc(doc(db, "posts", p.id, "comments", c.id), {
         likes: _liked ? arrayUnion(state.uid) : arrayRemove(state.uid),
       }).catch(() => {});
+      if (_liked && a?.uid && a.uid !== state.uid) {
+        writeNotif(a.uid, "commentLike", { postId: p.id, text: `${state.me?.name || "Someone"} liked your comment` }).catch(() => {});
+        import("./notifications.js").then(({ notifyUser }) =>
+          notifyUser(a.uid, state.me?.name || "Someone", "liked your comment", "/#post/" + p.id)
+        ).catch(() => {});
+      }
     }}, likeIconEl, likeCountEl);
 
     const replyBtn = el("button", { class: "cmt-reply-btn", onclick: () => {
@@ -1681,7 +1723,7 @@ const renderPostDetail = async (root, postId) => {
   });
 
   const cForm = el("form", { class: "comment-form detail-cmt-form" },
-    el("img", { class: "avatar xs", src: avatarFor(state.me) }),
+    el("img", { class: "avatar xs", src: avatarFor(state.me), style: "cursor:pointer;", onclick: () => location.hash = `#profile/${state.uid}` }),
     el("input", { type: "text", placeholder: "Write a comment…" }),
     detailAISuggestBtn,
     el("button", { class: "icon-btn", type: "submit" }, el("i", { class: "ri-send-plane-fill" })),
@@ -1702,6 +1744,15 @@ const renderPostDetail = async (root, postId) => {
     sfxComment();
     await addDoc(collection(db, "posts", p.id, "comments"), commentData);
     await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
+    if (author?.uid && author.uid !== state.uid) {
+      writeNotif(author.uid, "comment", {
+        postId: p.id,
+        text: `${state.me?.name || "Someone"} commented: "${commentData.text.slice(0, 60)}"`,
+      }).catch(() => {});
+      import("./notifications.js").then(({ notifyUser }) =>
+        notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id)
+      ).catch(() => {});
+    }
   });
   cmtSection.appendChild(cForm);
 };
@@ -1779,6 +1830,85 @@ const renderExplore = (root, hashtagFilter = null) => {
     el("h2", {}, title),
   );
   root.appendChild(head);
+
+  // ── Search bar ──────────────────────────────────────────────────────────
+  const searchWrap = el("div", { class: "explore-search-wrap" });
+  const searchInput = el("input", { type: "text", class: "explore-search-input", placeholder: "Search people, hashtags…" });
+  const searchResults = el("div", { class: "explore-search-results hidden" });
+  searchWrap.appendChild(el("div", { class: "explore-search-box" }, el("i", { class: "ri-search-line" }), searchInput));
+  searchWrap.appendChild(searchResults);
+  root.appendChild(searchWrap);
+
+  let _searchDebounce = null;
+  searchInput.addEventListener("input", () => {
+    clearTimeout(_searchDebounce);
+    const q1 = searchInput.value.trim().toLowerCase();
+    if (!q1) { searchResults.classList.add("hidden"); searchResults.innerHTML = ""; return; }
+    _searchDebounce = setTimeout(async () => {
+      searchResults.innerHTML = "";
+      searchResults.classList.remove("hidden");
+      if (q1.startsWith("#")) {
+        searchResults.appendChild(el("div", { class: "explore-search-item", onclick: () => location.hash = `#explore/${q1.slice(1)}` },
+          el("i", { class: "ri-hashtag" }), el("span", {}, q1)));
+        return;
+      }
+      const snap = await getDocs(query(collection(db, "users"), orderBy("username"), limit(200))).catch(() => null);
+      if (!snap) { searchResults.appendChild(el("div", { class: "explore-search-empty" }, "Search failed")); return; }
+      const matches = snap.docs
+        .map((d) => ({ uid: d.id, ...d.data() }))
+        .filter((u) => u.uid !== state.uid && ((u.name || "").toLowerCase().includes(q1) || (u.username || "").toLowerCase().includes(q1)))
+        .slice(0, 12);
+      if (!matches.length) { searchResults.appendChild(el("div", { class: "explore-search-empty" }, "No matches")); return; }
+      matches.forEach((u) => {
+        searchResults.appendChild(el("div", { class: "explore-search-item", onclick: () => location.hash = `#profile/${u.uid}` },
+          el("img", { class: "avatar xs", src: avatarFor(u) }),
+          el("div", {}, el("div", { class: "esi-name" }, u.name || "User"), el("div", { class: "esi-sub" }, "@" + (u.username || "user"))),
+        ));
+      });
+    }, 250);
+  });
+  document.addEventListener("click", (e) => {
+    if (!searchWrap.contains(e.target)) { searchResults.classList.add("hidden"); }
+  });
+
+  // ── Suggested profiles ──────────────────────────────────────────────────
+  if (!hashtagFilter) {
+    const suggSection = el("div", { class: "explore-suggested" });
+    suggSection.appendChild(el("div", { class: "explore-suggested-head" }, "Suggested for you"));
+    const suggScroller = el("div", { class: "explore-suggested-scroller" });
+    suggSection.appendChild(suggScroller);
+    root.appendChild(suggSection);
+    getDocs(query(collection(db, "users"), orderBy("createdAt", "desc"), limit(30))).then((snap) => {
+      const all = snap.docs.map((d) => ({ uid: d.id, ...d.data() }))
+        .filter((u) => u.uid !== state.uid && !(state.me?.following || []).includes(u.uid));
+      for (let i = all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [all[i], all[j]] = [all[j], all[i]]; }
+      if (!all.length) { suggSection.classList.add("hidden"); return; }
+      all.slice(0, 10).forEach((u) => {
+        let iFollow = (state.me?.following || []).includes(u.uid);
+        const followBtn = el("button", { class: `btn sm ${iFollow ? "ghost" : "primary"}` }, iFollow ? "Following" : "Follow");
+        followBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const meRef = doc(db, "users", state.uid);
+          const themRef = doc(db, "users", u.uid);
+          const batch = writeBatch(db);
+          if (iFollow) { batch.update(meRef, { following: arrayRemove(u.uid) }); batch.update(themRef, { followers: arrayRemove(state.uid) }); }
+          else { batch.update(meRef, { following: arrayUnion(u.uid) }); batch.update(themRef, { followers: arrayUnion(state.uid) }); }
+          await batch.commit().catch(() => {});
+          iFollow = !iFollow;
+          followBtn.className = `btn sm ${iFollow ? "ghost" : "primary"}`;
+          followBtn.textContent = iFollow ? "Following" : "Follow";
+          if (state.me.following) iFollow ? state.me.following.push(u.uid) : (state.me.following = state.me.following.filter((x) => x !== u.uid));
+        });
+        suggScroller.appendChild(el("div", { class: "explore-sugg-card", onclick: () => location.hash = `#profile/${u.uid}` },
+          el("img", { class: "avatar md", src: avatarFor(u) }),
+          el("div", { class: "esc-name" }, u.name || "User"),
+          el("div", { class: "esc-sub" }, "@" + (u.username || "user")),
+          followBtn,
+        ));
+      });
+    }).catch(() => {});
+  }
+
   const grid = el("div", { class: "grid-3" });
   root.appendChild(grid);
 
@@ -1817,6 +1947,7 @@ const renderExplore = (root, hashtagFilter = null) => {
         cell.appendChild(el("div", { class: "cell-text", text: (p.text || "").slice(0, 80) }));
       }
       if (p.text) cell.appendChild(el("div", { class: "cell-overlay", text: (p.text || "").slice(0, 55) }));
+      cell.appendChild(el("span", { class: "cell-views" }, el("i", { class: "ri-eye-line" }), " " + String(p.views || 0)));
       grid.appendChild(cell);
     });
   });
@@ -2145,7 +2276,7 @@ const requestLocationVerification = () => {
 };
 
 // =========================================================================
-// 14. COMPOSE MODAL — posts, groups, experiences, build, project
+// 14. COMPOSE MODAL — posts, groups, build, project
 // =========================================================================
 const composeModal = $("#composeModal");
 const openCompose = (which = "post") => {
@@ -2290,92 +2421,6 @@ $("#groupForm").addEventListener("submit", async (e) => {
   } finally {
     btn.disabled = false; btn.textContent = "Create group";
   }
-});
-
-// =========================================================================
-// EXPERIENCE MINI CARD
-// =========================================================================
-const renderExperienceMiniCard = (ex, author) => {
-  const cc = { travel:"#5cd3ff",food:"#ff8a5a",adventure:"#3fdca0",music:"#ff5cae",fitness:"#ffb04a",art:"#7c5cff",tech:"#4ab8ff",life:"#ff5cae" };
-  return el("div", { class: "exp-mini-card", onclick: () => openExperienceThread(ex) },
-    el("div", { class: "exp-mini-cat", style: "background:" + (cc[ex.category] || "var(--primary)") + ";" }, ex.category || "experience"),
-    el("div", { class: "exp-mini-title", text: ex.title || "Experience" }),
-    el("div", { class: "exp-mini-author" }, el("img", { class: "avatar xs", src: avatarFor(author) }), el("span", {}, author?.name || "User")),
-    ex.replyCount ? el("div", { class: "exp-mini-replies" }, el("i", { class: "ri-reply-fill" }), " " + ex.replyCount + " replies") : null,
-  );
-};
-// =========================================================================
-// EXPERIENCE THREAD
-// =========================================================================
-const openExperienceThread = async (ex) => {
-  const overlay = el("div", { class: "exp-thread-overlay" });
-  const sheet   = el("div", { class: "exp-thread-sheet" });
-  sheet.appendChild(el("button", { class: "icon-btn exp-close-btn", onclick: () => overlay.remove() }, el("i", { class: "ri-close-line" })));
-  sheet.appendChild(await buildExperienceCard(ex));
-  sheet.appendChild(el("div", { class: "exp-replies-head" }, el("span", {}, "Replies"),
-    el("button", { class: "btn primary", style: "padding:6px 14px;font-size:13px;", onclick: () => { overlay.remove(); _replyToExpId = ex.id; openCompose("experience"); } }, el("i", { class: "ri-sparkling-line" }), "Share yours")));
-  const carousel = el("div", { class: "exp-replies-carousel" }); sheet.appendChild(carousel);
-  getDocs(query(collection(db, "experiences", ex.id, "replies"), orderBy("createdAt", "desc"), limit(20))).then(async (snap) => {
-    if (snap.empty) { carousel.appendChild(el("div", { class: "exp-empty-replies" }, "Be the first to reply!")); return; }
-    const ras = await Promise.all(snap.docs.map((d) => fetchUser(d.data().authorUid)));
-    const rm  = Object.fromEntries(ras.filter(Boolean).map((u) => [u.uid, u]));
-    for (const d of snap.docs) carousel.appendChild(await buildExperienceCard({ id: d.id, ...d.data() }, rm[d.data().authorUid], true));
-  }).catch(() => {});
-  overlay.appendChild(sheet);
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
-  document.body.appendChild(overlay);
-};
-let _replyToExpId = null;
-const buildExperienceCard = async (ex, authorPre = null, compact = false) => {
-  const author = authorPre || await fetchUser(ex.authorUid);
-  const cc = { travel:"#5cd3ff",food:"#ff8a5a",adventure:"#3fdca0",music:"#ff5cae",fitness:"#ffb04a",art:"#7c5cff",tech:"#4ab8ff",life:"#ff5cae" };
-  const card = el("div", { class: "exp-card" + (compact ? " compact" : "") });
-  if (ex.imageUrl) card.appendChild(el("img", { src: ex.imageUrl, class: "exp-card-img", loading: "lazy" }));
-  card.appendChild(el("div", { class: "exp-cat-tag", style: "background:" + (cc[ex.category] || "var(--primary)") + ";" }, ex.category || "experience"));
-  card.appendChild(el("div", { class: "exp-card-title", text: ex.title || "" }));
-  if (ex.description) card.appendChild(el("div", { class: "exp-card-desc", text: ex.description.slice(0, 200) }));
-  if (ex.location?.city) card.appendChild(el("div", { class: "post-location-badge" }, el("i", { class: "ri-map-pin-fill" }), " " + ex.location.city));
-  card.appendChild(el("div", { class: "exp-card-author" }, el("img", { class: "avatar xs", src: avatarFor(author) }), el("span", { class: "exp-author-name" }, author?.name || "User"), el("span", { class: "exp-author-time" }, fmtTime(ex.createdAt))));
-  return card;
-};
-// =========================================================================
-// EXPERIENCE FORM
-// =========================================================================
-let _expLocation = null, _expMediaFile = null;
-document.getElementById("expLocationBtn")?.addEventListener("click", () => {
-  if (!("geolocation" in navigator)) { toast("Location not available"); return; }
-  const btn = document.getElementById("expLocationBtn");
-  btn.innerHTML = '<i class="ri-loader-4-line" style="animation:spin 1s linear infinite;"></i>';
-  navigator.geolocation.getCurrentPosition(async (pos) => {
-    const { latitude: lat, longitude: lng } = pos.coords; let city = null;
-    try { const r = await fetch("https://nominatim.openstreetmap.org/reverse?format=json&lat=" + lat + "&lon=" + lng + "&zoom=10"); const j = await r.json(); city = j.address?.city || j.address?.town || j.address?.state || (j.display_name || "").split(",")[0] || null; } catch {}
-    _expLocation = { lat: Math.round(lat * 100) / 100, lng: Math.round(lng * 100) / 100, city };
-    const tag = document.getElementById("expLocationTag"); if (tag) { tag.textContent = city || "My location"; tag.style.display = ""; }
-    btn.innerHTML = '<i class="ri-map-pin-fill" style="color:var(--primary);"></i>';
-    toast("Tagged: " + (city || "your location"));
-  }, () => { toast("Location access denied"); btn.innerHTML = '<i class="ri-map-pin-line"></i>'; }, { timeout: 8000 });
-});
-document.getElementById("expPickMedia")?.addEventListener("click", () => document.getElementById("expMedia")?.click());
-document.getElementById("expMedia")?.addEventListener("change", (e) => { _expMediaFile = e.target.files?.[0] || null; const lbl = document.getElementById("expMediaLabel"); if (lbl) lbl.textContent = _expMediaFile ? _expMediaFile.name : ""; });
-document.getElementById("experienceForm")?.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const title = (document.getElementById("expTitle")?.value || "").trim();
-  const desc  = (document.getElementById("expDesc")?.value  || "").trim();
-  const cat   = document.getElementById("expCategory")?.value || "life";
-  if (!title) { toast("Give your experience a title"); return; }
-  const btn = e.target.querySelector("button[type=submit]"); btn.disabled = true;
-  try {
-    let imageUrl = null;
-    if (_expMediaFile) { toast("Uploading..."); const up = await uploadToCloudinary(_expMediaFile, _expMediaFile.type.startsWith("video") ? "video" : "image"); imageUrl = up.url; }
-    const data = { authorUid: state.uid, title, description: desc, category: cat, imageUrl, location: _expLocation || null, replyCount: 0, createdAt: serverTimestamp() };
-    if (_replyToExpId) { await addDoc(collection(db, "experiences", _replyToExpId, "replies"), data); await updateDoc(doc(db, "experiences", _replyToExpId), { replyCount: increment(1) }); _replyToExpId = null; }
-    else await addDoc(collection(db, "experiences"), data);
-    e.target.reset(); _expLocation = null; _expMediaFile = null;
-    const t2 = document.getElementById("expLocationTag"); if (t2) { t2.style.display = "none"; t2.textContent = ""; }
-    const l2 = document.getElementById("expMediaLabel"); if (l2) l2.textContent = "";
-    composeModal.classList.add("hidden"); toast("Experience shared!"); router();
-  } catch (err) { toast("Failed: " + (err.message || "unknown")); }
-  finally { btn.disabled = false; }
 });
 
 // =========================================================================
@@ -2563,7 +2608,7 @@ const showOnboardingModal = () => {
         }
       }, "Follow");
       peopleList.appendChild(el("div", { class: "onboard-row" },
-        el("img", { class: "avatar sm", src: avatarFor(u) }),
+        el("img", { class: "avatar sm", src: avatarFor(u), style: "cursor:pointer;", onclick: () => location.hash = `#profile/${u.uid}` }),
         el("div", { class: "onboard-row-meta" },
           el("div", { class: "onboard-row-name" }, u.name || "User"),
           el("div", { class: "onboard-row-sub" }, "@" + (u.username || ""))
