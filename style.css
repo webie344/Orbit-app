@@ -406,7 +406,7 @@ textarea { resize: vertical; min-height: 80px; }
   color: var(--primary); font-weight: 600; cursor: pointer; white-space: nowrap;
 }
 .see-more-btn:hover { text-decoration: underline; }
-.post-views { cursor: default; margin-left: 6px; }
+.post-views { cursor: default; }
 .post-views:hover { background: none; color: var(--text-dim); }
 .post-media {
   margin: 0 -16px 10px;
@@ -424,21 +424,38 @@ textarea { resize: vertical; min-height: 80px; }
 .post-actions {
   display: flex; align-items: center; gap: 4px;
   color: var(--text-dim);
+  flex-wrap: nowrap;
+}
+.post-actions-left {
+  display: flex; align-items: center; gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+.post-actions-right {
+  display: flex; align-items: center; gap: 2px;
+  margin-left: auto;
+  flex-shrink: 0;
 }
 .post-act {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 8px 10px; border-radius: var(--radius-pill); font-size: 13px;
   transition: background var(--speed), color var(--speed), transform var(--speed);
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .post-act:hover { background: var(--hover); color: var(--text); }
 .post-act i { font-size: 18px; }
-.post-act.orbit { margin-left: auto; color: var(--text-dim); }
+.post-act.orbit { color: var(--text-dim); }
 .post-act.orbit.active {
   background: linear-gradient(135deg, rgba(124,92,255,.18), rgba(255,92,174,.18));
   color: var(--grad-2);
 }
 .post-act.orbit.active i { animation: pop var(--speed) var(--ease); }
 @keyframes pop { 0% { transform: scale(.8); } 60% { transform: scale(1.25); } 100% { transform: scale(1); } }
+@media (max-width: 420px) {
+  .post-act { padding: 8px 7px; gap: 4px; }
+  .post-views { margin-left: 2px; }
+}
 
 .post-counts {
   display: flex; gap: 14px; font-size: 12px; color: var(--text-mute); padding-top: 6px;

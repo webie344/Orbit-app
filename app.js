@@ -800,13 +800,13 @@ const toggleNotifPanel = () => {
   getDocs(query(collection(db, "notifications", state.uid, "items"), orderBy("createdAt", "desc"), limit(30)))
   .then((snap) => {
     if (snap.empty) { panel.appendChild(el("div", { class: "notif-empty" }, "No notifications yet.")); return; }
-    const iconMap = { orbit:"ri-fire-fill", follow:"ri-user-follow-fill", message:"ri-chat-1-fill", comment:"ri-chat-4-fill", commentLike:"ri-heart-fill", groupMessage:"ri-group-2-fill", call:"ri-phone-fill", newPost:"ri-file-add-fill" };
-    const colMap  = { orbit:"var(--grad-2)", follow:"var(--primary)", message:"var(--good)", comment:"var(--grad-3)", commentLike:"var(--danger)", groupMessage:"var(--good)", call:"var(--primary)", newPost:"var(--grad-1)" };
+    const iconMap = { orbit:"ri-fire-fill", follow:"ri-user-follow-fill", message:"ri-chat-1-fill", comment:"ri-chat-4-fill", commentLike:"ri-heart-fill", groupMessage:"ri-group-2-fill", call:"ri-phone-fill", newPost:"ri-file-add-fill", postConfirm:"ri-checkbox-circle-fill" };
+    const colMap  = { orbit:"var(--grad-2)", follow:"var(--primary)", message:"var(--good)", comment:"var(--grad-3)", commentLike:"var(--danger)", groupMessage:"var(--good)", call:"var(--primary)", newPost:"var(--grad-1)", postConfirm:"var(--good)" };
     snap.docs.forEach((d) => {
       const n = { id: d.id, ...d.data() };
       const ic = iconMap[n.type] || "ri-notification-3-fill";
       const co = colMap[n.type]  || "var(--primary)";
-      const txt = n.text || (n.fromName || "Someone") + " " + ({ orbit:"orbited your post", follow:"followed you", message:"sent you a message", comment:"commented on your post", commentLike:"liked your comment", groupMessage:"sent a message in your group", call:"called you", newPost:"shared a new post" }[n.type] || "interacted");
+      const txt = n.text || (n.fromName || "Someone") + " " + ({ orbit:"orbited your post", follow:"followed you", message:"sent you a message", comment:"commented on your post", commentLike:"liked your comment", groupMessage:"sent a message in your group", call:"called you", newPost:"shared a new post", postConfirm:"Your post is live!" }[n.type] || "interacted");
       const item = el("div", { class: "notif-item" + (n.read ? "" : " unread") },
         el("i", { class: ic, style: "color:" + co + ";font-size:20px;flex-shrink:0;margin-top:2px;" }),
         el("div", { style: "min-width:0;" }, el("div", { class: "ni-text" }, txt), el("div", { class: "ni-time" }, fmtTime(n.createdAt))),
@@ -817,7 +817,7 @@ const toggleNotifPanel = () => {
         if (n.type === "message" && n.fromUid) location.hash = "#chats/" + n.fromUid;
         else if (n.type === "groupMessage" && n.groupId) location.hash = "#chats/" + n.groupId;
         else if (n.type === "follow"  && n.fromUid) location.hash = "#profile/" + n.fromUid;
-        else if ((n.type === "comment" || n.type === "commentLike" || n.type === "newPost") && n.postId) location.hash = "#post/" + n.postId;
+        else if ((n.type === "comment" || n.type === "commentLike" || n.type === "newPost" || n.type === "postConfirm") && n.postId) location.hash = "#post/" + n.postId;
         else if (n.type === "call") location.hash = "#chats";
         else location.hash = "#feed";
       });
@@ -1386,24 +1386,28 @@ const renderPost = (p, author, opts = {}) => {
   );
 
   const actions = el("div", { class: "post-actions" },
-    el("button", { class: "post-act", onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; }},
-      el("i", { class: "ri-chat-1-line" }),
-      String(p.commentCount || 0),
+    el("div", { class: "post-actions-left" },
+      el("button", { class: "post-act", onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; }},
+        el("i", { class: "ri-chat-1-line" }),
+        String(p.commentCount || 0),
+      ),
+      el("button", { class: "post-act", onclick: async (e) => {
+        e.stopPropagation();
+        const url = `${location.origin}${location.pathname}#post/${p.id}`;
+        try { await navigator.share?.({ title: "Orbit", text: p.text || "Check this out", url }); }
+        catch { await navigator.clipboard.writeText(url); toast("Link copied"); }
+      }},
+        el("i", { class: "ri-share-forward-line" }),
+        "Share",
+      ),
+      el("button", { class: "post-act", onclick: (e) => { e.stopPropagation(); toggleSave(p.id); } },
+        el("i", { class: saveIcon }),
+      ),
     ),
-    el("button", { class: "post-act", onclick: async (e) => {
-      e.stopPropagation();
-      const url = `${location.origin}${location.pathname}#post/${p.id}`;
-      try { await navigator.share?.({ title: "Orbit", text: p.text || "Check this out", url }); }
-      catch { await navigator.clipboard.writeText(url); toast("Link copied"); }
-    }},
-      el("i", { class: "ri-share-forward-line" }),
-      "Share",
+    el("div", { class: "post-actions-right" },
+      viewsBadge,
+      orbitBtn,
     ),
-    el("button", { class: "post-act", onclick: (e) => { e.stopPropagation(); toggleSave(p.id); } },
-      el("i", { class: saveIcon }),
-    ),
-    orbitBtn,
-    viewsBadge,
   );
   post.appendChild(actions);
 
@@ -2395,21 +2399,36 @@ $("#postForm").addEventListener("submit", async (e) => {
     const _lt = document.getElementById("postLocationTag"); if (_lt) { _lt.style.display = "none"; _lt.textContent = ""; }
     const _lb = document.getElementById("postLocationBtn"); if (_lb) _lb.innerHTML = '<i class="ri-map-pin-line"></i>';
     composeModal.classList.add("hidden"); toast("Posted!");
-    // Notify followers — in-app bell + push notification
-    const _followers = (state.me?.followers || []).slice(0, 200);
-    if (_followers.length) {
+    // Confirm to the poster that their post is live (bell notification, not just a toast)
+    addDoc(collection(db, "notifications", state.uid, "items"), {
+      type: "postConfirm",
+      postId: _newPostRef.id,
+      text: "Your post is live!",
+      read: false,
+      createdAt: serverTimestamp(),
+    }).catch(() => {});
+    // Notify followers — in-app bell + push notification.
+    // Re-fetch the user's own doc instead of relying on cached state.me.followers,
+    // in case someone followed us during this session and the local cache is stale.
+    (async () => {
+      let _followers = (state.me?.followers || []);
+      try {
+        const _freshSnap = await getDoc(doc(db, "users", state.uid));
+        if (_freshSnap.exists()) _followers = _freshSnap.data().followers || _followers;
+      } catch {}
+      _followers = _followers.slice(0, 200);
+      if (!_followers.length) return;
       const _preview = (text || "shared new media").slice(0, 60);
       const _postThumb = Array.isArray(media) ? media[0]?.url : media?.url;
-      import("./notifications.js").then(({ notifyUser }) => {
-        _followers.forEach((uid) => {
-          writeNotif(uid, "newPost", {
-            postId: _newPostRef.id,
-            text: `${state.me?.name || "Someone"} posted: "${_preview}"`,
-          }).catch(() => {});
-          notifyUser(uid, state.me?.name || "Someone", `New post: ${_preview}`, "/#post/" + _newPostRef.id, state.me?.photoURL || "", _postThumb || "").catch(() => {});
-        });
-      }).catch(() => {});
-    }
+      const { notifyUser } = await import("./notifications.js");
+      _followers.forEach((uid) => {
+        writeNotif(uid, "newPost", {
+          postId: _newPostRef.id,
+          text: `${state.me?.name || "Someone"} posted: "${_preview}"`,
+        }).catch(() => {});
+        notifyUser(uid, state.me?.name || "Someone", `New post: ${_preview}`, "/#post/" + _newPostRef.id, state.me?.photoURL || "", _postThumb || "").catch(() => {});
+      });
+    })().catch(() => {});
   } catch (err) {
     toast("Failed to post: " + (err.message || "unknown error"));
   } finally {

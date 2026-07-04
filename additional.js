@@ -467,17 +467,17 @@ export const renderNotifications = (root) => {
   const iconMap = {
     orbit: "ri-fire-fill", follow: "ri-user-follow-fill", message: "ri-chat-1-fill",
     comment: "ri-chat-4-fill", commentLike: "ri-heart-fill", groupMessage: "ri-group-2-fill", call: "ri-phone-fill",
-    newPost: "ri-file-add-fill",
+    newPost: "ri-file-add-fill", postConfirm: "ri-checkbox-circle-fill",
   };
   const colMap = {
     orbit: "var(--grad-2)", follow: "var(--primary)", message: "var(--good)",
     comment: "var(--grad-3)", commentLike: "var(--danger)", groupMessage: "var(--good)", call: "#3fdca0",
-    newPost: "var(--grad-1)",
+    newPost: "var(--grad-1)", postConfirm: "var(--good)",
   };
   const descMap = {
     orbit: "orbited your post", follow: "followed you", message: "sent you a message",
     comment: "commented on your post", commentLike: "liked your comment", groupMessage: "sent a message in the group", call: "called you",
-    newPost: "shared a new post",
+    newPost: "shared a new post", postConfirm: "Your post is live!",
   };
 
   const q = query(
@@ -532,7 +532,7 @@ export const renderNotifications = (root) => {
         if (n.type === "message" && n.fromUid) location.hash = "#chats/" + n.fromUid;
         else if (n.type === "groupMessage" && n.groupId) location.hash = "#chats/" + n.groupId;
         else if (n.type === "follow" && n.fromUid) location.hash = "#profile/" + n.fromUid;
-        else if ((n.type === "comment" || n.type === "commentLike" || n.type === "newPost") && n.postId) location.hash = "#post/" + n.postId;
+        else if ((n.type === "comment" || n.type === "commentLike" || n.type === "newPost" || n.type === "postConfirm") && n.postId) location.hash = "#post/" + n.postId;
         else if (n.type === "call" && n.callId) { /* handled by call banner */ }
         else location.hash = "#feed";
       });
