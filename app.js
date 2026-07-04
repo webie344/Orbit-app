@@ -1371,8 +1371,9 @@ const renderPost = (p, author, opts = {}) => {
         postId: p.id,
         text: `${state.me?.name || "Someone"} orbited your post`,
       }).catch(() => {});
+      const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
       import("./notifications.js").then(({ notifyUser }) =>
-        notifyUser(author.uid, state.me?.name || "Someone", "orbited your post", "/#post/" + p.id, state.me?.photoURL || "")
+        notifyUser(author.uid, state.me?.name || "Someone", "orbited your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
       ).catch(() => {});
     }
   }}, orbitIcon, el("span", {}, "Orbit · "), orbitCount);
@@ -1494,8 +1495,9 @@ const renderPost = (p, author, opts = {}) => {
           postId: p.id,
           text: `${state.me?.name || "Someone"} commented: "${commentData.text.slice(0, 60)}"`,
         }).catch(() => {});
+        const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
         import("./notifications.js").then(({ notifyUser }) =>
-          notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id, state.me?.photoURL || "")
+          notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
         ).catch(() => {});
       }
     });
@@ -1749,8 +1751,9 @@ const renderPostDetail = async (root, postId) => {
         postId: p.id,
         text: `${state.me?.name || "Someone"} commented: "${commentData.text.slice(0, 60)}"`,
       }).catch(() => {});
+      const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
       import("./notifications.js").then(({ notifyUser }) =>
-        notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id, state.me?.photoURL || "")
+        notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
       ).catch(() => {});
     }
   });
@@ -2396,13 +2399,14 @@ $("#postForm").addEventListener("submit", async (e) => {
     const _followers = (state.me?.followers || []).slice(0, 200);
     if (_followers.length) {
       const _preview = (text || "shared new media").slice(0, 60);
+      const _postThumb = Array.isArray(media) ? media[0]?.url : media?.url;
       import("./notifications.js").then(({ notifyUser }) => {
         _followers.forEach((uid) => {
           writeNotif(uid, "newPost", {
             postId: _newPostRef.id,
             text: `${state.me?.name || "Someone"} posted: "${_preview}"`,
           }).catch(() => {});
-          notifyUser(uid, state.me?.name || "Someone", `New post: ${_preview}`, "/#post/" + _newPostRef.id, state.me?.photoURL || "").catch(() => {});
+          notifyUser(uid, state.me?.name || "Someone", `New post: ${_preview}`, "/#post/" + _newPostRef.id, state.me?.photoURL || "", _postThumb || "").catch(() => {});
         });
       }).catch(() => {});
     }

@@ -713,8 +713,9 @@ const renderChatView = ({ isGroup, chatId, peer, group }) => {
         otherMembers.forEach((uid) => {
           writeNotif(uid, "groupMessage", { groupId: chatId, text: `${state.me?.name || "Someone"} in ${groupName}: "${preview}"` }).catch(() => {});
         });
+        const _msgThumb = Array.isArray(media) ? media[0]?.url : media?.url;
         import("./notifications.js").then(({ notifyUser }) => {
-          otherMembers.forEach((uid) => notifyUser(uid, groupName, `${state.me?.name || "Someone"}: ${preview}`, "/#chats/" + chatId, state.me?.photoURL || "").catch(() => {}));
+          otherMembers.forEach((uid) => notifyUser(uid, groupName, `${state.me?.name || "Someone"}: ${preview}`, "/#chats/" + chatId, state.me?.photoURL || "", _msgThumb || "").catch(() => {}));
         }).catch(() => {});
       } else {
         const updateMeta = async (forUid, otherUid, isMe) => {
@@ -728,8 +729,9 @@ const renderChatView = ({ isGroup, chatId, peer, group }) => {
         updateDoc(doc(db, "chats", chatId), { [`typing.${state.uid}`]: deleteField() }).catch(() => {});
         // Notify recipient — in-app bell + push notification
         writeNotif(peer.uid, "message", { text: (text || "[media]").slice(0, 60) }).catch(() => {});
+        const _dmThumb = Array.isArray(media) ? media[0]?.url : media?.url;
         import("./notifications.js").then(({ notifyUser }) =>
-          notifyUser(peer.uid, state.me?.name || "New message", text || "Sent you a message", "/#chats", state.me?.photoURL || "")
+          notifyUser(peer.uid, state.me?.name || "New message", text || "Sent you a message", "/#chats", state.me?.photoURL || "", _dmThumb || "")
         ).catch(() => {});
       }
     } catch (err) {

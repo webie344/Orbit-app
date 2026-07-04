@@ -6,7 +6,7 @@
 
 // ⚠️  Bump this string every time you deploy — it's what triggers the
 //     "New version available" update banner in the app.
-const CACHE_NAME = "orbit-v4";
+const CACHE_NAME = "orbit-v3";
 
 // Files that make up the app shell — always available offline
 const SHELL_FILES = [
@@ -52,6 +52,13 @@ self.addEventListener("push", (event) => {
     vibrate: [100, 50, 100],
     requireInteraction: false,
   };
+
+  // If the sender attached a media thumbnail (post image, chat photo, etc.)
+  // show it as the large preview image inside the notification body.
+  // Supported on Android Chrome; ignored gracefully elsewhere.
+  if (data.image) {
+    options.image = data.image;
+  }
 
   event.waitUntil(self.registration.showNotification(title, options));
 });

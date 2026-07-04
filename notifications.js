@@ -225,7 +225,7 @@ export async function saveNotifRecord(toUid, type, extra = {}) {
 }
 
 // ── Send a push notification to another user ─────────────────────────────
-export async function notifyUser(toUid, title, body, url = "/", icon = "") {
+export async function notifyUser(toUid, title, body, url = "/", icon = "", image = "") {
   if (!toUid || toUid === state.uid) return;
   try {
     const snap = await getDoc(doc(db, "users", toUid));
@@ -239,7 +239,7 @@ export async function notifyUser(toUid, title, body, url = "/", icon = "") {
     const res = await fetch("/api/send-notification", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ subscription, title, body, url, icon: notifIcon }),
+      body: JSON.stringify({ subscription, title, body, url, icon: notifIcon, image: image || "" }),
     });
 
     if (!res.ok) {
