@@ -26,7 +26,10 @@ module.exports = async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { subscription, title, body, url } = req.body;
+  // ⚠️  `icon` and `image` must be destructured here — otherwise the
+  //     sender's profile picture / post thumbnail never reaches the
+  //     push payload, even though the client sends them.
+  const { subscription, title, body, url, icon, image } = req.body;
 
   if (!subscription || !title) {
     return res.status(400).json({ error: "Missing subscription or title" });
@@ -36,8 +39,13 @@ module.exports = async function handler(req, res) {
     title: title || "Orbit",
     body: body || "",
     url: url || "/",
-    icon: "/icon-192.png",
+    // Use the sender's profile picture (or whatever icon the client sent)
+    // and fall back to the app icon only when nothing was provided.
+    icon: icon || "/icon-192.png",
     badge: "/icon-192.png",
+    // Optional large preview image (post/comment thumbnail, chat photo, etc.)
+    // Only included when present — sw.js ignores it otherwise.
+    ...(image ? { image } : {}),
   });
 
   try {
