@@ -225,7 +225,7 @@ export async function saveNotifRecord(toUid, type, extra = {}) {
 }
 
 // ── Send a push notification to another user ─────────────────────────────
-export async function notifyUser(toUid, title, body, url = "/") {
+export async function notifyUser(toUid, title, body, url = "/", icon = "") {
   if (!toUid || toUid === state.uid) return;
   try {
     const snap = await getDoc(doc(db, "users", toUid));
@@ -234,10 +234,12 @@ export async function notifyUser(toUid, title, body, url = "/") {
     const subscription = snap.data().pushSubscription;
     if (!subscription) return;
 
+    const notifIcon = icon || state.me?.photoURL || "";
+
     const res = await fetch("/api/send-notification", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ subscription, title, body, url }),
+      body: JSON.stringify({ subscription, title, body, url, icon: notifIcon }),
     });
 
     if (!res.ok) {
@@ -290,4 +292,44 @@ export async function sendTestNotification() {
   }
 }
 
+// ── Send a test push notification for a group message ────────────────────
+export async function sendTestGroupNotification() {
+  if (!state.uid) { showToastMsg("Not logged in"); return; }
+  try {
+    const snap = await getDoc(doc(db, "users", state.uid));
+    if (!snap.exists()) { showToastMsg("User doc not found"); return; }
+
+    const subscription = snap.data().pushSubscription;
+    if (!subscription) {
+      showToastMsg("No push subscription saved — tap Enable first");
+      return;
+    }
+
+    showToastMsg("Sending test group notification…");
+
+    const res = await fetch("/api/send-notification", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        subscription,
+        title: "Test Group",
+        body: `${state.me?.name || "Someone"}: This is a test group message`,
+        url: "/#chats",
+        icon: state.me?.photoURL || "",
+      }),
+    });
+
+    const json = await res.json().catch(() => ({}));
+
+    if (res.ok) {
+      showToastMsg("Test sent! You should see a group notification shortly.");
+    } else {
+      showToastMsg("Send failed: " + (json.error || res.status));
+    }
+  } catch (err) {
+    showToastMsg("Error: " + (err.message || err));
+  }
+}
+
 window._orbitTestNotif = sendTestNotification;
+window._orbitTestGroupNotif = sendTestGroupNotification;

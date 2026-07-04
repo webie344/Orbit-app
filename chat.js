@@ -714,7 +714,7 @@ const renderChatView = ({ isGroup, chatId, peer, group }) => {
           writeNotif(uid, "groupMessage", { groupId: chatId, text: `${state.me?.name || "Someone"} in ${groupName}: "${preview}"` }).catch(() => {});
         });
         import("./notifications.js").then(({ notifyUser }) => {
-          otherMembers.forEach((uid) => notifyUser(uid, groupName, `${state.me?.name || "Someone"}: ${preview}`, "/#chats/" + chatId).catch(() => {}));
+          otherMembers.forEach((uid) => notifyUser(uid, groupName, `${state.me?.name || "Someone"}: ${preview}`, "/#chats/" + chatId, state.me?.photoURL || "").catch(() => {}));
         }).catch(() => {});
       } else {
         const updateMeta = async (forUid, otherUid, isMe) => {
@@ -729,7 +729,7 @@ const renderChatView = ({ isGroup, chatId, peer, group }) => {
         // Notify recipient — in-app bell + push notification
         writeNotif(peer.uid, "message", { text: (text || "[media]").slice(0, 60) }).catch(() => {});
         import("./notifications.js").then(({ notifyUser }) =>
-          notifyUser(peer.uid, state.me?.name || "New message", text || "Sent you a message", "/#chats")
+          notifyUser(peer.uid, state.me?.name || "New message", text || "Sent you a message", "/#chats", state.me?.photoURL || "")
         ).catch(() => {});
       }
     } catch (err) {

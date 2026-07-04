@@ -467,14 +467,17 @@ export const renderNotifications = (root) => {
   const iconMap = {
     orbit: "ri-fire-fill", follow: "ri-user-follow-fill", message: "ri-chat-1-fill",
     comment: "ri-chat-4-fill", commentLike: "ri-heart-fill", groupMessage: "ri-group-2-fill", call: "ri-phone-fill",
+    newPost: "ri-file-add-fill",
   };
   const colMap = {
     orbit: "var(--grad-2)", follow: "var(--primary)", message: "var(--good)",
     comment: "var(--grad-3)", commentLike: "var(--danger)", groupMessage: "var(--good)", call: "#3fdca0",
+    newPost: "var(--grad-1)",
   };
   const descMap = {
     orbit: "orbited your post", follow: "followed you", message: "sent you a message",
     comment: "commented on your post", commentLike: "liked your comment", groupMessage: "sent a message in the group", call: "called you",
+    newPost: "shared a new post",
   };
 
   const q = query(
@@ -529,7 +532,7 @@ export const renderNotifications = (root) => {
         if (n.type === "message" && n.fromUid) location.hash = "#chats/" + n.fromUid;
         else if (n.type === "groupMessage" && n.groupId) location.hash = "#chats/" + n.groupId;
         else if (n.type === "follow" && n.fromUid) location.hash = "#profile/" + n.fromUid;
-        else if ((n.type === "comment" || n.type === "commentLike") && n.postId) location.hash = "#post/" + n.postId;
+        else if ((n.type === "comment" || n.type === "commentLike" || n.type === "newPost") && n.postId) location.hash = "#post/" + n.postId;
         else if (n.type === "call" && n.callId) { /* handled by call banner */ }
         else location.hash = "#feed";
       });
@@ -714,21 +717,29 @@ export const startCall = async ({ peerId, chatId, isGroup, type = "voice" }) => 
   });
   const callId = callRef.id;
 
-  // Notify peer(s)
+  // Notify peer(s) — in-app bell + push notification
+  const { notifyUser } = await import("./notifications.js").catch(() => ({ notifyUser: null }));
   if (isGroup) {
     const gSnap = await getDoc(doc(db, "groups", chatId)).catch(() => null);
     const members = (gSnap?.data()?.members || []).filter(u => u !== state.uid);
+    const groupName = gSnap?.data()?.name || "your group";
     for (const uid of members.slice(0, 14)) {
       writeNotif(uid, "call", {
         text: `${state.me?.name || "Someone"} started a group call`,
         callId,
       }).catch(() => {});
+      if (notifyUser) {
+        notifyUser(uid, groupName, `${state.me?.name || "Someone"} started a ${type} call`, "/#chats/" + chatId, state.me?.photoURL || "").catch(() => {});
+      }
     }
   } else {
     writeNotif(peerId, "call", {
       text: `${state.me?.name || "Someone"} is calling you`,
       callId,
     }).catch(() => {});
+    if (notifyUser) {
+      notifyUser(peerId, state.me?.name || "Someone", `Incoming ${type} call`, "/#chats/" + chatId, state.me?.photoURL || "").catch(() => {});
+    }
   }
 
   const overlay = _buildCallOverlay({ callId, localStream, isGroup, type, chatId, role: "caller" });

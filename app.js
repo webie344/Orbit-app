@@ -800,13 +800,13 @@ const toggleNotifPanel = () => {
   getDocs(query(collection(db, "notifications", state.uid, "items"), orderBy("createdAt", "desc"), limit(30)))
   .then((snap) => {
     if (snap.empty) { panel.appendChild(el("div", { class: "notif-empty" }, "No notifications yet.")); return; }
-    const iconMap = { orbit:"ri-fire-fill", follow:"ri-user-follow-fill", message:"ri-chat-1-fill", comment:"ri-chat-4-fill", commentLike:"ri-heart-fill", groupMessage:"ri-group-2-fill", call:"ri-phone-fill" };
-    const colMap  = { orbit:"var(--grad-2)", follow:"var(--primary)", message:"var(--good)", comment:"var(--grad-3)", commentLike:"var(--danger)", groupMessage:"var(--good)", call:"var(--primary)" };
+    const iconMap = { orbit:"ri-fire-fill", follow:"ri-user-follow-fill", message:"ri-chat-1-fill", comment:"ri-chat-4-fill", commentLike:"ri-heart-fill", groupMessage:"ri-group-2-fill", call:"ri-phone-fill", newPost:"ri-file-add-fill" };
+    const colMap  = { orbit:"var(--grad-2)", follow:"var(--primary)", message:"var(--good)", comment:"var(--grad-3)", commentLike:"var(--danger)", groupMessage:"var(--good)", call:"var(--primary)", newPost:"var(--grad-1)" };
     snap.docs.forEach((d) => {
       const n = { id: d.id, ...d.data() };
       const ic = iconMap[n.type] || "ri-notification-3-fill";
       const co = colMap[n.type]  || "var(--primary)";
-      const txt = n.text || (n.fromName || "Someone") + " " + ({ orbit:"orbited your post", follow:"followed you", message:"sent you a message", comment:"commented on your post", commentLike:"liked your comment", groupMessage:"sent a message in your group", call:"called you" }[n.type] || "interacted");
+      const txt = n.text || (n.fromName || "Someone") + " " + ({ orbit:"orbited your post", follow:"followed you", message:"sent you a message", comment:"commented on your post", commentLike:"liked your comment", groupMessage:"sent a message in your group", call:"called you", newPost:"shared a new post" }[n.type] || "interacted");
       const item = el("div", { class: "notif-item" + (n.read ? "" : " unread") },
         el("i", { class: ic, style: "color:" + co + ";font-size:20px;flex-shrink:0;margin-top:2px;" }),
         el("div", { style: "min-width:0;" }, el("div", { class: "ni-text" }, txt), el("div", { class: "ni-time" }, fmtTime(n.createdAt))),
@@ -817,7 +817,7 @@ const toggleNotifPanel = () => {
         if (n.type === "message" && n.fromUid) location.hash = "#chats/" + n.fromUid;
         else if (n.type === "groupMessage" && n.groupId) location.hash = "#chats/" + n.groupId;
         else if (n.type === "follow"  && n.fromUid) location.hash = "#profile/" + n.fromUid;
-        else if ((n.type === "comment" || n.type === "commentLike") && n.postId) location.hash = "#post/" + n.postId;
+        else if ((n.type === "comment" || n.type === "commentLike" || n.type === "newPost") && n.postId) location.hash = "#post/" + n.postId;
         else if (n.type === "call") location.hash = "#chats";
         else location.hash = "#feed";
       });
@@ -1280,7 +1280,7 @@ const renderPost = (p, author, opts = {}) => {
         if (_isFollowing) {
           writeNotif(author.uid, "follow", {}).catch(() => {});
           import("./notifications.js").then(({ notifyUser }) =>
-            notifyUser(author.uid, state.me?.name || "Someone", "started following you", "/#profile/" + state.uid)
+            notifyUser(author.uid, state.me?.name || "Someone", "started following you", "/#profile/" + state.uid, state.me?.photoURL || "")
           ).catch(() => {});
         }
         if (state.me) { state.me.following = _isFollowing ? [...(state.me.following||[]), author.uid] : (state.me.following||[]).filter((x)=>x!==author.uid); }
@@ -1372,7 +1372,7 @@ const renderPost = (p, author, opts = {}) => {
         text: `${state.me?.name || "Someone"} orbited your post`,
       }).catch(() => {});
       import("./notifications.js").then(({ notifyUser }) =>
-        notifyUser(author.uid, state.me?.name || "Someone", "orbited your post", "/#post/" + p.id)
+        notifyUser(author.uid, state.me?.name || "Someone", "orbited your post", "/#post/" + p.id, state.me?.photoURL || "")
       ).catch(() => {});
     }
   }}, orbitIcon, el("span", {}, "Orbit · "), orbitCount);
@@ -1495,7 +1495,7 @@ const renderPost = (p, author, opts = {}) => {
           text: `${state.me?.name || "Someone"} commented: "${commentData.text.slice(0, 60)}"`,
         }).catch(() => {});
         import("./notifications.js").then(({ notifyUser }) =>
-          notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id)
+          notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id, state.me?.photoURL || "")
         ).catch(() => {});
       }
     });
@@ -1519,7 +1519,7 @@ const renderPost = (p, author, opts = {}) => {
         if (_liked && a?.uid && a.uid !== state.uid) {
           writeNotif(a.uid, "commentLike", { postId: p.id, text: `${state.me?.name || "Someone"} liked your comment` }).catch(() => {});
           import("./notifications.js").then(({ notifyUser }) =>
-            notifyUser(a.uid, state.me?.name || "Someone", "liked your comment", "/#post/" + p.id)
+            notifyUser(a.uid, state.me?.name || "Someone", "liked your comment", "/#post/" + p.id, state.me?.photoURL || "")
           ).catch(() => {});
         }
       }}, likeIconEl, likeCountEl);
@@ -1628,7 +1628,7 @@ const renderPostDetail = async (root, postId) => {
       if (_liked && a?.uid && a.uid !== state.uid) {
         writeNotif(a.uid, "commentLike", { postId: p.id, text: `${state.me?.name || "Someone"} liked your comment` }).catch(() => {});
         import("./notifications.js").then(({ notifyUser }) =>
-          notifyUser(a.uid, state.me?.name || "Someone", "liked your comment", "/#post/" + p.id)
+          notifyUser(a.uid, state.me?.name || "Someone", "liked your comment", "/#post/" + p.id, state.me?.photoURL || "")
         ).catch(() => {});
       }
     }}, likeIconEl, likeCountEl);
@@ -1750,7 +1750,7 @@ const renderPostDetail = async (root, postId) => {
         text: `${state.me?.name || "Someone"} commented: "${commentData.text.slice(0, 60)}"`,
       }).catch(() => {});
       import("./notifications.js").then(({ notifyUser }) =>
-        notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id)
+        notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id, state.me?.photoURL || "")
       ).catch(() => {});
     }
   });
@@ -2203,6 +2203,14 @@ const renderSettings = (root) => {
           toast(p === "granted" ? "Notifications enabled" : "Notifications denied");
         }}, "Enable"),
       ),
+      el("div", { class: "row" },
+        el("div", { class: "label" },
+          el("div", { class: "t" }, "Test group notification"),
+          el("div", { class: "d" }, "Send yourself a test push notification for a group message.")),
+        el("button", { class: "btn ghost", onclick: () => {
+          import("./notifications.js").then((m) => m.sendTestGroupNotification());
+        }}, "Send test"),
+      ),
     ),
 
     el("div", { class: "group" },
@@ -2378,12 +2386,26 @@ $("#postForm").addEventListener("submit", async (e) => {
     const hashtags = extractHashtags(text);
     const _pd = { authorUid: state.uid, text, media, hashtags, orbits: [], orbitCount: 0, commentCount: 0, createdAt: serverTimestamp() };
     if (_postLocation) { _pd.location = _postLocation; _postLocation = null; }
-    await addDoc(collection(db, "posts"), _pd);
+    const _newPostRef = await addDoc(collection(db, "posts"), _pd);
     sfxPost();
     e.target.reset(); postFiles = []; refreshPostPreviews();
     const _lt = document.getElementById("postLocationTag"); if (_lt) { _lt.style.display = "none"; _lt.textContent = ""; }
     const _lb = document.getElementById("postLocationBtn"); if (_lb) _lb.innerHTML = '<i class="ri-map-pin-line"></i>';
     composeModal.classList.add("hidden"); toast("Posted!");
+    // Notify followers — in-app bell + push notification
+    const _followers = (state.me?.followers || []).slice(0, 200);
+    if (_followers.length) {
+      const _preview = (text || "shared new media").slice(0, 60);
+      import("./notifications.js").then(({ notifyUser }) => {
+        _followers.forEach((uid) => {
+          writeNotif(uid, "newPost", {
+            postId: _newPostRef.id,
+            text: `${state.me?.name || "Someone"} posted: "${_preview}"`,
+          }).catch(() => {});
+          notifyUser(uid, state.me?.name || "Someone", `New post: ${_preview}`, "/#post/" + _newPostRef.id, state.me?.photoURL || "").catch(() => {});
+        });
+      }).catch(() => {});
+    }
   } catch (err) {
     toast("Failed to post: " + (err.message || "unknown error"));
   } finally {
