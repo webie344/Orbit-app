@@ -92,18 +92,25 @@ self.addEventListener("install", (event) => {
   );
 });
 
-// ── Activate: remove old caches ──────────────────────────────────────────
+// ── Activate: remove old caches then claim all clients ───────────────────
+// FIX: clients.claim() must be inside event.waitUntil() so the browser
+// waits for it before considering the SW fully activated. When it was
+// outside, existing tabs were never reassigned to the new SW, so the
+// "controllerchange" event never fired and the page never reloaded after
+// the user tapped "Update now".
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys
-          .filter((key) => key !== CACHE_NAME)
-          .map((key) => caches.delete(key))
+    caches
+      .keys()
+      .then((keys) =>
+        Promise.all(
+          keys
+            .filter((key) => key !== CACHE_NAME)
+            .map((key) => caches.delete(key))
+        )
       )
-    )
+      .then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
 // ── Fetch: network-first for API/Firebase, cache-first for shell ─────────

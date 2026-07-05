@@ -701,8 +701,9 @@ onAuthStateChanged(auth, async (user) => {
   router(); // initial route
   watchOfflineOnUnload();
   startNewsBot(); // kick off official news/sport/social bot (throttled to every 5 h)
-  // Show onboarding modal for brand-new users
+  // Show onboarding modal for brand-new users; otherwise prompt incomplete profiles
   if (state.me._isNew) showOnboardingModal();
+  else checkProfileSetup();
   // Notify chat module
   document.dispatchEvent(new CustomEvent("orbit:auth-ready", { detail: state.me }));
 });
@@ -732,9 +733,24 @@ $$(".auth-tab").forEach((tab) => {
   tab.addEventListener("click", () => {
     $$(".auth-tab").forEach((t) => t.classList.toggle("active", t === tab));
     const which = tab.dataset.tab;
-    $("#signinForm").classList.toggle("hidden", which !== "signin");
-    $("#signupForm").classList.toggle("hidden", which !== "signup");
+    if (which === "signup") {
+      // Show feature-overview onboarding before the actual sign-up form
+      $("#signinForm").classList.add("hidden");
+      $("#signupForm").classList.add("hidden");
+      $("#signupOnboard").classList.remove("hidden");
+      return;
+    }
+    // Sign-in tab: hide everything else, show sign-in
+    $("#signupOnboard").classList.add("hidden");
+    $("#signupForm").classList.add("hidden");
+    $("#signinForm").classList.remove("hidden");
   });
+});
+
+// "Create my account" inside the pre-signup onboard → reveal the real sign-up form
+document.getElementById("onboardGetStarted")?.addEventListener("click", () => {
+  $("#signupOnboard").classList.add("hidden");
+  $("#signupForm").classList.remove("hidden");
 });
 
 $("#signinForm").addEventListener("submit", async (e) => {
@@ -1504,6 +1520,16 @@ const renderPost = (p, author, opts = {}) => {
           notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
         ).catch(() => {});
       }
+      // Notify the person whose comment was replied to (if different from post author and self)
+      if (commentData.replyToUid && commentData.replyToUid !== state.uid && commentData.replyToUid !== author?.uid) {
+        writeNotif(commentData.replyToUid, "commentReply", {
+          postId: p.id,
+          text: `${state.me?.name || "Someone"} replied to your comment: "${commentData.text.slice(0, 60)}"`,
+        }).catch(() => {});
+        import("./notifications.js").then(({ notifyUser }) =>
+          notifyUser(commentData.replyToUid, state.me?.name || "Someone", "replied to your comment", "/#post/" + p.id, state.me?.photoURL || "")
+        ).catch(() => {});
+      }
     });
     post.appendChild(cForm);
 
@@ -1758,6 +1784,16 @@ const renderPostDetail = async (root, postId) => {
       const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
       import("./notifications.js").then(({ notifyUser }) =>
         notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
+      ).catch(() => {});
+    }
+    // Notify the person whose comment was replied to (if different from post author and self)
+    if (commentData.replyToUid && commentData.replyToUid !== state.uid && commentData.replyToUid !== author?.uid) {
+      writeNotif(commentData.replyToUid, "commentReply", {
+        postId: p.id,
+        text: `${state.me?.name || "Someone"} replied to your comment: "${commentData.text.slice(0, 60)}"`,
+      }).catch(() => {});
+      import("./notifications.js").then(({ notifyUser }) =>
+        notifyUser(commentData.replyToUid, state.me?.name || "Someone", "replied to your comment", "/#post/" + p.id, state.me?.photoURL || "")
       ).catch(() => {});
     }
   });
@@ -2744,6 +2780,52 @@ const showOnboardingModal = () => {
   overlay.appendChild(modal);
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
   document.body.appendChild(overlay);
+};
+
+// =========================================================================
+// 14c-2. PROFILE SETUP PROMPT — for returning users who skipped onboarding
+// =========================================================================
+
+const checkProfileSetup = () => {
+  // Only once per session
+  if (sessionStorage.getItem("orbit:profile-prompt-dismissed")) return;
+  const hasDefaultAvatar = !state.me.photoURL || state.me.photoURL.includes("dicebear");
+  const hasBio = !!state.me.bio?.trim();
+  if (!hasDefaultAvatar && hasBio) return; // profile looks complete — nothing to prompt
+
+  const banner = document.createElement("div");
+  banner.className = "profile-setup-banner";
+  banner.innerHTML = `
+    <div class="psb-icon"><i class="ri-user-settings-line"></i></div>
+    <div class="psb-body">
+      <div class="psb-title">Complete your profile</div>
+      <div class="psb-sub">${hasDefaultAvatar ? "Add a profile photo" : ""}${hasDefaultAvatar && !hasBio ? " and a " : ""}${!hasBio ? "bio" : ""} so people can find you</div>
+    </div>
+    <button class="btn primary sm psb-btn">Set up</button>
+    <button class="icon-btn psb-dismiss" title="Dismiss"><i class="ri-close-line"></i></button>`;
+
+  const dismiss = () => {
+    banner.remove();
+    sessionStorage.setItem("orbit:profile-prompt-dismissed", "1");
+  };
+
+  banner.querySelector(".psb-btn").onclick = () => {
+    dismiss();
+    location.hash = "#profile/" + state.uid;
+    // Open the edit modal once the profile route has rendered
+    setTimeout(() => {
+      document.querySelector(".profile-actions .btn.ghost")?.click();
+    }, 500);
+  };
+  banner.querySelector(".psb-dismiss").onclick = dismiss;
+
+  // Insert at top of #content after feed has rendered
+  setTimeout(() => {
+    const content = document.getElementById("content");
+    if (content && !document.querySelector(".profile-setup-banner")) {
+      content.insertBefore(banner, content.firstChild);
+    }
+  }, 1200);
 };
 
 // =========================================================================

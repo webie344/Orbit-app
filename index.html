@@ -92,6 +92,48 @@
           <button type="submit" class="btn primary block">Enter Orbit</button>
         </form>
 
+        <!-- Pre-signup feature overview — shown when "Create account" tab is clicked -->
+        <div id="signupOnboard" class="signup-onboard hidden">
+          <p class="sgo-tagline">Everything you need to connect, share, and belong.</p>
+          <div class="sgo-features">
+            <div class="sgo-feat">
+              <span class="sgo-feat-icon"><i class="ri-planet-fill"></i></span>
+              <div class="sgo-feat-text">
+                <strong>Feed &amp; Stories</strong>
+                <span>Share posts, photos &amp; 24 h stories</span>
+              </div>
+            </div>
+            <div class="sgo-feat">
+              <span class="sgo-feat-icon"><i class="ri-chat-3-fill"></i></span>
+              <div class="sgo-feat-text">
+                <strong>Real-time Chat</strong>
+                <span>DMs, group chats &amp; voice/video calls</span>
+              </div>
+            </div>
+            <div class="sgo-feat">
+              <span class="sgo-feat-icon"><i class="ri-compass-3-fill"></i></span>
+              <div class="sgo-feat-text">
+                <strong>Explore &amp; Spaces</strong>
+                <span>Discover trending content &amp; communities</span>
+              </div>
+            </div>
+            <div class="sgo-feat">
+              <span class="sgo-feat-icon"><i class="ri-sparkling-2-fill"></i></span>
+              <div class="sgo-feat-text">
+                <strong>AI Assistant</strong>
+                <span>Your personal AI, always in your chats</span>
+              </div>
+            </div>
+          </div>
+          <button id="onboardGetStarted" class="btn primary block" style="margin-top:20px;">
+            <i class="ri-rocket-line"></i> Create my account
+          </button>
+          <button class="btn ghost block" style="margin-top:8px;font-size:13px;"
+            onclick="document.querySelector('[data-tab=signin]').click()">
+            Already have an account? Sign in
+          </button>
+        </div>
+
         <form id="signupForm" class="auth-form hidden">
           <label>Name
             <input type="text" name="name" placeholder="Your name" required/>

@@ -466,17 +466,20 @@ export const renderNotifications = (root) => {
 
   const iconMap = {
     orbit: "ri-fire-fill", follow: "ri-user-follow-fill", message: "ri-chat-1-fill",
-    comment: "ri-chat-4-fill", commentLike: "ri-heart-fill", groupMessage: "ri-group-2-fill", call: "ri-phone-fill",
+    comment: "ri-chat-4-fill", commentLike: "ri-heart-fill", commentReply: "ri-reply-fill",
+    groupMessage: "ri-group-2-fill", call: "ri-phone-fill",
     newPost: "ri-file-add-fill", postConfirm: "ri-checkbox-circle-fill",
   };
   const colMap = {
     orbit: "var(--grad-2)", follow: "var(--primary)", message: "var(--good)",
-    comment: "var(--grad-3)", commentLike: "var(--danger)", groupMessage: "var(--good)", call: "#3fdca0",
+    comment: "var(--grad-3)", commentLike: "var(--danger)", commentReply: "var(--primary)",
+    groupMessage: "var(--good)", call: "#3fdca0",
     newPost: "var(--grad-1)", postConfirm: "var(--good)",
   };
   const descMap = {
     orbit: "orbited your post", follow: "followed you", message: "sent you a message",
-    comment: "commented on your post", commentLike: "liked your comment", groupMessage: "sent a message in the group", call: "called you",
+    comment: "commented on your post", commentLike: "liked your comment", commentReply: "replied to your comment",
+    groupMessage: "sent a message in the group", call: "called you",
     newPost: "shared a new post", postConfirm: "Your post is live!",
   };
 
@@ -532,7 +535,9 @@ export const renderNotifications = (root) => {
         if (n.type === "message" && n.fromUid) location.hash = "#chats/" + n.fromUid;
         else if (n.type === "groupMessage" && n.groupId) location.hash = "#chats/" + n.groupId;
         else if (n.type === "follow" && n.fromUid) location.hash = "#profile/" + n.fromUid;
-        else if ((n.type === "comment" || n.type === "commentLike" || n.type === "newPost" || n.type === "postConfirm") && n.postId) location.hash = "#post/" + n.postId;
+        else if ((n.type === "comment" || n.type === "commentLike" || n.type === "commentReply" || n.type === "newPost" || n.type === "postConfirm") && n.postId) location.hash = "#post/" + n.postId;
+        else if (n.type === "orbit" && n.postId) location.hash = "#post/" + n.postId;
+        else if (n.type === "orbit" && n.fromUid) location.hash = "#profile/" + n.fromUid;
         else if (n.type === "call" && n.callId) { /* handled by call banner */ }
         else location.hash = "#feed";
       });
@@ -742,7 +747,8 @@ export const startCall = async ({ peerId, chatId, isGroup, type = "voice" }) => 
     }
   }
 
-  const overlay = _buildCallOverlay({ callId, localStream, isGroup, type, chatId, role: "caller" });
+  const peerProfile = !isGroup ? await fetchUser(peerId).catch(() => null) : null;
+  const overlay = _buildCallOverlay({ callId, localStream, isGroup, type, chatId, role: "caller", peerProfile });
   document.body.appendChild(overlay);
   _activeCall = { callId, overlay, localStream, peers: {}, unsubs: [] };
 
@@ -818,6 +824,7 @@ export const answerCall = async (callId) => {
   const overlay = _buildCallOverlay({
     callId, localStream, isGroup: call.isGroup, type: call.type,
     chatId: call.chatId, role: "callee",
+    peerProfile: { name: call.callerName, photoURL: call.callerAvatar },
   });
   document.body.appendChild(overlay);
   _activeCall = { callId, overlay, localStream, peers: {}, unsubs: [] };
@@ -888,11 +895,57 @@ const _updateParticipantCount = (overlay) => {
 };
 
 const _addRemoteStream = (overlay, peerId, stream) => {
-  const grid = overlay.querySelector(".call-remote-grid");
-  if (!grid) return;
-  if (grid.querySelector(`[data-peer="${peerId}"]`)) return;
+  // ── AUDIO FIX: always attach a hidden <audio> element so the remote
+  //    audio track is actually played back. Without this, WebRTC delivers
+  //    the track but nothing renders it to the speaker.
+  if (!overlay.querySelector(`audio[data-peer="${peerId}"]`)) {
+    const audio = Object.assign(document.createElement("audio"), {
+      autoplay: true,
+      srcObject: stream,
+    });
+    audio.dataset.peer = peerId;
+    audio.style.display = "none";
+    overlay.appendChild(audio);
+  }
 
-  overlay.querySelector(".call-status-wrap")?.remove();
+  // ── Personal voice call: update avatar, name & status ────────────────
+  if (overlay.classList.contains("call-voice-solo")) {
+    overlay.querySelector("#callTimer")?.classList.remove("hidden");
+    const st = overlay.querySelector("#callStatus");
+    if (st) st.textContent = "Connected";
+    fetchUser(peerId).then(u => {
+      const av = overlay.querySelector("#callPeerAv");
+      if (av) av.src = avatarFor(u);
+      const nm = overlay.querySelector("#callPeerName");
+      if (nm) nm.textContent = u?.name || "User";
+    });
+    return;
+  }
+
+  // ── Personal video call: attach to full-screen video element ─────────
+  if (overlay.classList.contains("call-video-solo")) {
+    const hasVid = stream.getVideoTracks().length > 0;
+    if (hasVid) {
+      const rv = overlay.querySelector("#callRemoteVid");
+      if (rv) rv.srcObject = stream;
+      overlay.querySelector("#callStatusWrap")?.remove();
+    }
+    fetchUser(peerId).then(u => {
+      const nm = overlay.querySelector("#callVidPeerName");
+      if (nm) nm.textContent = u?.name || "";
+      const av = overlay.querySelector(".call-voice-av");
+      if (av) av.src = avatarFor(u);
+      const sn = overlay.querySelector(".call-voice-name");
+      if (sn) sn.textContent = u?.name || "User";
+      const ss = overlay.querySelector(".call-voice-status");
+      if (ss) ss.textContent = "Connected";
+    });
+    return;
+  }
+
+  // ── Group call: add participant tile to grid ──────────────────────────
+  const grid = overlay.querySelector(".call-remote-grid");
+  if (!grid || grid.querySelector(`[data-peer="${peerId}"]`)) return;
 
   const peerEl = document.createElement("div");
   peerEl.className = "call-remote-peer";
@@ -913,7 +966,6 @@ const _addRemoteStream = (overlay, peerId, stream) => {
     });
   }
 
-  // Name + mic label pinned to bottom of tile
   const label = document.createElement("div");
   label.className = "call-tile-label";
   label.innerHTML = `<i class="ri-mic-line call-tile-mic"></i><span class="call-tile-name">…</span>`;
@@ -927,49 +979,117 @@ const _addRemoteStream = (overlay, peerId, stream) => {
   _updateParticipantCount(overlay);
 };
 
-const _buildCallOverlay = ({ callId, localStream, isGroup, type, chatId, role }) => {
+const _buildCallOverlay = ({ callId, localStream, isGroup, type, chatId, role, peerProfile }) => {
   const overlay = document.createElement("div");
-  overlay.className = "call-overlay";
   const hasVideo = type === "video";
   let muted = false, camOff = false;
-
   const startTime = Date.now();
   let timerInterval = null;
 
-  overlay.innerHTML = `
-    <div class="call-container">
+  const peerAv   = peerProfile ? avatarFor(peerProfile) : avatarFor(state.me);
+  const peerName = peerProfile?.name || "…";
+  const statusTxt = role === "caller" ? "Calling…" : "Connecting…";
 
-      <div class="call-topbar">
-        <div class="call-participant-count">1 participant</div>
-        <div class="call-timer" id="callTimer">00:00</div>
-        <div class="call-type-badge"><i class="ri-${hasVideo ? "vidicon" : "phone"}-fill"></i> ${hasVideo ? "Video" : "Voice"}</div>
+  // ── PERSONAL VOICE CALL ───────────────────────────────────────────────
+  if (!isGroup && !hasVideo) {
+    overlay.className = "call-overlay call-voice-solo";
+    overlay.innerHTML = `
+      <div class="call-voice-bg"></div>
+      <div class="call-voice-topbar">
+        <span class="call-type-badge"><i class="ri-phone-fill"></i> Voice call</span>
+        <span class="call-timer hidden" id="callTimer">00:00</span>
       </div>
-
-      <div class="call-remote-grid"></div>
-
-      <div class="call-status-wrap">
-        <div class="call-waiting-wrap">
-          <img class="avatar xl call-waiting-av" src="${avatarFor(state.me)}" />
-          <div class="call-ripple"></div>
+      <div class="call-voice-hero">
+        <div class="call-voice-av-ring">
+          <img class="call-voice-av" id="callPeerAv" src="${peerAv}" />
+          <div class="call-ripple-ring r1"></div>
+          <div class="call-ripple-ring r2"></div>
+          <div class="call-ripple-ring r3"></div>
         </div>
-        <div class="call-status-text">${role === "caller" ? "Calling…" : "Connecting…"}</div>
-        ${isGroup ? `<div class="call-status-sub">Waiting for others to join</div>` : ""}
+        <div class="call-voice-name" id="callPeerName">${peerName}</div>
+        <div class="call-voice-status" id="callStatus">${statusTxt}</div>
       </div>
+      <div class="call-controls call-controls-voice">
+        <div class="call-ctrl-group">
+          <button class="call-ctrl" id="ccMute"><i class="ri-mic-line"></i></button>
+          <span class="call-ctrl-label">Mute</span>
+        </div>
+        <div class="call-ctrl-group">
+          <button class="call-ctrl danger" id="ccEnd">
+            <i class="ri-phone-fill" style="transform:rotate(135deg);"></i>
+          </button>
+          <span class="call-ctrl-label">End call</span>
+        </div>
+        <div class="call-ctrl-group">
+          <button class="call-ctrl" id="ccSpk"><i class="ri-volume-up-line"></i></button>
+          <span class="call-ctrl-label">Speaker</span>
+        </div>
+      </div>`;
 
-      ${hasVideo
-        ? `<video id="callLocalVid" autoplay muted playsinline class="call-local-video"></video>`
-        : `<div class="call-self-tile call-remote-peer">
-             <div class="call-audio-peer">
-               <img class="avatar xl" src="${avatarFor(state.me)}" />
-               <div class="call-peer-name">${state.me?.name?.split(" ")[0] || "You"}</div>
-             </div>
-             <div class="call-tile-label">
-               <i class="ri-mic-line call-tile-mic"></i>
-               <span class="call-tile-name">You</span>
-             </div>
-           </div>`}
+  // ── PERSONAL VIDEO CALL ───────────────────────────────────────────────
+  } else if (!isGroup && hasVideo) {
+    overlay.className = "call-overlay call-video-solo";
+    overlay.innerHTML = `
+      <video id="callRemoteVid" autoplay playsinline class="call-remote-fullvid"></video>
+      <div class="call-video-topbar">
+        <div class="call-vid-peer-name" id="callVidPeerName">${peerName}</div>
+        <div class="call-timer" id="callTimer">00:00</div>
+      </div>
+      <div id="callStatusWrap" class="call-video-status-wrap">
+        <div class="call-voice-av-ring">
+          <img class="call-voice-av" id="callPeerAv" src="${peerAv}" />
+          <div class="call-ripple-ring r1"></div>
+          <div class="call-ripple-ring r2"></div>
+          <div class="call-ripple-ring r3"></div>
+        </div>
+        <div class="call-voice-name">${peerName}</div>
+        <div class="call-voice-status">${statusTxt}</div>
+      </div>
+      <video id="callLocalVid" autoplay muted playsinline class="call-local-pip"></video>
+      <div class="call-controls call-controls-video">
+        <div class="call-ctrl-group">
+          <button class="call-ctrl" id="ccMute"><i class="ri-mic-line"></i></button>
+          <span class="call-ctrl-label">Mute</span>
+        </div>
+        <div class="call-ctrl-group">
+          <button class="call-ctrl" id="ccCam"><i class="ri-vidicon-line"></i></button>
+          <span class="call-ctrl-label">Camera</span>
+        </div>
+        <div class="call-ctrl-group">
+          <button class="call-ctrl danger" id="ccEnd">
+            <i class="ri-phone-fill" style="transform:rotate(135deg);"></i>
+          </button>
+          <span class="call-ctrl-label">End call</span>
+        </div>
+      </div>`;
+    const lv = overlay.querySelector("#callLocalVid");
+    if (lv) lv.srcObject = localStream;
 
-      <div class="call-controls">
+  // ── GROUP CALL ────────────────────────────────────────────────────────
+  } else {
+    overlay.className = "call-overlay call-group";
+    overlay.innerHTML = `
+      <div class="call-group-bg"></div>
+      <div class="call-group-header">
+        <div class="call-group-title"><i class="ri-${hasVideo ? "vidicon" : "phone"}-fill"></i> Group ${hasVideo ? "video" : "voice"} call</div>
+        <div class="call-group-meta">
+          <span class="call-timer" id="callTimer">00:00</span>
+          <span class="call-participant-count">1 participant</span>
+        </div>
+      </div>
+      <div class="call-remote-grid">
+        <div class="call-remote-peer call-self-tile">
+          <div class="call-audio-peer">
+            <img class="avatar xl" src="${avatarFor(state.me)}" />
+            <div class="call-peer-name">${state.me?.name?.split(" ")[0] || "You"}</div>
+          </div>
+          <div class="call-tile-label">
+            <i class="ri-mic-line call-tile-mic"></i>
+            <span class="call-tile-name">You</span>
+          </div>
+        </div>
+      </div>
+      <div class="call-controls call-controls-group">
         <div class="call-ctrl-group">
           <button class="call-ctrl" id="ccMute"><i class="ri-mic-line"></i></button>
           <span class="call-ctrl-label">Mute</span>
@@ -983,48 +1103,49 @@ const _buildCallOverlay = ({ callId, localStream, isGroup, type, chatId, role })
           <button class="call-ctrl danger" id="ccEnd">
             <i class="ri-phone-fill" style="transform:rotate(135deg);"></i>
           </button>
-          <span class="call-ctrl-label">End</span>
+          <span class="call-ctrl-label">End call</span>
         </div>
-      </div>
-
-    </div>`;
-
-  timerInterval = setInterval(() => {
-    const s = Math.floor((Date.now() - startTime) / 1000);
-    const el2 = overlay.querySelector("#callTimer");
-    if (el2) el2.textContent = `${String(Math.floor(s / 60)).padStart(2,"0")}:${String(s % 60).padStart(2,"0")}`;
-  }, 1000);
-
-  if (hasVideo) {
-    const lv = overlay.querySelector("#callLocalVid");
-    if (lv) lv.srcObject = localStream;
+      </div>`;
   }
 
-  overlay.querySelector("#ccMute").onclick = () => {
+  // ── Timer ─────────────────────────────────────────────────────────────
+  timerInterval = setInterval(() => {
+    const s = Math.floor((Date.now() - startTime) / 1000);
+    const el = overlay.querySelector("#callTimer");
+    if (el) el.textContent = `${String(Math.floor(s / 60)).padStart(2,"0")}:${String(s % 60).padStart(2,"0")}`;
+  }, 1000);
+
+  // ── Controls ──────────────────────────────────────────────────────────
+  overlay.querySelector("#ccMute")?.addEventListener("click", () => {
     muted = !muted;
     localStream.getAudioTracks().forEach(t => { t.enabled = !muted; });
     const btn = overlay.querySelector("#ccMute");
     btn.querySelector("i").className = muted ? "ri-mic-off-line" : "ri-mic-line";
     btn.classList.toggle("active", muted);
     btn.closest(".call-ctrl-group").querySelector(".call-ctrl-label").textContent = muted ? "Unmute" : "Mute";
-    overlay.querySelector(".call-self-tile .call-tile-mic")?.classList.toggle("muted", muted);
-  };
+  });
 
-  if (hasVideo) {
-    overlay.querySelector("#ccCam").onclick = () => {
-      camOff = !camOff;
-      localStream.getVideoTracks().forEach(t => { t.enabled = !camOff; });
-      const btn = overlay.querySelector("#ccCam");
-      btn.querySelector("i").className = camOff ? "ri-vidicon-off-line" : "ri-vidicon-line";
-      btn.classList.toggle("active", camOff);
-      btn.closest(".call-ctrl-group").querySelector(".call-ctrl-label").textContent = camOff ? "Show cam" : "Camera";
-    };
-  }
+  overlay.querySelector("#ccCam")?.addEventListener("click", () => {
+    camOff = !camOff;
+    localStream.getVideoTracks().forEach(t => { t.enabled = !camOff; });
+    const btn = overlay.querySelector("#ccCam");
+    btn.querySelector("i").className = camOff ? "ri-vidicon-off-line" : "ri-vidicon-line";
+    btn.classList.toggle("active", camOff);
+    btn.closest(".call-ctrl-group").querySelector(".call-ctrl-label").textContent = camOff ? "Show cam" : "Camera";
+  });
 
-  overlay.querySelector("#ccEnd").onclick = () => {
+  overlay.querySelector("#ccSpk")?.addEventListener("click", () => {
+    const btn = overlay.querySelector("#ccSpk");
+    btn.classList.toggle("active");
+    const on = btn.classList.contains("active");
+    btn.querySelector("i").className = on ? "ri-volume-mute-line" : "ri-volume-up-line";
+    btn.closest(".call-ctrl-group").querySelector(".call-ctrl-label").textContent = on ? "Muted" : "Speaker";
+  });
+
+  overlay.querySelector("#ccEnd").addEventListener("click", () => {
     clearInterval(timerInterval);
     _endCall(callId, overlay, localStream);
-  };
+  });
 
   return overlay;
 };
@@ -1038,6 +1159,93 @@ const _endCall = async (callId, overlay, localStream) => {
   }
   overlay.remove();
   await updateDoc(doc(db, "calls", callId), { status: "ended" }).catch(() => {});
+};
+
+// =========================================================================
+// 3b. IN-APP NOTIFICATION TOASTS — slide-in popup for new notifications
+// =========================================================================
+
+const _NOTIF_ICON = {
+  orbit: "ri-fire-fill", follow: "ri-user-follow-fill", message: "ri-chat-1-fill",
+  comment: "ri-chat-4-fill", commentLike: "ri-heart-fill", commentReply: "ri-reply-fill",
+  groupMessage: "ri-group-2-fill", call: "ri-phone-fill",
+  newPost: "ri-file-add-fill", postConfirm: "ri-checkbox-circle-fill",
+};
+const _NOTIF_COL = {
+  orbit: "var(--grad-2)", follow: "var(--primary)", message: "var(--good)",
+  comment: "var(--grad-3)", commentLike: "var(--danger)", commentReply: "var(--primary)",
+  groupMessage: "var(--good)", call: "#3fdca0",
+  newPost: "var(--grad-1)", postConfirm: "var(--good)",
+};
+const _NOTIF_DESC = {
+  orbit: "orbited your post", follow: "followed you", message: "sent you a message",
+  comment: "commented on your post", commentLike: "liked your comment",
+  commentReply: "replied to your comment", groupMessage: "sent a message in the group",
+  call: "called you", newPost: "shared a new post", postConfirm: "Your post is live!",
+};
+
+const _showNotifToast = (n) => {
+  if (n.type === "call") return; // calls have their own incoming-call banner
+  const ic = _NOTIF_ICON[n.type] || "ri-notification-3-fill";
+  const co = _NOTIF_COL[n.type]  || "var(--primary)";
+  const bodyTxt = n.text || `${n.fromName || "Someone"} ${_NOTIF_DESC[n.type] || "interacted with you"}`;
+  const fallbackAv = `https://api.dicebear.com/7.x/shapes/svg?seed=${n.fromUid || "x"}`;
+
+  const el = document.createElement("div");
+  el.className = "notif-toast";
+  el.innerHTML = `
+    <div class="nt-icon" style="background:${co}22;"><i class="${ic}" style="color:${co};"></i></div>
+    <img class="avatar sm nt-av" src="${n.fromAvatar || fallbackAv}" alt="" />
+    <div class="nt-body">
+      <div class="nt-from">${n.fromName || "Orbit"}</div>
+      <div class="nt-text">${bodyTxt}</div>
+    </div>
+    <button class="icon-btn nt-close"><i class="ri-close-line"></i></button>`;
+
+  const dismiss = () => {
+    el.classList.remove("nt-show");
+    setTimeout(() => el.remove(), 320);
+  };
+
+  el.querySelector(".nt-close").onclick = (e) => { e.stopPropagation(); dismiss(); };
+  el.addEventListener("click", () => {
+    dismiss();
+    if (n.type === "orbit" && n.postId) location.hash = "#post/" + n.postId;
+    else if (n.type === "orbit" && n.fromUid) location.hash = "#profile/" + n.fromUid;
+    else if (n.type === "follow" && n.fromUid) location.hash = "#profile/" + n.fromUid;
+    else if ((n.type === "comment" || n.type === "commentLike" || n.type === "commentReply") && n.postId) location.hash = "#post/" + n.postId;
+    else if ((n.type === "message") && n.fromUid) location.hash = "#chats/" + n.fromUid;
+    else if (n.type === "groupMessage" && n.groupId) location.hash = "#chats/" + n.groupId;
+  });
+
+  document.body.appendChild(el);
+  requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add("nt-show")));
+  setTimeout(dismiss, 5000);
+};
+
+const _initNotifToasts = () => {
+  let seenIds = null; // null = first snapshot not yet processed
+  onSnapshot(
+    query(
+      collection(db, "notifications", state.uid, "items"),
+      orderBy("createdAt", "desc"),
+      limit(20)
+    ),
+    (snap) => {
+      if (seenIds === null) {
+        // Seed the set with existing notification IDs so we only toast NEW ones
+        seenIds = new Set(snap.docs.map(d => d.id));
+        return;
+      }
+      snap.docChanges()
+        .filter(c => c.type === "added" && !seenIds.has(c.doc.id))
+        .forEach(c => {
+          seenIds.add(c.doc.id);
+          const n = { id: c.doc.id, ...c.doc.data() };
+          if (!n.read) _showNotifToast(n);
+        });
+    }
+  );
 };
 
 // Incoming call notification listener
@@ -1112,6 +1320,7 @@ const _showIncomingBanner = async (n) => {
 // =========================================================================
 document.addEventListener("orbit:auth-ready", () => {
   initCallListener();
+  _initNotifToasts();
 
   // Watch for .feed-wrap appearing in #content and inject story bar
   const contentEl = document.getElementById("content") || document.body;
