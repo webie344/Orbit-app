@@ -2366,3 +2366,205 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 }
 .nt-close { opacity: .5; flex-shrink: 0; }
 .nt-close:hover { opacity: 1; }
+
+/* ============================================================ */
+/* FEED FILTER TABS — For You | Mutuals                          */
+/* ============================================================ */
+.feed-filter-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--line);
+  margin: 0 -1px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg);
+}
+
+.feed-filter-tab {
+  flex: 1;
+  padding: 13px 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-mute);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color var(--speed), border-color var(--speed);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.feed-filter-tab:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.feed-filter-tab.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
+.feed-filter-tab i { font-size: 15px; }
+
+/* ============================================================ */
+/* MUTUALS — Daily / All-Time Mutual Cards                        */
+/* ============================================================ */
+.mutuals-feed-panel {
+  padding: 4px 0;
+}
+
+.mutuals-date-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-mute);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  padding: 14px 16px 6px;
+}
+
+.mutuals-date-badge i { color: var(--primary); }
+
+.mutuals-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.mutual-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line-soft);
+  cursor: default;
+  transition: background var(--speed);
+}
+
+.mutual-card:hover { background: var(--hover); }
+
+/* Large avatar + ring overlay */
+.mutual-av-wrap {
+  position: relative;
+  flex-shrink: 0;
+  width: 64px;
+  height: 64px;
+  cursor: pointer;
+}
+
+.mutual-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+
+.mutual-ring-wrap {
+  position: absolute;
+  inset: -4px;
+  pointer-events: none;
+}
+
+.mutual-ring-svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.mutual-ring-bg {
+  stroke: var(--line);
+  stroke-width: 2.5;
+}
+
+.mutual-ring-fill {
+  stroke: var(--primary);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  transition: stroke-dasharray .6s ease;
+}
+
+.mutual-pct-label {
+  position: absolute;
+  bottom: -2px;
+  right: -4px;
+  font-size: 10px;
+  font-weight: 800;
+  color: #fff;
+  background: var(--primary);
+  border-radius: 999px;
+  padding: 1px 5px;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Info column */
+.mutual-info {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.mutual-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mutual-uname {
+  font-size: 13px;
+  color: var(--text-mute);
+  margin-top: 1px;
+}
+
+.mutual-bio {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-top: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mutual-match {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--primary);
+  margin-top: 5px;
+}
+
+.mutual-match i { font-size: 13px; color: #f97316; }
+
+/* Message button */
+.mutual-msg-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+}
+
+/* Profile tab scroll fix when 4 tabs */
+@media (max-width: 420px) {
+  .profile-tabs {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .profile-tabs::-webkit-scrollbar { display: none; }
+  .profile-tab { white-space: nowrap; }
+}

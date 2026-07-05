@@ -967,6 +967,137 @@ $$(".nav-item, .sidebar-foot .link").forEach((b) =>
 );
 
 // =========================================================================
+// MUTUALS — Daily & All-Time mutual score engine
+// Computes closeness from shared orbits + shared comment threads
+// =========================================================================
+const computeMutuals = async (dayOnly = false) => {
+  if (!state.uid) return [];
+  const cutoff = dayOnly ? Date.now() - 86400000 : 0;
+
+  // 1. Posts this user orbited
+  const orbitedSnap = await getDocs(
+    query(collection(db, "posts"), where("orbits", "array-contains", state.uid), limit(40))
+  ).catch(() => null);
+  if (!orbitedSnap) return [];
+
+  const relevantPosts = orbitedSnap.docs
+    .filter(d => !dayOnly || (d.data().createdAt?.toMillis?.() || 0) >= cutoff)
+    .map(d => ({ id: d.id, ...d.data() }));
+
+  if (!relevantPosts.length) return [];
+
+  // 2. Detect which of those posts the current user also commented on
+  const commentedPostIds = new Set();
+  await Promise.all(relevantPosts.map(async (p) => {
+    const cSnap = await getDocs(
+      query(collection(db, "posts", p.id, "comments"), where("authorUid", "==", state.uid), limit(1))
+    ).catch(() => null);
+    if (cSnap && !cSnap.empty) commentedPostIds.add(p.id);
+  }));
+
+  // 3. Score each other uid by shared orbits
+  const scores = {};
+  relevantPosts.forEach(p => {
+    const bonus = commentedPostIds.has(p.id) ? 1.5 : 1;
+    (p.orbits || []).filter(uid => uid !== state.uid).forEach(uid => {
+      if (!scores[uid]) scores[uid] = { orbit: 0, comment: 0 };
+      scores[uid].orbit += bonus;
+    });
+  });
+
+  // 4. Score by shared comment threads
+  await Promise.all([...commentedPostIds].map(async (postId) => {
+    const cSnap = await getDocs(
+      query(collection(db, "posts", postId, "comments"), limit(20))
+    ).catch(() => null);
+    if (!cSnap) return;
+    cSnap.docs.forEach(d => {
+      const uid = d.data().authorUid;
+      if (uid && uid !== state.uid) {
+        if (!scores[uid]) scores[uid] = { orbit: 0, comment: 0 };
+        scores[uid].comment += 2;
+      }
+    });
+  }));
+
+  // 5. Compute percentage
+  const maxPossible = Math.max(relevantPosts.length * 2.5 + commentedPostIds.size * 2, 1);
+  const ranked = Object.entries(scores)
+    .map(([uid, s]) => ({
+      uid,
+      raw: s.orbit + s.comment,
+      pct: Math.min(99, Math.round(((s.orbit + s.comment) / maxPossible) * 100)),
+    }))
+    .filter(x => x.raw >= 1)
+    .sort((a, b) => b.raw - a.raw)
+    .slice(0, 20);
+
+  // 6. Fetch profiles
+  const users = await Promise.all(ranked.map(r => fetchUser(r.uid)));
+  return ranked.map((r, i) => ({ ...r, user: users[i] })).filter(r => r.user);
+};
+
+const renderMutuals = async (container, dayOnly = true) => {
+  container.innerHTML = "";
+  container.appendChild(el("div", { class: "empty" },
+    el("i", { class: "ri-loader-4-line", style: "animation:spin 1s linear infinite;" }),
+    el("div", { class: "t" }, "Finding your mutuals…"),
+  ));
+
+  const mutuals = await computeMutuals(dayOnly);
+  container.innerHTML = "";
+
+  if (!mutuals.length) {
+    container.appendChild(el("div", { class: "empty" },
+      el("i", { class: "ri-team-line" }),
+      el("div", { class: "t" }, dayOnly ? "No daily mutuals yet" : "No mutuals found"),
+      el("div", {}, dayOnly
+        ? "Orbit & comment on posts to discover who you vibe with today."
+        : "Start orbiting posts to find people who share your taste."),
+    ));
+    return;
+  }
+
+  if (dayOnly) {
+    const dateStr = new Date().toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
+    container.appendChild(el("div", { class: "mutuals-date-badge" },
+      el("i", { class: "ri-calendar-2-line" }), `  Today · ${dateStr}`,
+    ));
+  }
+
+  const list = el("div", { class: "mutuals-list" });
+  mutuals.forEach(({ uid, pct, user }) => {
+    const dash = pct;
+    const gap  = 100 - pct;
+    const ringHtml = `<svg viewBox="0 0 36 36" class="mutual-ring-svg"><circle class="mutual-ring-bg" cx="18" cy="18" r="15.9" fill="none"/><circle class="mutual-ring-fill" cx="18" cy="18" r="15.9" fill="none" style="stroke-dasharray:${dash} ${gap};stroke-dashoffset:25;"/></svg><span class="mutual-pct-label">${pct}%</span>`;
+    const card = el("div", { class: "mutual-card" },
+      el("div", { class: "mutual-av-wrap", onclick: () => location.hash = `#profile/${uid}` },
+        el("img", { class: "mutual-avatar", src: avatarFor(user) }),
+        el("div", { class: "mutual-ring-wrap", html: ringHtml }),
+      ),
+      el("div", { class: "mutual-info", onclick: () => location.hash = `#profile/${uid}` },
+        el("div", { class: "mutual-name" },
+          user.name || "User",
+          user.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
+        ),
+        el("div", { class: "mutual-uname" }, `@${user.username || "user"}`),
+        user.bio ? el("div", { class: "mutual-bio" }, user.bio.slice(0, 80)) : null,
+        el("div", { class: "mutual-match" },
+          el("i", { class: "ri-fire-fill" }),
+          ` ${pct}% mutual ${dayOnly ? "today" : "overlap"}`,
+        ),
+      ),
+      el("button", {
+        class: "btn primary sm mutual-msg-btn",
+        onclick: (e) => { e.stopPropagation(); location.hash = `#chats/${uid}`; },
+      }, el("i", { class: "ri-chat-3-line" }), " Message"),
+    );
+    list.appendChild(card);
+  });
+  container.appendChild(list);
+};
+
+// =========================================================================
 // 8. FEED — flat IG/FB style with separator lines + Trending lane
 // Videos posted are regular posts — no separate Reels section.
 // Feed shuffles on every fresh visit via scored + random jitter sort.
@@ -980,6 +1111,35 @@ const renderFeed = (root) => {
   );
   wrap.appendChild(stub);
 
+  // ── Feed filter tabs (For You | Mutuals) ───────────────────────────
+  const feedFilterTabs = el("div", { class: "feed-filter-tabs" },
+    el("button", { class: "feed-filter-tab active", "data-ftab": "foryou" }, "For You"),
+    el("button", { class: "feed-filter-tab", "data-ftab": "mutuals" },
+      el("i", { class: "ri-team-line" }), " Mutuals"),
+  );
+  wrap.appendChild(feedFilterTabs);
+
+  // Mutuals panel — shown when Mutuals tab is active
+  const mutualsPanel = el("div", { class: "mutuals-feed-panel hidden" });
+  wrap.appendChild(mutualsPanel);
+
+  // Feed main content wrapper — toggled by tab
+  const feedMainContent = el("div", { class: "feed-main-content" });
+  wrap.appendChild(feedMainContent);
+
+  feedFilterTabs.querySelectorAll(".feed-filter-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      feedFilterTabs.querySelectorAll(".feed-filter-tab").forEach((t) => t.classList.toggle("active", t === tab));
+      const isMutuals = tab.dataset.ftab === "mutuals";
+      mutualsPanel.classList.toggle("hidden", !isMutuals);
+      feedMainContent.classList.toggle("hidden", isMutuals);
+      if (isMutuals && !mutualsPanel._loaded) {
+        mutualsPanel._loaded = true;
+        renderMutuals(mutualsPanel, true);
+      }
+    });
+  });
+
   // Trending lane container (filled later)
   const trendingLane = el("div", { class: "trending-lane hidden" });
   trendingLane.appendChild(el("div", { class: "trending-head" },
@@ -987,7 +1147,7 @@ const renderFeed = (root) => {
   ));
   const trendingScroller = el("div", { class: "trending-scroller" });
   trendingLane.appendChild(trendingScroller);
-  wrap.appendChild(trendingLane);
+  feedMainContent.appendChild(trendingLane);
 
   // Posts container
   const list = el("div", { class: "feed-list" });
@@ -995,7 +1155,7 @@ const renderFeed = (root) => {
     el("i", { class: "ri-loader-4-line" }),
     el("div", { class: "t" }, "Loading your orbit"),
   ));
-  wrap.appendChild(list);
+  feedMainContent.appendChild(list);
   root.appendChild(wrap);
 
   const q = query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(50));
@@ -2090,11 +2250,13 @@ const renderProfile = async (root, uid) => {
     m.renderLearnBadges(proSection, uid);
   }).catch(() => {});
 
-  // Tabs: Posts | Media | About
+  // Tabs: Posts | Media | About | Mutuals
   const tabs = el("div", { class: "profile-tabs" },
     el("button", { class: "profile-tab active", "data-ptab": "posts" }, "Posts"),
     el("button", { class: "profile-tab", "data-ptab": "media" }, "Media"),
     el("button", { class: "profile-tab", "data-ptab": "about" }, "About"),
+    el("button", { class: "profile-tab", "data-ptab": "mutuals" },
+      el("i", { class: "ri-team-line" }), " Mutuals"),
   );
   root.appendChild(tabs);
   const body = el("div", {});
@@ -2154,7 +2316,7 @@ const renderProfile = async (root, uid) => {
         grid.appendChild(cell);
       });
 
-    } else {
+    } else if (which === "about") {
       body.innerHTML = "";
       body.appendChild(el("div", { class: "settings" },
         el("div", { class: "group" },
@@ -2164,6 +2326,11 @@ const renderProfile = async (root, uid) => {
           el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Status"), el("div", { class: "d" }, u.online ? "Online now" : `Last seen ${fmtTime(u.lastSeen)}`))),
         ),
       ));
+    } else if (which === "mutuals") {
+      body.innerHTML = "";
+      const mutualsWrap = el("div", { style: "padding: 0 0 16px;" });
+      body.appendChild(mutualsWrap);
+      renderMutuals(mutualsWrap, false);
     }
   };
   renderTab("posts");
