@@ -387,10 +387,7 @@ textarea { resize: vertical; min-height: 80px; }
   border-bottom: 1px solid var(--line);
   position: relative;
 }
-.post.is-trending::after {
-  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
-  background: linear-gradient(180deg, var(--grad-1), var(--grad-2));
-}
+.post.is-trending::after { display: none; }
 .post-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .post-head .meta { flex: 1; min-width: 0; }
 .post-head .name { display: flex; align-items: center; gap: 4px; font-weight: 600; font-size: 14px; }
