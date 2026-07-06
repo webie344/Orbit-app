@@ -2365,6 +2365,132 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .nt-close:hover { opacity: 1; }
 
 /* ============================================================ */
+/* ONBOARDING SCREEN                                             */
+/* ============================================================ */
+.onboarding-screen {
+  position: fixed; inset: 0; z-index: 8000;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 32px 28px 40px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.ob-bg {
+  position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 0;
+}
+
+.ob-blob {
+  position: absolute; border-radius: 50%;
+  filter: blur(80px); opacity: .18;
+}
+
+.ob-blob.b1 {
+  width: 340px; height: 340px;
+  background: var(--grad-1);
+  top: -120px; left: -100px;
+}
+
+.ob-blob.b2 {
+  width: 300px; height: 300px;
+  background: var(--grad-2);
+  bottom: -100px; right: -80px;
+}
+
+.ob-slides-wrap {
+  position: relative; z-index: 1;
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  width: 100%; max-width: 380px;
+}
+
+.ob-slide {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 20px;
+  animation: fadeIn 280ms var(--ease, ease) both;
+}
+
+.ob-slide.active { display: flex; }
+
+.ob-slide-icon {
+  width: 110px; height: 110px;
+  border-radius: 32px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 52px; color: #fff;
+  box-shadow: 0 20px 50px rgba(108, 99, 255, 0.35);
+  flex-shrink: 0;
+}
+
+.ob-slide-title {
+  font-family: var(--font-display, system-ui, sans-serif);
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--text);
+  margin: 0;
+  line-height: 1.2;
+}
+
+.ob-slide-desc {
+  font-size: 15px;
+  color: var(--text-dim);
+  line-height: 1.65;
+  margin: 0;
+  max-width: 300px;
+}
+
+/* Dots */
+.ob-dots {
+  position: relative; z-index: 1;
+  display: flex; gap: 8px; margin: 28px 0 24px;
+}
+
+.ob-dot {
+  width: 8px; height: 8px;
+  border-radius: 999px;
+  background: var(--line);
+  transition: width .28s var(--ease, ease), background .28s;
+}
+
+.ob-dot.active {
+  width: 24px;
+  background: var(--primary);
+}
+
+/* Nav buttons */
+.ob-nav {
+  position: relative; z-index: 1;
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; max-width: 380px;
+  gap: 12px;
+}
+
+.ob-skip-btn {
+  font-size: 14px;
+  color: var(--text-mute);
+  padding: 12px 16px;
+  flex-shrink: 0;
+}
+
+.ob-next-btn {
+  flex: 1;
+  display: flex; align-items: center; justify-content: center;
+  gap: 6px;
+  font-size: 15px; font-weight: 700;
+  padding: 14px;
+  border-radius: var(--radius-pill, 999px);
+  background: linear-gradient(135deg, var(--grad-1), var(--grad-2));
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(108, 99, 255, 0.35);
+  transition: filter var(--speed), transform var(--speed);
+}
+
+.ob-next-btn:hover  { filter: brightness(1.08); }
+.ob-next-btn:active { transform: scale(.97); }
+
+/* ============================================================ */
 /* FEED FILTER TABS — For You | Mutuals                          */
 /* ============================================================ */
 .feed-filter-tabs {

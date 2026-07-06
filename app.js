@@ -645,7 +645,54 @@ const toggleTheme = () =>
 // =========================================================================
 // 6. AUTH FLOW
 // =========================================================================
-const showAuth = () => { $("#auth").classList.remove("hidden"); $("#app").classList.add("hidden"); $("#boot").classList.add("hidden"); };
+const showOnboarding = () => {
+  $("#onboarding").classList.remove("hidden");
+  $("#auth").classList.add("hidden");
+  $("#app").classList.add("hidden");
+  $("#boot").classList.add("hidden");
+
+  const slides = $$(".ob-slide", document.getElementById("onboarding"));
+  const dots   = $$(".ob-dot",   document.getElementById("onboarding"));
+  let current  = 0;
+
+  const goTo = (i) => {
+    slides[current].classList.remove("active");
+    dots[current].classList.remove("active");
+    current = i;
+    slides[current].classList.add("active");
+    dots[current].classList.add("active");
+    const nextBtn = $("#obNext");
+    if (nextBtn) nextBtn.innerHTML = current === slides.length - 1
+      ? 'Get Started <i class="ri-rocket-line"></i>'
+      : 'Next <i class="ri-arrow-right-line"></i>';
+  };
+
+  $("#obNext")?.addEventListener("click", () => {
+    if (current < slides.length - 1) { goTo(current + 1); }
+    else { finishOnboarding(); }
+  });
+  $("#obSkip")?.addEventListener("click", finishOnboarding);
+
+  // Touch/swipe support
+  let touchStartX = 0;
+  const obEl = document.getElementById("onboarding");
+  obEl.addEventListener("touchstart", (e) => { touchStartX = e.touches[0].clientX; }, { passive: true });
+  obEl.addEventListener("touchend", (e) => {
+    const dx = touchStartX - e.changedTouches[0].clientX;
+    if (Math.abs(dx) > 40) {
+      if (dx > 0 && current < slides.length - 1) goTo(current + 1);
+      else if (dx < 0 && current > 0) goTo(current - 1);
+    }
+  }, { passive: true });
+};
+
+const finishOnboarding = () => {
+  localStorage.setItem("orbit_onboarded", "1");
+  $("#onboarding").classList.add("hidden");
+  showAuth();
+};
+
+const showAuth = () => { $("#auth").classList.remove("hidden"); $("#app").classList.add("hidden"); $("#boot").classList.add("hidden"); $("#onboarding").classList.add("hidden"); };
 const showApp  = () => { $("#auth").classList.add("hidden"); $("#app").classList.remove("hidden"); $("#boot").classList.add("hidden"); };
 
 const ensureUserDoc = async (user, extras = {}) => {
@@ -688,7 +735,7 @@ const ensureUserDoc = async (user, extras = {}) => {
 onAuthStateChanged(auth, async (user) => {
   if (!user) {
     state.me = null; state.uid = null;
-    showAuth();
+    if (!localStorage.getItem("orbit_onboarded")) { showOnboarding(); } else { showAuth(); }
     return;
   }
   state.uid = user.uid;
