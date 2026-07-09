@@ -1,7 +1,7 @@
 {
-  "name": "Orbit — connect, share, chat",
+  "name": "OrbitSocial— Bringing people together",
   "short_name": "Orbit",
-  "description": "A new gravity for your circles.",
+  "description": "Bringing people together.",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait",
