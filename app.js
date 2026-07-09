@@ -1657,86 +1657,143 @@ const renderPost = (p, author, opts = {}) => {
     );
     post.appendChild(replyBanner);
 
-    const aiSuggestBtn = el("button", {
-      class: "icon-btn", type: "button", title: "AI reply suggestion",
-      style: "color:var(--primary);flex-shrink:0;",
-    }, el("i", { class: "ri-sparkling-2-line" }));
-    aiSuggestBtn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      const inp = cForm.querySelector("input");
-      if (!window.GROQ_API_KEY) { toast("Add your Groq API key to enable AI suggestions"); return; }
-      aiSuggestBtn.disabled = true;
-      aiSuggestBtn.innerHTML = '<i class="ri-loader-4-line" style="animation:spin 1s linear infinite;"></i>';
-      try {
-        const postText = p.text || "";
-        const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${window.GROQ_API_KEY}` },
-          body: JSON.stringify({
-            model: window.GROQ_MODEL,
-            messages: [
-              { role: "system", content: "You suggest short, genuine social media comments. One sentence max. No quotes, no hashtags, no emojis unless natural." },
-              { role: "user", content: `Suggest a comment for this post: "${postText.slice(0, 300)}"` },
-            ],
-            max_tokens: 60, temperature: 0.9,
-          }),
-        });
-        if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error ${res.status}`); }
-        const data = await res.json();
-        const suggestion = data.choices?.[0]?.message?.content?.trim();
-        if (suggestion) { inp.value = suggestion; inp.focus(); }
-      } catch (err) { toast("AI suggestion failed: " + (err.message || "unknown error")); }
-      aiSuggestBtn.disabled = false;
-      aiSuggestBtn.innerHTML = '<i class="ri-sparkling-2-line"></i>';
+    // ── Comment media + voice-note state ────────────────────────
+    let _cmtMediaFile = null;
+    let _cmtAudioBlob = null;
+    let _cmtRecorder  = null;
+    let _cmtRecording = false;
+
+    const cmtMediaInput = el("input", { type: "file", accept: "image/*,video/*" });
+    cmtMediaInput.style.display = "none";
+    post.appendChild(cmtMediaInput);
+
+    const cmtAttachPreview = el("div", { class: "cmt-attach-preview hidden" });
+    post.appendChild(cmtAttachPreview);
+
+    const clearCmtAttach = () => {
+      _cmtMediaFile = null; _cmtAudioBlob = null;
+      cmtAttachPreview.innerHTML = ""; cmtAttachPreview.classList.add("hidden");
+    };
+
+    const showCmtMediaPreview = (file) => {
+      cmtAttachPreview.innerHTML = ""; cmtAttachPreview.classList.remove("hidden");
+      const isVideo = file.type.startsWith("video");
+      const url = URL.createObjectURL(file);
+      const thumb = isVideo
+        ? el("video", { src: url, muted: "", preload: "metadata", style: "width:72px;height:72px;object-fit:cover;border-radius:10px;display:block;" })
+        : el("img",  { src: url, style: "width:72px;height:72px;object-fit:cover;border-radius:10px;display:block;" });
+      const rmBtn = el("button", { type: "button", class: "cmt-attach-remove",
+        html: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` });
+      rmBtn.addEventListener("click", clearCmtAttach);
+      cmtAttachPreview.appendChild(el("div", { class: "cmt-attach-thumb" }, thumb, rmBtn));
+    };
+
+    const showCmtAudioPreview = (blob) => {
+      cmtAttachPreview.innerHTML = ""; cmtAttachPreview.classList.remove("hidden");
+      const url = URL.createObjectURL(blob);
+      const audio = el("audio", { src: url, controls: true, style: "height:28px;max-width:160px;" });
+      const rmBtn = el("button", { type: "button", class: "cmt-attach-remove",
+        html: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` });
+      rmBtn.addEventListener("click", clearCmtAttach);
+      cmtAttachPreview.appendChild(el("div", { class: "cmt-attach-audio" }, audio, rmBtn));
+    };
+
+    cmtMediaInput.addEventListener("change", (e) => {
+      const file = e.target.files?.[0]; if (!file) return;
+      _cmtMediaFile = file; _cmtAudioBlob = null;
+      showCmtMediaPreview(file); cmtMediaInput.value = "";
     });
 
-    const cForm = el("form", { class: "comment-form" },
+    // Media button (image/video)
+    const cmtMediaBtn = el("button", {
+      type: "button", class: "icon-btn cmt-icon-btn", title: "Add photo or video",
+      html: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`,
+    });
+    cmtMediaBtn.addEventListener("click", (e) => { e.stopPropagation(); cmtMediaInput.click(); });
+
+    // Mic button (voice note)
+    const SVG_MIC  = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`;
+    const SVG_STOP = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>`;
+    const cmtMicBtn = el("button", { type: "button", class: "icon-btn cmt-icon-btn", title: "Record voice note", html: SVG_MIC });
+    cmtMicBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (_cmtRecording) { _cmtRecorder?.stop(); return; }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const chunks = [];
+        _cmtRecorder = new MediaRecorder(stream);
+        _cmtRecorder.ondataavailable = (ev) => { if (ev.data.size > 0) chunks.push(ev.data); };
+        _cmtRecorder.onstop = () => {
+          stream.getTracks().forEach((t) => t.stop());
+          _cmtAudioBlob = new Blob(chunks, { type: "audio/webm" });
+          _cmtMediaFile = null; _cmtRecording = false;
+          cmtMicBtn.innerHTML = SVG_MIC; cmtMicBtn.style.color = ""; cmtMicBtn.classList.remove("recording");
+          showCmtAudioPreview(_cmtAudioBlob);
+        };
+        _cmtRecorder.start(); _cmtRecording = true;
+        cmtMicBtn.innerHTML = SVG_STOP; cmtMicBtn.style.color = "var(--danger)"; cmtMicBtn.classList.add("recording");
+        clearCmtAttach();
+      } catch { toast("Microphone access denied"); }
+    });
+
+    const cForm = el("form", { class: "comment-form" });
+    const cFormRow = el("div", { class: "comment-form-row" },
       el("img", { class: "avatar xs", src: avatarFor(state.me), style: "cursor:pointer;", onclick: () => location.hash = `#profile/${state.uid}` }),
       el("input", { type: "text", placeholder: "Write a comment…" }),
-      aiSuggestBtn,
+      cmtMediaBtn,
+      cmtMicBtn,
       el("button", { class: "icon-btn", type: "submit" }, el("i", { class: "ri-send-plane-fill" })),
     );
+    cForm.appendChild(cFormRow);
+
     cForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       const input = cForm.querySelector("input");
       const text = input.value.trim();
-      if (!text) return;
+      if (!text && !_cmtMediaFile && !_cmtAudioBlob) return;
+      const submitBtn = cForm.querySelector("button[type='submit']");
+      submitBtn.disabled = true;
       const commentData = {
-        text, authorUid: state.uid, createdAt: serverTimestamp(), likes: [],
+        text: text || "", authorUid: state.uid, createdAt: serverTimestamp(), likes: [],
         ..._replyTo ? { replyToUid: _replyTo.uid, replyToName: _replyTo.name, replyToUsername: _replyTo.username } : {},
       };
-      input.value = "";
-      _replyTo = null;
-      replyBanner.classList.add("hidden");
-      input.placeholder = "Write a comment…";
+      try {
+        if (_cmtMediaFile) {
+          const kind = _cmtMediaFile.type.startsWith("video") ? "video" : "image";
+          const up = await uploadToCloudinary(_cmtMediaFile, kind);
+          commentData.mediaUrl = up.url; commentData.mediaType = kind;
+        } else if (_cmtAudioBlob) {
+          const audioFile = new File([_cmtAudioBlob], "voice.webm", { type: "audio/webm" });
+          const up = await uploadToCloudinary(audioFile, "video");
+          commentData.audioUrl = up.url;
+        }
+      } catch { toast("Media upload failed"); submitBtn.disabled = false; return; }
+      input.value = ""; _replyTo = null;
+      replyBanner.classList.add("hidden"); input.placeholder = "Write a comment…";
+      clearCmtAttach();
       // Optimistic UI
       cBox.classList.remove("hidden");
       cBox.appendChild(el("div", { class: "comment" },
         el("img", { class: "avatar xs", src: avatarFor(state.me), onclick: () => location.hash = `#profile/${state.uid}` }),
         el("div", { class: "body" },
           el("div", { class: "name" }, state.me?.name || "User"),
-          el("div", { class: "text", text: commentData.text }),
+          commentData.text ? el("div", { class: "text", text: commentData.text }) : null,
         ),
       ));
       sfxComment();
+      submitBtn.disabled = false;
       await addDoc(collection(db, "posts", p.id, "comments"), commentData);
       await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
+      const notifSnippet = commentData.text ? `"${commentData.text.slice(0, 60)}"` : commentData.mediaType ? "📷 sent a photo" : "🎙️ sent a voice note";
       if (author?.uid && author.uid !== state.uid) {
-        writeNotif(author.uid, "comment", {
-          postId: p.id,
-          text: `${state.me?.name || "Someone"} commented: "${commentData.text.slice(0, 60)}"`,
-        }).catch(() => {});
+        writeNotif(author.uid, "comment", { postId: p.id, text: `${state.me?.name || "Someone"} commented: ${notifSnippet}` }).catch(() => {});
         const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
         import("./notifications.js").then(({ notifyUser }) =>
           notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
         ).catch(() => {});
       }
-      // Notify the person whose comment was replied to (if different from post author and self)
       if (commentData.replyToUid && commentData.replyToUid !== state.uid && commentData.replyToUid !== author?.uid) {
-        writeNotif(commentData.replyToUid, "commentReply", {
-          postId: p.id,
-          text: `${state.me?.name || "Someone"} replied to your comment: "${commentData.text.slice(0, 60)}"`,
-        }).catch(() => {});
+        writeNotif(commentData.replyToUid, "commentReply", { postId: p.id, text: `${state.me?.name || "Someone"} replied to your comment: ${notifSnippet}` }).catch(() => {});
         import("./notifications.js").then(({ notifyUser }) =>
           notifyUser(commentData.replyToUid, state.me?.name || "Someone", "replied to your comment", "/#post/" + p.id, state.me?.photoURL || "")
         ).catch(() => {});
@@ -1781,7 +1838,19 @@ const renderPost = (p, author, opts = {}) => {
           el("div", { class: "name" }, a?.name || "User",
             a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null),
           (c.replyToUsername || c.replyToName) ? el("div", { class: "reply-to-label" }, el("i", { class: "ri-corner-down-right-line" }), el("a", { class: "mention", href: `#profile-u/${c.replyToUsername || c.replyToName}` }, `@${c.replyToUsername || c.replyToName}`)) : null,
-          el("div", { class: "text", text: c.text }),
+          c.text ? el("div", { class: "text", text: c.text }) : null,
+          c.mediaUrl ? el("div", { class: "cmt-media", onclick: (e) => { e.stopPropagation(); c.mediaType === "video" ? openVideoViewer([{ type: "video", url: c.mediaUrl }], 0) : openImageZoom(c.mediaUrl); }},
+            c.mediaType === "video"
+              ? el("div", { class: "cmt-media-video-wrap" },
+                  el("video", { src: c.mediaUrl, muted: "", preload: "metadata", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;" }),
+                  el("div", { class: "cmt-media-video-play", html: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>` }),
+                )
+              : el("img", { src: c.mediaUrl, loading: "lazy", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;" }),
+          ) : null,
+          c.audioUrl ? el("div", { class: "cmt-voice-note" },
+            el("span", { html: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>` }),
+            el("audio", { src: c.audioUrl, controls: true, style: "height:28px;max-width:150px;" }),
+          ) : null,
           el("div", { class: "cmt-meta-row" }, replyBtn, likeBtn),
         ),
       );
@@ -1893,7 +1962,19 @@ const renderPostDetail = async (root, postId) => {
           el("span", { class: "cmt-time" }, fmtTime(c.createdAt)),
         ),
         (c.replyToUsername || c.replyToName) ? el("div", { class: "reply-to-label" }, el("i", { class: "ri-corner-down-right-line" }), el("a", { class: "mention", href: `#profile-u/${c.replyToUsername || c.replyToName}` }, `@${c.replyToUsername || c.replyToName}`)) : null,
-        el("div", { class: "text", text: c.text }),
+        c.text ? el("div", { class: "text", text: c.text }) : null,
+        c.mediaUrl ? el("div", { class: "cmt-media", onclick: (ev) => { ev.stopPropagation(); c.mediaType === "video" ? openVideoViewer([{ type: "video", url: c.mediaUrl }], 0) : openImageZoom(c.mediaUrl); }},
+          c.mediaType === "video"
+            ? el("div", { class: "cmt-media-video-wrap" },
+                el("video", { src: c.mediaUrl, muted: "", preload: "metadata", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;" }),
+                el("div", { class: "cmt-media-video-play", html: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>` }),
+              )
+            : el("img", { src: c.mediaUrl, loading: "lazy", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;" }),
+        ) : null,
+        c.audioUrl ? el("div", { class: "cmt-voice-note" },
+          el("span", { html: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>` }),
+          el("audio", { src: c.audioUrl, controls: true, style: "height:28px;max-width:150px;" }),
+        ) : null,
         el("div", { class: "cmt-meta-row" }, replyBtn, likeBtn),
       ),
     );
@@ -1933,76 +2014,130 @@ const renderPostDetail = async (root, postId) => {
 
   loadDetailComments(false);
 
-  const detailAISuggestBtn = el("button", {
-    class: "icon-btn", type: "button", title: "AI reply suggestion",
-    style: "color:var(--primary);flex-shrink:0;",
-  }, el("i", { class: "ri-sparkling-2-line" }));
-  detailAISuggestBtn.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    const inp = cmtSection.querySelector("input");
-    if (!window.GROQ_API_KEY) { toast("Add your Groq API key to enable AI suggestions"); return; }
-    detailAISuggestBtn.disabled = true;
-    detailAISuggestBtn.innerHTML = '<i class="ri-loader-4-line" style="animation:spin 1s linear infinite;"></i>';
-    try {
-      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${window.GROQ_API_KEY}` },
-        body: JSON.stringify({
-          model: window.GROQ_MODEL,
-          messages: [
-            { role: "system", content: "You suggest short, genuine social media comments. One sentence max. No quotes, no hashtags." },
-            { role: "user", content: `Suggest a comment for this post: "${(p.text || "").slice(0, 300)}"` },
-          ],
-          max_tokens: 60, temperature: 0.9,
-        }),
-      });
-      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error?.message || `API error ${res.status}`); }
-      const data = await res.json();
-      const suggestion = data.choices?.[0]?.message?.content?.trim();
-      if (suggestion && inp) { inp.value = suggestion; inp.focus(); }
-    } catch (err) { toast("AI suggestion failed: " + (err.message || "unknown error")); }
-    detailAISuggestBtn.disabled = false;
-    detailAISuggestBtn.innerHTML = '<i class="ri-sparkling-2-line"></i>';
+  // ── Detail comment: media + voice-note state ────────────────
+  let _dCmtMediaFile = null;
+  let _dCmtAudioBlob = null;
+  let _dCmtRecorder  = null;
+  let _dCmtRecording = false;
+
+  const dCmtMediaInput = el("input", { type: "file", accept: "image/*,video/*" });
+  dCmtMediaInput.style.display = "none";
+
+  const dCmtAttachPreview = el("div", { class: "cmt-attach-preview hidden" });
+
+  const clearDCmtAttach = () => {
+    _dCmtMediaFile = null; _dCmtAudioBlob = null;
+    dCmtAttachPreview.innerHTML = ""; dCmtAttachPreview.classList.add("hidden");
+  };
+
+  const showDCmtMediaPreview = (file) => {
+    dCmtAttachPreview.innerHTML = ""; dCmtAttachPreview.classList.remove("hidden");
+    const isVideo = file.type.startsWith("video");
+    const url = URL.createObjectURL(file);
+    const thumb = isVideo
+      ? el("video", { src: url, muted: "", preload: "metadata", style: "width:72px;height:72px;object-fit:cover;border-radius:10px;display:block;" })
+      : el("img",  { src: url, style: "width:72px;height:72px;object-fit:cover;border-radius:10px;display:block;" });
+    const rmBtn = el("button", { type: "button", class: "cmt-attach-remove",
+      html: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` });
+    rmBtn.addEventListener("click", clearDCmtAttach);
+    dCmtAttachPreview.appendChild(el("div", { class: "cmt-attach-thumb" }, thumb, rmBtn));
+  };
+
+  const showDCmtAudioPreview = (blob) => {
+    dCmtAttachPreview.innerHTML = ""; dCmtAttachPreview.classList.remove("hidden");
+    const url = URL.createObjectURL(blob);
+    const audio = el("audio", { src: url, controls: true, style: "height:28px;max-width:160px;" });
+    const rmBtn = el("button", { type: "button", class: "cmt-attach-remove",
+      html: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` });
+    rmBtn.addEventListener("click", clearDCmtAttach);
+    dCmtAttachPreview.appendChild(el("div", { class: "cmt-attach-audio" }, audio, rmBtn));
+  };
+
+  dCmtMediaInput.addEventListener("change", (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    _dCmtMediaFile = file; _dCmtAudioBlob = null;
+    showDCmtMediaPreview(file); dCmtMediaInput.value = "";
   });
 
-  const cForm = el("form", { class: "comment-form detail-cmt-form" },
+  const dCmtMediaBtn = el("button", {
+    type: "button", class: "icon-btn cmt-icon-btn", title: "Add photo or video",
+    html: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`,
+  });
+  dCmtMediaBtn.addEventListener("click", (e) => { e.stopPropagation(); dCmtMediaInput.click(); });
+
+  const D_SVG_MIC  = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`;
+  const D_SVG_STOP = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>`;
+  const dCmtMicBtn = el("button", { type: "button", class: "icon-btn cmt-icon-btn", title: "Record voice note", html: D_SVG_MIC });
+  dCmtMicBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (_dCmtRecording) { _dCmtRecorder?.stop(); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const chunks = [];
+      _dCmtRecorder = new MediaRecorder(stream);
+      _dCmtRecorder.ondataavailable = (ev) => { if (ev.data.size > 0) chunks.push(ev.data); };
+      _dCmtRecorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        _dCmtAudioBlob = new Blob(chunks, { type: "audio/webm" });
+        _dCmtMediaFile = null; _dCmtRecording = false;
+        dCmtMicBtn.innerHTML = D_SVG_MIC; dCmtMicBtn.style.color = ""; dCmtMicBtn.classList.remove("recording");
+        showDCmtAudioPreview(_dCmtAudioBlob);
+      };
+      _dCmtRecorder.start(); _dCmtRecording = true;
+      dCmtMicBtn.innerHTML = D_SVG_STOP; dCmtMicBtn.style.color = "var(--danger)"; dCmtMicBtn.classList.add("recording");
+      clearDCmtAttach();
+    } catch { toast("Microphone access denied"); }
+  });
+
+  const cForm = el("form", { class: "comment-form detail-cmt-form" });
+  cForm.appendChild(dCmtMediaInput);
+  cForm.appendChild(dCmtAttachPreview);
+  const dFormRow = el("div", { class: "comment-form-row" },
     el("img", { class: "avatar xs", src: avatarFor(state.me), style: "cursor:pointer;", onclick: () => location.hash = `#profile/${state.uid}` }),
     el("input", { type: "text", placeholder: "Write a comment…" }),
-    detailAISuggestBtn,
+    dCmtMediaBtn,
+    dCmtMicBtn,
     el("button", { class: "icon-btn", type: "submit" }, el("i", { class: "ri-send-plane-fill" })),
   );
+  cForm.appendChild(dFormRow);
+
   cForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const input = cForm.querySelector("input");
     const text = input.value.trim();
-    if (!text) return;
+    if (!text && !_dCmtMediaFile && !_dCmtAudioBlob) return;
+    const submitBtn = cForm.querySelector("button[type='submit']");
+    submitBtn.disabled = true;
     const commentData = {
-      text, authorUid: state.uid, createdAt: serverTimestamp(), likes: [],
+      text: text || "", authorUid: state.uid, createdAt: serverTimestamp(), likes: [],
       ..._detailReplyTo ? { replyToUid: _detailReplyTo.uid, replyToName: _detailReplyTo.name, replyToUsername: _detailReplyTo.username } : {},
     };
-    input.value = "";
-    _detailReplyTo = null;
-    detailReplyBanner.classList.add("hidden");
-    input.placeholder = "Write a comment…";
-    sfxComment();
+    try {
+      if (_dCmtMediaFile) {
+        const kind = _dCmtMediaFile.type.startsWith("video") ? "video" : "image";
+        const up = await uploadToCloudinary(_dCmtMediaFile, kind);
+        commentData.mediaUrl = up.url; commentData.mediaType = kind;
+      } else if (_dCmtAudioBlob) {
+        const audioFile = new File([_dCmtAudioBlob], "voice.webm", { type: "audio/webm" });
+        const up = await uploadToCloudinary(audioFile, "video");
+        commentData.audioUrl = up.url;
+      }
+    } catch { toast("Media upload failed"); submitBtn.disabled = false; return; }
+    input.value = ""; _detailReplyTo = null;
+    detailReplyBanner.classList.add("hidden"); input.placeholder = "Write a comment…";
+    clearDCmtAttach(); sfxComment(); submitBtn.disabled = false;
     await addDoc(collection(db, "posts", p.id, "comments"), commentData);
     await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
+    const notifSnippet = commentData.text ? `"${commentData.text.slice(0, 60)}"` : commentData.mediaType ? "📷 sent a photo" : "🎙️ sent a voice note";
     if (author?.uid && author.uid !== state.uid) {
-      writeNotif(author.uid, "comment", {
-        postId: p.id,
-        text: `${state.me?.name || "Someone"} commented: "${commentData.text.slice(0, 60)}"`,
-      }).catch(() => {});
+      writeNotif(author.uid, "comment", { postId: p.id, text: `${state.me?.name || "Someone"} commented: ${notifSnippet}` }).catch(() => {});
       const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
       import("./notifications.js").then(({ notifyUser }) =>
         notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
       ).catch(() => {});
     }
-    // Notify the person whose comment was replied to (if different from post author and self)
     if (commentData.replyToUid && commentData.replyToUid !== state.uid && commentData.replyToUid !== author?.uid) {
-      writeNotif(commentData.replyToUid, "commentReply", {
-        postId: p.id,
-        text: `${state.me?.name || "Someone"} replied to your comment: "${commentData.text.slice(0, 60)}"`,
-      }).catch(() => {});
+      writeNotif(commentData.replyToUid, "commentReply", { postId: p.id, text: `${state.me?.name || "Someone"} replied to your comment: ${notifSnippet}` }).catch(() => {});
       import("./notifications.js").then(({ notifyUser }) =>
         notifyUser(commentData.replyToUid, state.me?.name || "Someone", "replied to your comment", "/#post/" + p.id, state.me?.photoURL || "")
       ).catch(() => {});
@@ -2254,7 +2389,54 @@ const renderProfile = async (root, uid) => {
     return;
   }
   const isMe = uid === state.uid;
-  const iFollow = (state.me.following || []).includes(uid);
+  let _iFollow = (state.me.following || []).includes(uid);
+
+  // Live-update follower count in-place — no full page re-render on follow/unfollow
+  const followersCountEl = el("strong", {}, String((u.followers || []).length));
+
+  let profileFollowBtn = null;
+  if (!isMe) {
+    profileFollowBtn = el("button", { class: `btn ${_iFollow ? "ghost" : "primary"}` }, _iFollow ? "Following" : "Follow");
+    profileFollowBtn.addEventListener("click", async () => {
+      const prev = _iFollow;
+      _iFollow = !_iFollow;
+      profileFollowBtn.textContent = _iFollow ? "Following" : "Follow";
+      profileFollowBtn.className = `btn ${_iFollow ? "ghost" : "primary"}`;
+      const curCount = parseInt(followersCountEl.textContent) || 0;
+      followersCountEl.textContent = String(Math.max(0, curCount + (_iFollow ? 1 : -1)));
+      const meRef = doc(db, "users", state.uid);
+      const themRef = doc(db, "users", uid);
+      const batch = writeBatch(db);
+      if (_iFollow) {
+        batch.update(meRef, { following: arrayUnion(uid) });
+        batch.update(themRef, { followers: arrayUnion(state.uid) });
+      } else {
+        batch.update(meRef, { following: arrayRemove(uid) });
+        batch.update(themRef, { followers: arrayRemove(state.uid) });
+      }
+      await batch.commit().catch(() => {
+        // Revert optimistic update on failure
+        _iFollow = prev;
+        profileFollowBtn.textContent = _iFollow ? "Following" : "Follow";
+        profileFollowBtn.className = `btn ${_iFollow ? "ghost" : "primary"}`;
+        followersCountEl.textContent = String(curCount);
+        toast("Failed to update follow status");
+      });
+      state.cache.users.delete(uid);
+      state.cache.users.delete(state.uid);
+      if (state.me) {
+        state.me.following = _iFollow
+          ? [...new Set([...(state.me.following || []), uid])]
+          : (state.me.following || []).filter((x) => x !== uid);
+      }
+      if (_iFollow) {
+        writeNotif(uid, "follow", {}).catch(() => {});
+        import("./notifications.js").then(({ notifyUser }) =>
+          notifyUser(uid, state.me?.name || "Someone", "started following you", "/#profile/" + state.uid, state.me?.photoURL || "")
+        ).catch(() => {});
+      }
+    });
+  }
 
   root.appendChild(el("div", { class: "profile-head" },
     el("img", { class: "avatar xl", src: avatarFor(u) }),
@@ -2264,32 +2446,14 @@ const renderProfile = async (root, uid) => {
         u.isPro ? el("span", { class: "pro-name-badge" }, el("i", { class: "ri-vip-crown-fill" }), " Pro") : null),
       el("div", { class: "uname" }, "@" + u.username),
       el("div", { class: "stats" },
-        el("div", { class: "stat" }, el("strong", {}, String((u.followers || []).length)), el("span", {}, "followers")),
+        el("div", { class: "stat" }, followersCountEl, el("span", {}, "followers")),
         el("div", { class: "stat" }, el("strong", {}, String((u.following || []).length)), el("span", {}, "following")),
       ),
       u.bio ? el("div", { class: "bio", text: u.bio }) : null,
       el("div", { class: "profile-actions" },
         isMe
           ? el("button", { class: "btn ghost", onclick: () => openProfileEditModal() }, el("i", { class: "ri-edit-line" }), "Edit profile")
-          : el("button", { class: "btn primary", onclick: async () => {
-              const meRef = doc(db, "users", state.uid);
-              const themRef = doc(db, "users", uid);
-              const batch = writeBatch(db);
-              if (iFollow) {
-                batch.update(meRef, { following: arrayRemove(uid) });
-                batch.update(themRef, { followers: arrayRemove(state.uid) });
-              } else {
-                batch.update(meRef, { following: arrayUnion(uid) });
-                batch.update(themRef, { followers: arrayUnion(state.uid) });
-              }
-              await batch.commit();
-              // Invalidate cached copies of BOTH profiles so the refreshed
-              // render below picks up the new follower/following counts
-              // immediately instead of showing stale cached numbers.
-              state.cache.users.delete(uid);
-              state.cache.users.delete(state.uid);
-              router();
-            }}, iFollow ? "Following" : "Follow"),
+          : profileFollowBtn,
         !isMe ? el("button", { class: "btn ghost", onclick: () => location.hash = `#chats/${uid}` },
           el("i", { class: "ri-chat-3-line" }), "Message") : null,
         isMe && !u.verified ? el("button", { class: "btn ghost", onclick: requestLocationVerification },

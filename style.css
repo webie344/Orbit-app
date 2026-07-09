@@ -2691,3 +2691,167 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   .profile-tabs::-webkit-scrollbar { display: none; }
   .profile-tab { white-space: nowrap; }
 }
+
+/* =============================================================
+   COMMENT FORM — media + voice note overhaul
+   ============================================================= */
+
+/* Restructure comment form as a column so preview sits above row */
+.comment-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-top: 8px;
+}
+.comment-form-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+/* Keep input styling the same as before */
+.comment-form input {
+  flex: 1;
+  background: transparent !important;
+  border-radius: 0 !important;
+  border: none !important;
+  border-bottom: 1px solid var(--line) !important;
+  padding: 8px 0 !important;
+  font-size: 14px;
+  min-width: 0;
+}
+.comment-form input:focus { border-bottom-color: var(--primary) !important; }
+
+/* Compact icon buttons inside comment form */
+.cmt-icon-btn {
+  width: 30px !important;
+  height: 30px !important;
+  flex-shrink: 0;
+  color: var(--text-mute);
+}
+.cmt-icon-btn:hover { color: var(--primary); background: var(--hover); }
+.cmt-icon-btn svg { display: block; pointer-events: none; }
+.cmt-icon-btn.recording { color: var(--danger) !important; animation: rec-pulse 1s ease infinite; }
+@keyframes rec-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* Attachment preview strip (above the input row) */
+.cmt-attach-preview {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0 6px;
+  padding-left: 34px; /* lines up under the input (avatar width + gap) */
+}
+
+/* Image / video thumbnail in preview */
+.cmt-attach-thumb {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+.cmt-attach-thumb img,
+.cmt-attach-thumb video {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 10px;
+  display: block;
+}
+
+/* Audio preview bubble */
+.cmt-attach-audio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 4px 12px 4px 8px;
+  position: relative;
+}
+.cmt-attach-audio audio {
+  height: 28px;
+  max-width: 160px;
+}
+
+/* Remove (×) button on attachment preview */
+.cmt-attach-remove {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-mute);
+  cursor: pointer;
+  padding: 0;
+  line-height: 0;
+  transition: background var(--speed), color var(--speed), border-color var(--speed);
+  z-index: 2;
+}
+.cmt-attach-remove:hover { background: var(--danger); color: #fff; border-color: var(--danger); }
+
+/* =============================================================
+   COMMENT MEDIA — compact Twitter-style in-thread display
+   ============================================================= */
+.cmt-media {
+  display: inline-block;
+  margin-top: 6px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  max-width: 200px;
+  cursor: pointer;
+  line-height: 0;
+  transition: opacity var(--speed);
+}
+.cmt-media:hover { opacity: 0.88; }
+.cmt-media img,
+.cmt-media video {
+  width: 100%;
+  max-width: 200px;
+  max-height: 150px;
+  object-fit: cover;
+  display: block;
+}
+
+/* Video thumbnail: play overlay */
+.cmt-media-video-wrap { position: relative; }
+.cmt-media-video-play {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+.cmt-media-video-play svg { filter: drop-shadow(0 1px 4px rgba(0,0,0,.5)); }
+
+/* =============================================================
+   COMMENT VOICE NOTE — compact pill player
+   ============================================================= */
+.cmt-voice-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 6px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 5px 12px 5px 10px;
+  max-width: 220px;
+  color: var(--primary);
+}
+.cmt-voice-note span { display: flex; align-items: center; flex-shrink: 0; }
+.cmt-voice-note audio {
+  flex: 1;
+  height: 28px;
+  min-width: 0;
+  max-width: 155px;
+}
