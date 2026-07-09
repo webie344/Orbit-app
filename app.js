@@ -1500,6 +1500,10 @@ const renderPost = (p, author, opts = {}) => {
         await updateDoc(doc(db, "users", author.uid), {
           followers: _isFollowing ? arrayUnion(state.uid) : arrayRemove(state.uid),
         }).catch(() => {});
+        // Keep caches for both profiles fresh so follower/following counts
+        // update immediately anywhere they're rendered without a full reload.
+        state.cache.users.delete(author.uid);
+        state.cache.users.delete(state.uid);
         if (_isFollowing) {
           writeNotif(author.uid, "follow", {}).catch(() => {});
           import("./notifications.js").then(({ notifyUser }) =>
@@ -2144,6 +2148,8 @@ const renderExplore = (root, hashtagFilter = null) => {
           if (iFollow) { batch.update(meRef, { following: arrayRemove(u.uid) }); batch.update(themRef, { followers: arrayRemove(state.uid) }); }
           else { batch.update(meRef, { following: arrayUnion(u.uid) }); batch.update(themRef, { followers: arrayUnion(state.uid) }); }
           await batch.commit().catch(() => {});
+          state.cache.users.delete(u.uid);
+          state.cache.users.delete(state.uid);
           iFollow = !iFollow;
           followBtn.className = `btn sm ${iFollow ? "ghost" : "primary"}`;
           followBtn.textContent = iFollow ? "Following" : "Follow";
@@ -2228,6 +2234,11 @@ const renderSaved = (root) => {
 // =========================================================================
 // 12. PROFILE
 // =========================================================================
+// Tracks the live listener for whichever profile tab (Posts / Media) is
+// currently rendered, so posting or switching tabs never leaves a stale
+// listener running and the visible tab always reflects Firestore live.
+let _profileTabUnsub = null;
+
 const renderProfile = async (root, uid) => {
   // Always use fresh data for own profile (bypass stale cache after Pro activation)
   let u;
@@ -2272,6 +2283,11 @@ const renderProfile = async (root, uid) => {
                 batch.update(themRef, { followers: arrayUnion(state.uid) });
               }
               await batch.commit();
+              // Invalidate cached copies of BOTH profiles so the refreshed
+              // render below picks up the new follower/following counts
+              // immediately instead of showing stale cached numbers.
+              state.cache.users.delete(uid);
+              state.cache.users.delete(state.uid);
               router();
             }}, iFollow ? "Following" : "Follow"),
         !isMe ? el("button", { class: "btn ghost", onclick: () => location.hash = `#chats/${uid}` },
@@ -2310,58 +2326,75 @@ const renderProfile = async (root, uid) => {
   root.appendChild(body);
 
   const renderTab = async (which) => {
+    // Kill any live listener from the previously active tab (Posts/Media)
+    // before switching, so we never have two snapshot listeners fighting
+    // over the same `body` element.
+    if (_profileTabUnsub) { _profileTabUnsub(); _profileTabUnsub = null; }
+
     body.innerHTML = "";
     body.appendChild(el("div", { class: "empty" },
       el("i", { class: "ri-loader-4-line", style: "animation:spin 1s linear infinite;" }),
       el("div", { class: "t" }, "Loading…")));
 
     if (which === "posts") {
-      const snap = await getDocs(
-        query(collection(db, "posts"), where("authorUid", "==", uid), limit(60))
-      ).catch(() => null);
-      body.innerHTML = "";
-      if (!snap || snap.empty) {
-        body.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-image-line" }), el("div", { class: "t" }, "No posts yet"))); return;
-      }
-      const posts = snap.docs
-        .map((d) => ({ id: d.id, ...d.data() }))
-        .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      // Live listener — any post created, edited, or deleted by this user
+      // reflects on their profile immediately, without needing to leave
+      // and re-enter the page.
+      _profileTabUnsub = onSnapshot(
+        query(collection(db, "posts"), where("authorUid", "==", uid), limit(60)),
+        (snap) => {
+          body.innerHTML = "";
+          if (snap.empty) {
+            body.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-image-line" }), el("div", { class: "t" }, "No posts yet")));
+            return;
+          }
+          const posts = snap.docs
+            .map((d) => ({ id: d.id, ...d.data() }))
+            .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
 
-      const profFeed = el("div", { class: "profile-feed-list" }); body.appendChild(profFeed);
-      posts.forEach((p) => profFeed.appendChild(renderPost(p, u)));
+          const profFeed = el("div", { class: "profile-feed-list" }); body.appendChild(profFeed);
+          posts.forEach((p) => profFeed.appendChild(renderPost(p, u)));
+        },
+        () => {}
+      );
 
     } else if (which === "media") {
-      // Show all posts that have media (images or videos) in a grid
-      const snap = await getDocs(
-        query(collection(db, "posts"), where("authorUid", "==", uid), limit(60))
-      ).catch(() => null);
-      body.innerHTML = "";
-      if (!snap || snap.empty) {
-        body.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-image-line" }), el("div", { class: "t" }, "No media yet"))); return;
-      }
-      const posts = snap.docs
-        .map((d) => ({ id: d.id, ...d.data() }))
-        .filter((p) => p.media && (Array.isArray(p.media) ? p.media.length > 0 : true))
-        .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      // Show all posts that have media (images or videos) in a grid — also live
+      _profileTabUnsub = onSnapshot(
+        query(collection(db, "posts"), where("authorUid", "==", uid), limit(60)),
+        (snap) => {
+          body.innerHTML = "";
+          if (snap.empty) {
+            body.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-image-line" }), el("div", { class: "t" }, "No media yet")));
+            return;
+          }
+          const posts = snap.docs
+            .map((d) => ({ id: d.id, ...d.data() }))
+            .filter((p) => p.media && (Array.isArray(p.media) ? p.media.length > 0 : true))
+            .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
 
-      if (!posts.length) {
-        body.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-image-line" }), el("div", { class: "t" }, "No media yet"))); return;
-      }
-      const grid = el("div", { class: "grid-3 portrait-grid" }); body.appendChild(grid);
-      posts.forEach((p) => {
-        const mediaItems = Array.isArray(p.media) ? p.media : (p.media ? [p.media] : []);
-        if (!mediaItems.length) return;
-        const m = mediaItems[0];
-        const cell = el("div", { class: "cell portrait-cell", onclick: () => location.hash = `#post/${p.id}` });
-        if (m.type === "video") {
-          cell.appendChild(el("video", { src: m.url, muted: "", playsinline: "", preload: "metadata" }));
-          cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-play-fill" })));
-        } else {
-          cell.appendChild(el("img", { src: m.url, loading: "lazy" }));
-          if (mediaItems.length > 1) cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-image-2-line" })));
-        }
-        grid.appendChild(cell);
-      });
+          if (!posts.length) {
+            body.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-image-line" }), el("div", { class: "t" }, "No media yet")));
+            return;
+          }
+          const grid = el("div", { class: "grid-3 portrait-grid" }); body.appendChild(grid);
+          posts.forEach((p) => {
+            const mediaItems = Array.isArray(p.media) ? p.media : (p.media ? [p.media] : []);
+            if (!mediaItems.length) return;
+            const m = mediaItems[0];
+            const cell = el("div", { class: "cell portrait-cell", onclick: () => location.hash = `#post/${p.id}` });
+            if (m.type === "video") {
+              cell.appendChild(el("video", { src: m.url, muted: "", playsinline: "", preload: "metadata" }));
+              cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-play-fill" })));
+            } else {
+              cell.appendChild(el("img", { src: m.url, loading: "lazy" }));
+              if (mediaItems.length > 1) cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-image-2-line" })));
+            }
+            grid.appendChild(cell);
+          });
+        },
+        () => {}
+      );
 
     } else if (which === "about") {
       body.innerHTML = "";
@@ -2755,6 +2788,8 @@ const renderInlinePeopleSuggestion = () => {
             batch.update(themRef, { followers: arrayUnion(state.uid) });
           }
           await batch.commit();
+          state.cache.users.delete(u.uid);
+          state.cache.users.delete(state.uid);
           iFollow = !iFollow;
           btn.textContent = iFollow ? "Following" : "Follow";
           btn.className = `btn sm ${iFollow ? "ghost" : "primary"}`;
@@ -2897,6 +2932,8 @@ const showOnboardingModal = () => {
             batch.update(themRef, { followers: arrayUnion(state.uid) });
           }
           await batch.commit();
+          state.cache.users.delete(u.uid);
+          state.cache.users.delete(state.uid);
           iFollow = !iFollow;
           btn.textContent = iFollow ? "✓ Following" : "Follow";
           btn.className = `btn sm ${iFollow ? "ghost" : "primary"}`;
@@ -3183,6 +3220,8 @@ const startSuggestions = () => {
             batch.update(themRef, { followers: arrayUnion(state.uid) });
           }
           await batch.commit();
+          state.cache.users.delete(u.uid);
+          state.cache.users.delete(state.uid);
         }}, iFollow ? "Following" : "Follow"),
       ));
     });
