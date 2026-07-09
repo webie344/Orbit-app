@@ -15,7 +15,7 @@
     <!-- ============================================================ -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="Orbit Social" />
+    <meta name="apple-mobile-web-app-title" content="Orbit" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 
     <!-- iOS splash screens (optional but recommended) -->
@@ -24,9 +24,9 @@
     <!-- ============================================================ -->
     <!-- SEO / Open Graph                                              -->
     <!-- ============================================================ -->
-    <title>Orbit Social — Bringing People Together</title>
-    <meta name="description" content="Orbit Social — Bringing people together through posts, chats, and real connections." />
-    <meta property="og:title" content="Orbit Social" />
+    <title>Orbit — Your Space to Learn, Connect, and Create.</title>
+    <meta name="description" content="A new gravity for your circles. Connect, share, and chat on Orbit." />
+    <meta property="og:title" content="Orbit" />
     <meta property="og:description" content="A new gravity for your circles." />
     <meta property="og:image" content="/icon-512.png" />
     <meta name="twitter:card" content="summary" />
@@ -57,7 +57,7 @@
     <div id="boot" class="boot">
       <div class="boot-logo">
         <div class="orbit-mark"><span></span><span></span><span></span></div>
-        <div class="boot-name">Orbit Social</div>
+        <div class="boot-name">Orbit</div>
       </div>
     </div>
 
@@ -77,7 +77,7 @@
           <div class="ob-slide-icon" style="background:linear-gradient(135deg,#6c63ff,#a78bfa);">
             <i class="ri-planet-fill"></i>
           </div>
-          <h2 class="ob-slide-title">Welcome to Orbit Social</h2>
+          <h2 class="ob-slide-title">Welcome to Orbit</h2>
           <p class="ob-slide-desc">Discover what's happening around you — posts, stories, and real conversations from people in your world.</p>
         </div>
 
@@ -104,8 +104,8 @@
           <div class="ob-slide-icon" style="background:linear-gradient(135deg,#22c55e,#06b6d4);">
             <i class="ri-sparkling-2-fill"></i>
           </div>
-          <h2 class="ob-slide-title">Your Community, Your Way</h2>
-          <p class="ob-slide-desc">Explore trending content, get AI-powered suggestions, and build your community on Orbit Social.</p>
+          <h2 class="ob-slide-title">Your Orbit, Your Way</h2>
+          <p class="ob-slide-desc">Explore trending content, join Spaces, get AI-powered suggestions, and build your community.</p>
         </div>
 
       </div>
@@ -137,9 +137,9 @@
       <div class="auth-card">
         <div class="auth-brand">
           <div class="orbit-mark sm"><span></span><span></span><span></span></div>
-          <h1>Orbit Social</h1>
+          <h1>Orbit</h1>
         </div>
-        <p class="auth-tag">Bringing people together.</p>
+        <p class="auth-tag">Discover what's happening around you.</p>
 
         <div class="auth-tabs">
           <button class="auth-tab active" data-tab="signin">Sign in</button>
@@ -153,7 +153,7 @@
           <label>Password
             <input type="password" name="password" placeholder="••••••••" required autocomplete="current-password"/>
           </label>
-          <button type="submit" class="btn primary block">Enter Orbit Social</button>
+          <button type="submit" class="btn primary block">Enter Orbit</button>
         </form>
 
         <!-- Pre-signup feature overview — shown when "Create account" tab is clicked -->
@@ -211,7 +211,7 @@
           <label>Password
             <input type="password" name="password" placeholder="At least 8 characters" required minlength="8" autocomplete="new-password"/>
           </label>
-          <button type="submit" class="btn primary block">Join Orbit Social</button>
+          <button type="submit" class="btn primary block">Create my Orbit</button>
         </form>
 
         <div class="auth-divider"><span>or</span></div>
@@ -221,7 +221,7 @@
 
         <!-- Install App button — always visible on the login screen -->
         <button id="authInstallBtn" class="btn ghost block install-app-btn">
-          <i class="ri-download-2-line"></i> Add Orbit Social to Home Screen
+          <i class="ri-download-2-line"></i> Add Orbit to Home Screen
         </button>
 
         <div class="auth-foot">
@@ -240,7 +240,7 @@
           <button class="icon-btn only-mobile" id="openSidebar" aria-label="menu"><i class="ri-menu-line"></i></button>
           <div class="brand" data-route="feed">
             <div class="orbit-mark xs"><span></span><span></span><span></span></div>
-            <span class="brand-name">Orbit Social</span>
+            <span class="brand-name">Orbit</span>
           </div>
         </div>
         <div class="topbar-search">
@@ -299,6 +299,34 @@
               <span class="dl-nav-text">
                 <span class="dl-nav-label">Saved</span>
                 <small class="dl-nav-desc">Posts you bookmarked for later</small>
+              </span>
+            </button>
+            <button class="nav-item dl-nav-item" data-route="spaces">
+              <span class="dl-nav-icon"><i class="ri-planet-line"></i></span>
+              <span class="dl-nav-text">
+                <span class="dl-nav-label">Spaces</span>
+                <small class="dl-nav-desc">Live audio rooms &amp; events</small>
+              </span>
+            </button>
+            <button class="nav-item dl-nav-item" data-route="challenges">
+              <span class="dl-nav-icon"><i class="ri-trophy-line"></i></span>
+              <span class="dl-nav-text">
+                <span class="dl-nav-label">Challenges</span>
+                <small class="dl-nav-desc">Community challenges &amp; contests</small>
+              </span>
+            </button>
+            <button class="nav-item dl-nav-item" data-route="mentorship">
+              <span class="dl-nav-icon"><i class="ri-user-heart-line"></i></span>
+              <span class="dl-nav-text">
+                <span class="dl-nav-label">Mentorship</span>
+                <small class="dl-nav-desc">Find or become a mentor</small>
+              </span>
+            </button>
+            <button class="nav-item dl-nav-item" data-route="learn">
+              <span class="dl-nav-icon"><i class="ri-graduation-cap-line"></i></span>
+              <span class="dl-nav-text">
+                <span class="dl-nav-label">Academy</span>
+                <small class="dl-nav-desc">Learn coding skills &amp; earn badges</small>
               </span>
             </button>
             <button class="nav-item dl-nav-item" data-route="settings">
@@ -545,8 +573,8 @@
           <h3>Add to Home Screen</h3>
           <button class="icon-btn" id="iosInstallClose"><i class="ri-close-line"></i></button>
         </div>
-        <img src="/icon-192.png" class="ios-app-icon" alt="Orbit Social icon" />
-        <p class="ios-install-intro">Install <strong>Orbit Social</strong> on your iPhone in 3 taps:</p>
+        <img src="/icon-192.png" class="ios-app-icon" alt="Orbit icon" />
+        <p class="ios-install-intro">Install <strong>Orbit</strong> on your iPhone in 3 taps:</p>
         <ol class="ios-steps">
           <li>
             <i class="ri-share-forward-line"></i>
@@ -558,7 +586,7 @@
           </li>
           <li>
             <i class="ri-check-line"></i>
-            Tap <strong>"Add"</strong> — Orbit Social appears on your home screen!
+            Tap <strong>"Add"</strong> — Orbit appears on your home screen!
           </li>
         </ol>
         <div class="ios-install-tip">
