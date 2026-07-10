@@ -154,36 +154,43 @@ function _renderFeedOverlays(wrap, overlays) {
   wrap.appendChild(layer);
 }
 
-// Attaches an attached song to a post: plays/pauses in sync with visibility
-// (image/carousel posts) or with the video's own play state (video posts),
-// starting muted like Facebook/TikTok — tap the speaker to hear it.
+// Browsers block unmuted autoplay until the user has interacted with the
+// page at least once. We unlock on the very first tap/click/key anywhere
+// (standard pattern) and unmute any songs already playing at that point;
+// until then, songs still autoplay — just muted — so they don't silently
+// fail to start.
+let _audioUnlocked = false;
+const _songAudioWrap = new WeakMap(); // audio -> its post's wrapper element, for liveness pruning
+["pointerdown", "keydown"].forEach((evt) => {
+  document.addEventListener(evt, () => {
+    if (_audioUnlocked) return;
+    _audioUnlocked = true;
+    _activeSongAudios.forEach((a) => { if (!a.paused) a.muted = false; });
+  }, { once: true, capture: true });
+});
+
+// Attaches an attached song to a post so it just plays quietly in the
+// background, TikTok-style — mixed underneath the video's own audio, no
+// overlay bar, no mute toggle. Image/carousel posts (no native audio) play
+// the song at normal volume while visible.
 function _wireSongPlayback(wrap, song, videoEl) {
   if (!song?.url) return;
   const audio = new Audio(song.url);
-  audio.loop = true; audio.muted = true; audio.preload = "none";
+  audio.loop = true; audio.preload = "none";
+  audio.volume = videoEl ? 0.22 : 0.9; // ducked under the clip's own audio when there is one
   _activeSongAudios.add(audio);
-  const soundBtn = el("button", { class: "post-sound-toggle" }, el("i", { class: "ri-volume-mute-line" }));
-  const songBar = el("div", { class: "post-song-bar" }, el("i", { class: "ri-music-2-fill" }),
-    el("span", {}, el("span", { class: "marquee" }, `${song.name} — ${song.artist}`)));
-  wrap.appendChild(songBar);
-  wrap.appendChild(soundBtn);
-  soundBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    audio.muted = !audio.muted;
-    if (videoEl) videoEl.muted = true; // song replaces the clip's own audio
-    soundBtn.querySelector("i").className = audio.muted ? "ri-volume-mute-line" : "ri-volume-up-line";
-    if (!audio.muted) audio.play().catch(() => {});
-  });
+  _songAudioWrap.set(audio, wrap);
+  const play = () => { audio.muted = !_audioUnlocked; audio.play().catch(() => {}); };
   if (videoEl) {
-    videoEl.muted = true; // song is the only audio source for posts with music
-    videoEl.addEventListener("play", () => { audio.currentTime = videoEl.currentTime % (audio.duration || 1e9); audio.play().catch(() => {}); });
+    // Video keeps its own audio; the song just plays underneath it.
+    videoEl.addEventListener("play", () => { audio.currentTime = videoEl.currentTime % (audio.duration || 1e9); play(); });
     videoEl.addEventListener("pause", () => audio.pause());
     videoEl.addEventListener("seeked", () => { audio.currentTime = videoEl.currentTime % (audio.duration || 1e9); });
     videoEl.addEventListener("emptied", () => { audio.pause(); _activeSongAudios.delete(audio); }, { once: true });
   } else {
     const io = new IntersectionObserver((entries) => {
       if (!document.body.contains(wrap)) { audio.pause(); _activeSongAudios.delete(audio); io.disconnect(); return; }
-      if (entries[0].isIntersecting) audio.play().catch(() => {}); else audio.pause();
+      if (entries[0].isIntersecting) play(); else audio.pause();
     }, { threshold: 0.6 });
     io.observe(wrap);
   }
@@ -990,8 +997,11 @@ function _pauseAllMedia(exceptEl = null) {
     try { m.pause(); } catch {}
   });
   _activeSongAudios.forEach((a) => {
-    if (a === exceptEl) return;
-    try { a.pause(); } catch {}
+    if (a !== exceptEl) { try { a.pause(); } catch {} }
+    // Prune entries whose post node has been removed from the DOM (e.g. the
+    // feed re-rendered) so the set doesn't grow unbounded across a session.
+    const wrap = _songAudioWrap.get(a);
+    if (wrap && !document.body.contains(wrap)) _activeSongAudios.delete(a);
   });
 }
 
@@ -3271,21 +3281,20 @@ function crBuildMusicStep() {
 }
 function crStopPreview() { if (_crPreviewAudio) { _crPreviewAudio.pause(); _crPreviewAudio = null; } }
 
-// Internet Archive's public catalog needs no API key/signup at all — its
-// search + metadata endpoints are open and CORS-enabled. We search the
-// "audio" mediatype for Creative-Commons-friendly netlabel/free-music
-// collections, then resolve a playable mp3 URL per result via /metadata.
-const ARCHIVE_AUDIO_COLLECTIONS = "(collection:netlabels OR collection:opensource_audio OR collection:free_music_archive)";
+// iTunes Search API needs no API key/signup, is CORS-enabled for direct
+// browser calls, and covers real current commercial catalog (Asake, Ariana
+// Grande, Burna Boy, etc.) — each result gives a real 30s preview clip
+// (previewUrl) we can play/attach, which is what TikTok/Reels-style song
+// pickers use under the hood too.
+const ITUNES_DEFAULT_TERMS = ["afrobeats", "hip hop", "pop hits", "top 40"];
 async function crSearchMusic(qText, results) {
   results.innerHTML = `<div class="cr-music-empty"><i class="ri-loader-4-line"></i> Loading…</div>`;
   try {
-    const q = qText
-      ? `${ARCHIVE_AUDIO_COLLECTIONS} AND mediatype:audio AND (${qText})`
-      : `${ARCHIVE_AUDIO_COLLECTIONS} AND mediatype:audio`;
-    const searchUrl = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(q)}&fl[]=identifier&fl[]=title&fl[]=creator&rows=20&output=json`;
-    const r = await fetch(searchUrl);
+    const term = qText || ITUNES_DEFAULT_TERMS[Math.floor(Math.random() * ITUNES_DEFAULT_TERMS.length)];
+    const url = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&entity=song&limit=25`;
+    const r = await fetch(url);
     const j = await r.json();
-    const docs = j.response?.docs || [];
+    const docs = (j.results || []).filter((t) => t.previewUrl);
     results.innerHTML = "";
     if (!docs.length) { results.appendChild(el("div", { class: "cr-music-empty" }, "No tracks found — try a different search")); return; }
     docs.forEach((doc) => results.appendChild(crTrackRow(doc, results)));
@@ -3294,51 +3303,38 @@ async function crSearchMusic(qText, results) {
     results.appendChild(el("div", { class: "cr-music-empty" }, "Couldn't load music right now"));
   }
 }
-// Each search result is an Archive.org "item" that can contain several
-// files; resolve the first playable mp3/ogg file lazily (only once the
-// user actually previews or picks the track, to avoid 20 metadata calls
-// per search).
-async function crResolveTrackUrl(identifier) {
-  const r = await fetch(`https://archive.org/metadata/${identifier}`);
-  const j = await r.json();
-  const file = (j.files || []).find((f) => /\.(mp3|ogg)$/i.test(f.name) && f.source === "derivative")
-    || (j.files || []).find((f) => /\.(mp3|ogg)$/i.test(f.name));
-  if (!file) return null;
-  return `https://archive.org/download/${identifier}/${encodeURIComponent(file.name)}`;
-}
 function crTrackRow(doc, results) {
-  const isActive = crState.song?.id === doc.identifier;
-  const title = doc.title || doc.identifier;
-  const creator = Array.isArray(doc.creator) ? doc.creator[0] : (doc.creator || "Unknown artist");
+  const id = String(doc.trackId);
+  const isActive = crState.song?.id === id;
+  const title = doc.trackName || "Untitled";
+  const creator = doc.artistName || "Unknown artist";
+  const url = doc.previewUrl;
   const playIcon = el("i", { class: "ri-play-fill" });
   const playBtn = el("button", { class: "cr-track-play" }, playIcon);
   const pickBtn = el("button", { class: "cr-track-pick" }, isActive ? "Selected" : "Use");
+  const artImg = doc.artworkUrl60
+    ? el("img", { src: doc.artworkUrl60, alt: "" })
+    : el("i", { class: "ri-music-2-fill" });
   const row = el("div", { class: "cr-track" + (isActive ? " active" : "") },
-    el("div", { class: "cr-track-art" }, el("i", { class: "ri-music-2-fill" })),
+    el("div", { class: "cr-track-art" }, artImg),
     el("div", { class: "cr-track-info" }, el("div", { class: "n" }, title), el("div", { class: "a" }, creator)),
     playBtn,
     pickBtn,
   );
-  playBtn.addEventListener("click", async (e) => {
+  playBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (_crPreviewAudio && _crPreviewAudio._identifier === doc.identifier && !_crPreviewAudio.paused) {
+    if (_crPreviewAudio && _crPreviewAudio._identifier === id && !_crPreviewAudio.paused) {
       crStopPreview(); playIcon.className = "ri-play-fill"; return;
     }
     crStopPreview();
-    playIcon.className = "ri-loader-4-line";
-    const url = await crResolveTrackUrl(doc.identifier).catch(() => null);
-    if (!url) { playIcon.className = "ri-play-fill"; toast("Couldn't load that track"); return; }
     _crPreviewAudio = new Audio(url);
-    _crPreviewAudio._identifier = doc.identifier;
-    _crPreviewAudio.play().catch(() => {});
+    _crPreviewAudio._identifier = id;
+    _crPreviewAudio.play().catch(() => { toast("Couldn't play that track"); });
     playIcon.className = "ri-pause-fill";
     _crPreviewAudio.addEventListener("ended", () => { playIcon.className = "ri-play-fill"; });
   });
-  pickBtn.addEventListener("click", async () => {
-    pickBtn.textContent = "…";
-    const url = _crPreviewAudio?._identifier === doc.identifier ? _crPreviewAudio.src : await crResolveTrackUrl(doc.identifier).catch(() => null);
-    if (!url) { toast("Couldn't load that track"); pickBtn.textContent = "Use"; return; }
-    crState.song = { id: doc.identifier, name: title, artist: creator, url };
+  pickBtn.addEventListener("click", () => {
+    crState.song = { id, name: title, artist: creator, url };
     crStopPreview();
     crBuildMusicStepPaint(results);
   });

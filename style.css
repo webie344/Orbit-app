@@ -488,9 +488,12 @@ textarea { resize: vertical; min-height: 80px; }
 .post-text a.hashtag:hover, .post-text a.mention:hover { text-decoration: underline; }
 
 /* Post media carousel */
-.post-media.carousel { position: relative; }
-.carousel-slide { width: 100%; }
-.carousel-slide img, .carousel-slide video { width: 100%; max-height: 85vh; object-fit: contain; border-radius: 0; background: #000; display: block; }
+/* Fixed-size window so swiping between differently-sized images doesn't
+   resize the post itself — every slide fills the same box (cover-cropped),
+   Instagram-carousel style, instead of the post growing/shrinking per slide. */
+.post-media.carousel { position: relative; aspect-ratio: 4 / 5; max-height: 85vh; overflow: hidden; }
+.carousel-slide { width: 100%; height: 100%; }
+.carousel-slide img, .carousel-slide video { width: 100%; height: 100%; object-fit: cover; border-radius: 0; background: #000; display: block; }
 .carousel-arrow {
   position: absolute; top: 50%; transform: translateY(-50%);
   background: rgba(0,0,0,.55); color: white; border-radius: 50%;
@@ -2866,6 +2869,7 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   position: fixed; inset: 0; z-index: 900;
   background: var(--bg);
   display: flex; flex-direction: column;
+  min-height: 0; height: 100%;
   animation: crFadeIn .18s ease;
 }
 @keyframes crFadeIn { from { opacity: 0; } to { opacity: 1; } }
@@ -2885,7 +2889,10 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .cr-head-btn:disabled { opacity: .4; pointer-events: none; }
 .cr-head-close { font-size: 22px; color: var(--text-dim); padding: 4px; }
 
-.cr-steps { flex: 1; overflow-y: auto; position: relative; }
+.cr-steps {
+  flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; position: relative;
+  -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+}
 /* min-height (not height) so steps with more content than the viewport
    (long editor toolbars, details form, etc.) can grow and actually scroll
    inside .cr-steps instead of being clipped to the viewport's height. */
@@ -2987,7 +2994,8 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .cr-track { display: flex; align-items: center; gap: 12px; padding: 10px; border-radius: var(--radius); }
 .cr-track:hover { background: var(--hover); }
 .cr-track.active { background: rgba(139,108,255,.12); }
-.cr-track-art { width: 44px; height: 44px; border-radius: 10px; background: var(--bg-elev-2); display: flex; align-items: center; justify-content: center; color: var(--primary); flex-shrink: 0; }
+.cr-track-art { width: 44px; height: 44px; border-radius: 10px; background: var(--bg-elev-2); display: flex; align-items: center; justify-content: center; color: var(--primary); flex-shrink: 0; overflow: hidden; }
+.cr-track-art img { width: 100%; height: 100%; object-fit: cover; border-radius: 10px; }
 .cr-track-info { flex: 1; min-width: 0; }
 .cr-track-info .n { font-weight: 700; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cr-track-info .a { font-size: 12px; color: var(--text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -2997,7 +3005,10 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .cr-music-empty { text-align: center; color: var(--text-mute); padding: 30px 0; font-size: 13px; }
 
 /* ---------- Step 4: details ---------- */
-.cr-details { flex: 1; display: flex; flex-direction: column; gap: 16px; padding: 16px; overflow-y: auto; }
+/* No overflow/scroll of its own — .cr-steps is the single scroll container
+   for the whole studio; a nested auto-overflow here previously fought with
+   the outer one and could end up clipping content instead of scrolling. */
+.cr-details { flex: 1; display: flex; flex-direction: column; gap: 16px; padding: 16px; padding-bottom: 32px; }
 .cr-details-preview { display: flex; gap: 12px; align-items: flex-start; }
 .cr-details-thumb { width: 84px; height: 84px; border-radius: var(--radius); object-fit: cover; background: #000; flex-shrink: 0; }
 .cr-details textarea {
@@ -3008,23 +3019,6 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .cr-details-row .l { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 13.5px; }
 .cr-details-row .l i { color: var(--primary); font-size: 18px; }
 .cr-details-row .v { color: var(--text-mute); font-size: 12.5px; }
-
-/* ---------- Feed: song attribution + mute toggle ---------- */
-.post-song-bar {
-  display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12.5px;
-  color: var(--text-dim); background: var(--bg-elev-2); border-radius: var(--radius-pill);
-  position: absolute; left: 10px; bottom: 54px; z-index: 5; max-width: 70%;
-  overflow: hidden; white-space: nowrap;
-}
-.post-song-bar i { color: var(--primary); flex-shrink: 0; }
-.post-song-bar span { overflow: hidden; text-overflow: ellipsis; }
-.post-song-bar .marquee { display: inline-block; animation: crMarquee 8s linear infinite; }
-@keyframes crMarquee { 0%,15% { transform: translateX(0); } 85%,100% { transform: translateX(calc(-100% + 40px)); } }
-.post-sound-toggle {
-  position: absolute; right: 10px; bottom: 12px; z-index: 6;
-  width: 34px; height: 34px; border-radius: 50%; background: rgba(0,0,0,.5); color: #fff;
-  display: flex; align-items: center; justify-content: center; font-size: 16px;
-}
 
 @media (max-width: 480px) {
   .cr-stage { width: 100%; border-radius: 0; aspect-ratio: 9/16; }
