@@ -394,6 +394,14 @@ textarea { resize: vertical; min-height: 80px; }
 .post-head .sub { color: var(--text-mute); font-size: 12px; display: flex; gap: 6px; }
 .post-head .sub .dot { color: var(--text-mute); }
 .post-head .more { margin-left: auto; }
+/* Small "attached song" tag in the post header, sitting just left of the
+   follow/following button — icon + truncated "name · artist". */
+.post-song-tag {
+  display: flex; align-items: center; gap: 4px; max-width: 110px;
+  font-size: 11px; color: var(--text-mute); flex-shrink: 0;
+}
+.post-song-tag i { color: var(--primary); font-size: 12px; flex-shrink: 0; }
+.post-song-tag span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .post-text {
   font-size: 15px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;

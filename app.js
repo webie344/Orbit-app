@@ -1595,6 +1595,10 @@ const renderPost = (p, author, opts = {}) => {
         fmtTime(p.createdAt),
       )
     ),
+    p.song ? el("div", { class: "post-song-tag", title: `${p.song.name} — ${p.song.artist}` },
+      el("i", { class: "ri-music-2-fill" }),
+      el("span", {}, `${p.song.name} · ${p.song.artist}`),
+    ) : null,
     !isMine ? (() => {
       let _isFollowing = (state.me?.following || []).includes(author?.uid);
       const fbtn = el("button", { class: `follow-btn${_isFollowing ? " following" : ""}` },
