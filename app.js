@@ -2986,6 +2986,7 @@ const _crFreshState = () => ({
   camChunks: [],
   camTimer: null,
   camFacing: "user",      // "user" | "environment"
+  camAudio: null,         // audio-only MediaStream kept separate from preview
   isRecordedVideo: false, // true only when video was recorded inside the app
 });
 
@@ -3101,12 +3102,21 @@ function crStopCamera() {
   if (crState?.camTimer) { clearInterval(crState.camTimer); crState.camTimer = null; }
   if (crState?.camRecorder && crState.camRecorder.state !== "inactive") { try { crState.camRecorder.stop(); } catch {} }
   if (crState?.camStream) { crState.camStream.getTracks().forEach((t) => t.stop()); crState.camStream = null; }
+  // Stop the separate audio stream too — it holds the mic open otherwise
+  if (crState?.camAudio) { crState.camAudio.getTracks().forEach((t) => t.stop()); crState.camAudio = null; }
 }
 
 function crBuildCamStep() {
-  const video = el("video", { autoplay: true, muted: true, playsinline: true });
-  const timer = el("div", { class: "cr-cam-timer" }, el("span", { class: "dot" }), el("span", { class: "t" }, "0:00"));
-  const recBtn = el("button", { class: "cr-rec-btn" });
+  const video = el("video", { autoplay: true, playsinline: true });
+  // The preview element must NEVER carry audio tracks.
+  // Setting srcObject to a video-only stream (see startStream below) is the
+  // only reliable way to prevent mic → speaker → mic feedback on mobile.
+  // Setting these properties is a belt-and-suspenders backup.
+  video.muted  = true;
+  video.volume = 0;
+
+  const timer   = el("div", { class: "cr-cam-timer" }, el("span", { class: "dot" }), el("span", { class: "t" }, "0:00"));
+  const recBtn  = el("button", { class: "cr-rec-btn" });
   const flipBtn = el("button", { class: "cr-cam-flip", title: "Switch camera" }, el("i", { class: "ri-camera-switch-line" }));
   const cam = el("div", { class: "cr-cam" },
     video, timer,
@@ -3116,23 +3126,54 @@ function crBuildCamStep() {
   );
   const step = el("div", { class: "cr-step active" }, cam);
 
-  // Start stream with a given facing mode — stops any existing stream first
-  const startStream = (facing) => {
-    if (!navigator.mediaDevices?.getUserMedia) { toast("Camera not available on this device"); crGoto("pick"); return; }
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: facing }, audio: true }).then((stream) => {
+  // crState.camStream  → video-only stream shown in the preview element
+  // crState.camAudio   → audio-only stream (mic) kept separate
+  // MediaRecorder combines both — the preview element never has audio tracks,
+  // which is the root cause of the screeching feedback loop.
+
+  const startStream = (facing, { isFlip = false } = {}) => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      toast("Camera not available on this device");
+      if (!isFlip) crGoto("pick");
+      return;
+    }
+    // Request video and audio as separate streams so the preview element
+    // only ever receives video tracks (zero chance of audio feedback).
+    Promise.all([
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: facing } }),
+      // Reuse the existing audio stream when just flipping the camera so the
+      // user doesn't get a second microphone permission prompt.
+      crState.camAudio
+        ? Promise.resolve(crState.camAudio)
+        : navigator.mediaDevices.getUserMedia({ audio: true }),
+    ]).then(([videoStream, audioStream]) => {
+      // Safe to stop the old video stream now that the new one is ready
       if (crState.camStream) crState.camStream.getTracks().forEach((t) => t.stop());
-      crState.camStream = stream;
-      video.srcObject = stream;
-    }).catch(() => { toast("Camera access denied or unavailable"); crGoto("pick"); });
+      crState.camStream = videoStream;
+      crState.camAudio  = audioStream;
+
+      // Preview element gets video-only — no audio track ever touches it
+      video.srcObject = videoStream;
+      video.muted     = true;
+      video.volume    = 0;
+    }).catch(() => {
+      if (isFlip) {
+        crState.camFacing = crState.camFacing === "user" ? "environment" : "user";
+        toast("Couldn't switch camera — your device may only have one");
+      } else {
+        toast("Camera or microphone access denied");
+        crGoto("pick");
+      }
+    });
   };
 
   startStream(crState.camFacing || "user");
 
-  // Flip between front and back camera (disabled while recording)
+  // Flip between front and back — blocked while recording is active
   flipBtn.addEventListener("click", () => {
     if (crState.camRecorder?.state === "recording") { toast("Stop recording before switching camera"); return; }
     crState.camFacing = crState.camFacing === "user" ? "environment" : "user";
-    startStream(crState.camFacing);
+    startStream(crState.camFacing, { isFlip: true });
   });
 
   let seconds = 0;
@@ -3141,7 +3182,13 @@ function crBuildCamStep() {
     if (!crState.camRecorder || crState.camRecorder.state === "inactive") {
       crState.camChunks = [];
       const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus") ? "video/webm;codecs=vp9,opus" : "video/webm";
-      const rec = new MediaRecorder(crState.camStream, { mimeType: mime });
+      // Combine the video-only preview stream with the separate audio stream
+      // so the recording has both tracks but the preview element stays silent.
+      const recTracks = [
+        ...crState.camStream.getVideoTracks(),
+        ...(crState.camAudio ? crState.camAudio.getAudioTracks() : []),
+      ];
+      const rec = new MediaRecorder(new MediaStream(recTracks), { mimeType: mime });
       rec.ondataavailable = (ev) => { if (ev.data.size) crState.camChunks.push(ev.data); };
       rec.onstop = () => {
         const blob = new Blob(crState.camChunks, { type: "video/webm" });
@@ -3270,7 +3317,7 @@ function crBuildEditorStep() {
       layer.addEventListener("pointerdown", (e) => {
         crState.selectedLayerId = ov.id;
         paintLayerControls();
-        $(".cr-layer", overlayLayer).forEach((l) => l.classList.remove("selected"));
+        $$(".cr-layer", overlayLayer).forEach((l) => l.classList.remove("selected"));
         layer.classList.add("selected");
         dragging = true; moved = false;
         sx = e.clientX; sy = e.clientY; ox = ov.x; oy = ov.y;
