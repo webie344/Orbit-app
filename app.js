@@ -816,6 +816,7 @@ onAuthStateChanged(auth, async (user) => {
   state.uid = user.uid;
   state.me = await ensureUserDoc(user);
   $("#meAvatar").src = avatarFor(state.me);
+  _hideAuthLoader(); // dismiss branded loader if sign-in/up triggered it
   showApp();
   startMyProfileListener();
   startNotifListener();
@@ -875,28 +876,74 @@ document.getElementById("onboardGetStarted")?.addEventListener("click", () => {
   $("#signupForm").classList.remove("hidden");
 });
 
+// ── Orbit-branded auth loader ────────────────────────────────────────────
+// Creates (or reuses) a full-screen overlay with the animated logo mark so
+// users see branded feedback instead of a frozen form during sign-in/up.
+function _showAuthLoader(label = "Signing in…") {
+  let overlay = document.getElementById("orbitAuthLoader");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "orbitAuthLoader";
+    overlay.innerHTML = `
+      <div class="oal-inner">
+        <div class="oal-mark">
+          <span></span><span></span><span></span>
+        </div>
+        <div class="oal-brand">Orbit</div>
+        <div class="oal-label" id="oalLabel"></div>
+      </div>`;
+    document.body.appendChild(overlay);
+  }
+  overlay.querySelector("#oalLabel").textContent = label;
+  overlay.classList.remove("oal-hidden");
+}
+function _hideAuthLoader() {
+  const overlay = document.getElementById("orbitAuthLoader");
+  if (overlay) {
+    overlay.classList.add("oal-hidden");
+    // Remove from DOM after fade-out so it doesn't block future interactions
+    setTimeout(() => overlay.remove(), 350);
+  }
+}
+
 $("#signinForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
+  _showAuthLoader("Signing in…");
   try {
     await signInWithEmailAndPassword(auth, fd.get("email"), fd.get("password"));
-  } catch (err) { toast(err.message.replace("Firebase: ", "")); }
+    // Loader stays visible — Firebase auth state change will trigger the app
+  } catch (err) {
+    _hideAuthLoader();
+    toast(err.message.replace("Firebase: ", ""));
+  }
 });
 
 $("#signupForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
   const name = fd.get("name"), username = fd.get("username");
+  _showAuthLoader("Creating your Orbit…");
   try {
     const cred = await createUserWithEmailAndPassword(auth, fd.get("email"), fd.get("password"));
     await updateProfile(cred.user, { displayName: name });
     await ensureUserDoc(cred.user, { name, username });
-  } catch (err) { toast(err.message.replace("Firebase: ", "")); }
+    // Loader stays visible — auth state listener will navigate to the app
+  } catch (err) {
+    _hideAuthLoader();
+    toast(err.message.replace("Firebase: ", ""));
+  }
 });
 
 $("#googleBtn").addEventListener("click", async () => {
-  try { await signInWithPopup(auth, new GoogleAuthProvider()); }
-  catch (err) { toast(err.message.replace("Firebase: ", "")); }
+  _showAuthLoader("Connecting with Google…");
+  try {
+    await signInWithPopup(auth, new GoogleAuthProvider());
+    // Loader stays — auth state listener handles navigation
+  } catch (err) {
+    _hideAuthLoader();
+    toast(err.message.replace("Firebase: ", ""));
+  }
 });
 
 $("#signOutBtn").addEventListener("click", async () => {
@@ -2938,6 +2985,8 @@ const _crFreshState = () => ({
   camRecorder: null,
   camChunks: [],
   camTimer: null,
+  camFacing: "user",      // "user" | "environment"
+  isRecordedVideo: false, // true only when video was recorded inside the app
 });
 
 const crLayerId = () => "l" + Math.random().toString(36).slice(2, 9);
@@ -2978,7 +3027,10 @@ function crRenderShell(root) {
 }
 
 function crBack() {
-  const order = ["pick", "editor", "music", "details"];
+  // Music step only applies when a video was recorded in-app
+  const order = crState.isRecordedVideo
+    ? ["pick", "editor", "music", "details"]
+    : ["pick", "editor", "details"];
   if (crState.step === "cam") { crStopCamera(); crGoto("pick"); return; }
   const idx = order.indexOf(crState.step);
   if (idx <= 0) { crClose(); return; }
@@ -2996,7 +3048,7 @@ function crGoto(step) {
   else if (step === "editor") {
     title.textContent = "Edit";
     stepsWrap.appendChild(crBuildEditorStep());
-    nextBtn.style.display = ""; nextBtn.textContent = "Next"; nextBtn.onclick = () => crGoto("music");
+    nextBtn.style.display = ""; nextBtn.textContent = "Next"; nextBtn.onclick = () => crState.isRecordedVideo ? crGoto("music") : crGoto("details");
   } else if (step === "music") {
     title.textContent = "Add music";
     stepsWrap.appendChild(crBuildMusicStep());
@@ -3014,6 +3066,9 @@ function crBuildPickStep() {
   fileInput.addEventListener("change", (e) => {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
+    // Uploaded media is never "recorded in-app" — always reset the flag so
+    // the music step is correctly skipped for gallery picks and image sets.
+    crState.isRecordedVideo = false;
     const hasVideo = files.some((f) => f.type.startsWith("video/"));
     if (hasVideo) {
       const f = files.find((f) => f.type.startsWith("video/"));
@@ -3052,17 +3107,33 @@ function crBuildCamStep() {
   const video = el("video", { autoplay: true, muted: true, playsinline: true });
   const timer = el("div", { class: "cr-cam-timer" }, el("span", { class: "dot" }), el("span", { class: "t" }, "0:00"));
   const recBtn = el("button", { class: "cr-rec-btn" });
+  const flipBtn = el("button", { class: "cr-cam-flip", title: "Switch camera" }, el("i", { class: "ri-camera-switch-line" }));
   const cam = el("div", { class: "cr-cam" },
     video, timer,
     el("button", { class: "cr-cam-close", onclick: () => { crStopCamera(); crGoto("pick"); } }, el("i", { class: "ri-close-line" })),
+    flipBtn,
     el("div", { class: "cr-cam-bar" }, recBtn),
   );
   const step = el("div", { class: "cr-step active" }, cam);
 
-  navigator.mediaDevices?.getUserMedia({ video: { facingMode: "user" }, audio: true }).then((stream) => {
-    crState.camStream = stream;
-    video.srcObject = stream;
-  }).catch(() => { toast("Camera access denied or unavailable"); crGoto("pick"); });
+  // Start stream with a given facing mode — stops any existing stream first
+  const startStream = (facing) => {
+    if (!navigator.mediaDevices?.getUserMedia) { toast("Camera not available on this device"); crGoto("pick"); return; }
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: facing }, audio: true }).then((stream) => {
+      if (crState.camStream) crState.camStream.getTracks().forEach((t) => t.stop());
+      crState.camStream = stream;
+      video.srcObject = stream;
+    }).catch(() => { toast("Camera access denied or unavailable"); crGoto("pick"); });
+  };
+
+  startStream(crState.camFacing || "user");
+
+  // Flip between front and back camera (disabled while recording)
+  flipBtn.addEventListener("click", () => {
+    if (crState.camRecorder?.state === "recording") { toast("Stop recording before switching camera"); return; }
+    crState.camFacing = crState.camFacing === "user" ? "environment" : "user";
+    startStream(crState.camFacing);
+  });
 
   let seconds = 0;
   recBtn.addEventListener("click", () => {
@@ -3077,6 +3148,7 @@ function crBuildCamStep() {
         const file = new File([blob], `orbit-recording-${Date.now()}.webm`, { type: "video/webm" });
         crState.slides = [{ type: "video", file, url: URL.createObjectURL(file), overlays: [] }];
         crState.activeSlide = 0;
+        crState.isRecordedVideo = true; // mark as recorded — enables music step
         crStopCamera();
         crGoto("editor");
       };
@@ -3193,32 +3265,41 @@ function crBuildEditorStep() {
       );
       layer.style.fontSize = crFontPx(ov, rect().width || 320) + "px";
 
-      let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+      // Track drag vs tap: a movement < 6px in either axis is treated as a tap
+      let dragging = false, moved = false, sx = 0, sy = 0, ox = 0, oy = 0;
       layer.addEventListener("pointerdown", (e) => {
         crState.selectedLayerId = ov.id;
         paintLayerControls();
-        $$(".cr-layer", overlayLayer).forEach((l) => l.classList.remove("selected"));
+        $(".cr-layer", overlayLayer).forEach((l) => l.classList.remove("selected"));
         layer.classList.add("selected");
-        dragging = true; sx = e.clientX; sy = e.clientY; ox = ov.x; oy = ov.y;
+        dragging = true; moved = false;
+        sx = e.clientX; sy = e.clientY; ox = ov.x; oy = ov.y;
         layer.setPointerCapture(e.pointerId);
       });
       layer.addEventListener("pointermove", (e) => {
         if (!dragging) return;
+        if (Math.abs(e.clientX - sx) > 6 || Math.abs(e.clientY - sy) > 6) moved = true;
+        if (!moved) return; // ignore sub-threshold micro-jitter
         const r = rect();
         ov.x = Math.min(96, Math.max(4, ox + ((e.clientX - sx) / r.width) * 100));
         ov.y = Math.min(96, Math.max(4, oy + ((e.clientY - sy) / r.height) * 100));
         layer.style.left = ov.x + "%"; layer.style.top = ov.y + "%";
       });
-      layer.addEventListener("pointerup", () => { dragging = false; });
-      if (ov.type === "text") {
-        layer.addEventListener("dblclick", () => {
+      layer.addEventListener("pointerup", () => {
+        // Single tap (no real movement) on a text layer → open inline editor
+        if (!moved && ov.type === "text") {
           const span = layer.querySelector("span");
           span.contentEditable = "true";
           span.focus();
-          const sel = getSelection(); sel.selectAllChildren(span);
-          span.addEventListener("blur", () => { ov.text = span.textContent.trim() || "Tap to edit"; span.contentEditable = "false"; span.textContent = ov.text; }, { once: true });
-        });
-      }
+          try { const sel = getSelection(); sel.selectAllChildren(span); } catch {}
+          span.addEventListener("blur", () => {
+            ov.text = span.textContent.trim() || "Tap to edit";
+            span.contentEditable = "false";
+            span.textContent = ov.text;
+          }, { once: true });
+        }
+        dragging = false;
+      });
       overlayLayer.appendChild(layer);
     });
     paintDots(); paintThumbs(); paintLayerControls();
@@ -3370,31 +3451,55 @@ function crBuildDetailsStep() {
     const valueEl = locRow.querySelector(".v");
     valueEl.textContent = "Locating…";
     navigator.geolocation.getCurrentPosition(async (pos) => {
-      const { latitude: lat, longitude: lng } = pos.coords; let city = null;
+      const { latitude: lat, longitude: lng } = pos.coords;
+      let city = null;
+      // Helper: fetch with a hard timeout so a stalled reverse-geocode
+      // never leaves the UI stuck on "Locating…" indefinitely.
+      const fetchWithTimeout = (url, opts = {}, ms = 6000) => {
+        const ctrl = new AbortController();
+        const tid  = setTimeout(() => ctrl.abort(), ms);
+        return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(tid));
+      };
+      // 1st attempt: BigDataCloud (free, no API key, CORS-safe)
       try {
-        // BigDataCloud's client-reverse-geocode endpoint is free, needs no
-        // API key, and is CORS-enabled for direct browser calls (Nominatim
-        // frequently blocks/throttles unidentified browser-origin requests).
-        const r = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lng}&localityLanguage=en`);
-        const j = await r.json();
-        city = j.city || j.locality || j.principalSubdivision || null;
+        const r = await fetchWithTimeout(
+          `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lng}&localityLanguage=en`
+        );
+        if (r.ok) { const j = await r.json(); city = j.city || j.locality || j.principalSubdivision || null; }
       } catch {}
+      // 2nd attempt: Nominatim fallback if BigDataCloud returned nothing
+      if (!city) {
+        try {
+          const r2 = await fetchWithTimeout(
+            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=10`,
+            { headers: { "Accept-Language": "en" } }
+          );
+          if (r2.ok) {
+            const j2 = await r2.json();
+            city = j2.address?.city || j2.address?.town || j2.address?.village || j2.address?.state || null;
+          }
+        } catch {}
+      }
       crState.location = { lat: Math.round(lat * 100) / 100, lng: Math.round(lng * 100) / 100, city };
-      valueEl.textContent = city || "My location";
+      valueEl.textContent = city || `${lat.toFixed(3)}, ${lng.toFixed(3)}`;
+      toast("📍 Location tagged" + (city ? `: ${city}` : ""));
     }, (err) => {
       const msg = err.code === 1 ? "Location access denied — enable it in your browser/site settings"
-        : err.code === 2 ? "Couldn't determine your location right now"
-        : "Location request timed out";
+        : err.code === 2 ? "Couldn't determine your location — check your connection and try again"
+        : "Location timed out — move to a clearer area and try again";
       toast(msg);
       valueEl.textContent = crState.location?.city || "Not tagged";
-    }, { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 });
+    }, { enableHighAccuracy: false, timeout: 12000, maximumAge: 0 });
   });
 
-  const musicRow = el("div", { class: "cr-details-row" },
-    el("div", { class: "l" }, el("i", { class: "ri-music-2-line" }), "Music"),
-    el("div", { class: "v" }, crState.song ? `${crState.song.name} — ${crState.song.artist}` : "None"),
-  );
-  musicRow.addEventListener("click", () => crGoto("music"));
+  // Music is only available for videos recorded in-app (not uploads or images)
+  const musicRow = crState.isRecordedVideo
+    ? el("div", { class: "cr-details-row" },
+        el("div", { class: "l" }, el("i", { class: "ri-music-2-line" }), "Music"),
+        el("div", { class: "v" }, crState.song ? `${crState.song.name} — ${crState.song.artist}` : "None"),
+      )
+    : null;
+  if (musicRow) musicRow.addEventListener("click", () => crGoto("music"));
 
   return el("div", { class: "cr-step active" },
     el("div", { class: "cr-details" },
@@ -3473,7 +3578,7 @@ async function crSubmitPost(btn) {
       orbits: [], orbitCount: 0, commentCount: 0, createdAt: serverTimestamp(),
     };
     if (crState.location) postData.location = crState.location;
-    if (crState.song) postData.song = crState.song;
+    if (crState.song && crState.isRecordedVideo) postData.song = crState.song; // only recorded videos carry music
     const newPostRef = await addDoc(collection(db, "posts"), postData);
     sfxPost();
     toast("Posted!");
