@@ -246,7 +246,19 @@ const buildVideoPlayer = (url, opts = {}) => {
     }
   }, { passive: true });
 
-  const togglePlay = () => { video.paused ? video.play() : video.pause(); };
+  // _userPaused: set when the user explicitly taps pause, cleared on explicit play.
+  // The IntersectionObserver respects this flag and will never auto-resume a
+  // video that the user intentionally stopped.
+  let _userPaused = false;
+  const togglePlay = () => {
+    if (video.paused || video.ended) {
+      _userPaused = false;
+      video.play().catch(() => {});
+    } else {
+      _userPaused = true;
+      video.pause();
+    }
+  };
   overlay.onclick = togglePlay;
   playSmBtn.onclick = (e) => { e.stopPropagation(); togglePlay(); };
   video.addEventListener("play",  () => {
@@ -278,11 +290,25 @@ const buildVideoPlayer = (url, opts = {}) => {
   fullBtn.onclick = (e) => { e.stopPropagation(); (video.requestFullscreen || video.webkitRequestFullscreen || (() => {})).call(video); };
 
   // ── Play on scroll into view / pause on scroll out ────────────────────────
-  // Uses IntersectionObserver: starts playing when ≥50% visible, pauses when less.
+  // _wasPlaying remembers whether the video was actively playing the last time
+  // it left the viewport.  The IO callback only resumes playback when that flag
+  // is true — this prevents orbit/like button clicks from restarting a video
+  // the user has paused or that had already finished playing (video.play() on
+  // an ended video restarts from 0, which is the root cause of the "replay on
+  // action" bug).  _userPaused is also checked so a deliberate manual pause is
+  // never overridden by a scroll-triggered IO fire.
+  let _wasPlaying = false;
   const _io = new IntersectionObserver((entries) => {
     if (entries[0].isIntersecting) {
-      video.play().catch(() => {});
+      if (_wasPlaying && !_userPaused) {
+        video.play().catch(() => {});
+      } else if (video.currentTime === 0 && !_userPaused) {
+        // Auto-start only on first encounter (video hasn't been touched yet)
+        video.play().catch(() => {});
+      }
     } else {
+      // Record whether it was playing so we can decide on re-entry
+      _wasPlaying = !video.paused && !video.ended;
       video.pause();
     }
   }, { threshold: 0.5 });
@@ -3139,8 +3165,29 @@ function crBuildCamStep() {
     }
     // Request video and audio as separate streams so the preview element
     // only ever receives video tracks (zero chance of audio feedback).
+    //
+    // For flips we use { exact: facing } so the browser is FORCED to return
+    // the other physical camera.  Without "exact", facingMode is treated as a
+    // preference hint and many mobile browsers simply return the already-open
+    // front camera, making the flip button appear to do nothing.
+    // If the device only has one camera, the { exact } request will reject;
+    // we then fall back to a non-exact request so at least the stream stays live.
+    const videoConstraint = isFlip
+      ? { facingMode: { exact: facing } }
+      : { facingMode: facing };
+
+    const getVideoStream = () =>
+      navigator.mediaDevices.getUserMedia({ video: videoConstraint })
+        .catch((err) => {
+          if (isFlip && (err.name === "OverconstrainedError" || err.name === "NotFoundError")) {
+            // Device likely has only one camera — try without exact
+            return navigator.mediaDevices.getUserMedia({ video: { facingMode: facing } });
+          }
+          return Promise.reject(err);
+        });
+
     Promise.all([
-      navigator.mediaDevices.getUserMedia({ video: { facingMode: facing } }),
+      getVideoStream(),
       // Reuse the existing audio stream when just flipping the camera so the
       // user doesn't get a second microphone permission prompt.
       crState.camAudio

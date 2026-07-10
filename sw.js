@@ -6,7 +6,7 @@
 
 // ⚠️  Bump this string every time you deploy — it's what triggers the
 //     "New version available" update banner in the app.
-const CACHE_NAME = "orbit-v11";
+const CACHE_NAME = "orbit-v12";
 
 // Files that make up the app shell — always available offline
 const SHELL_FILES = [
