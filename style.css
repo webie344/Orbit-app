@@ -2855,3 +2855,177 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   min-width: 0;
   max-width: 155px;
 }
+
+/* =================================================================
+   POST CREATION STUDIO — dedicated page for posts (replaces the
+   old "Post" tab in the compose modal). Text/sticker overlays,
+   music picker, camera recorder, carousel builder.
+   ================================================================= */
+
+.cr-root {
+  position: fixed; inset: 0; z-index: 900;
+  background: var(--bg);
+  display: flex; flex-direction: column;
+  animation: crFadeIn .18s ease;
+}
+@keyframes crFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+.cr-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; padding-top: calc(12px + env(safe-area-inset-top));
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.cr-head-title { font-family: var(--font-display); font-weight: 700; font-size: 16px; }
+.cr-head-btn {
+  padding: 8px 16px; border-radius: var(--radius-pill); font-weight: 700; font-size: 14px;
+  color: var(--text-dim);
+}
+.cr-head-btn.primary { background: var(--primary); color: var(--primary-ink); }
+.cr-head-btn:disabled { opacity: .4; pointer-events: none; }
+.cr-head-close { font-size: 22px; color: var(--text-dim); padding: 4px; }
+
+.cr-steps { flex: 1; overflow-y: auto; position: relative; }
+/* min-height (not height) so steps with more content than the viewport
+   (long editor toolbars, details form, etc.) can grow and actually scroll
+   inside .cr-steps instead of being clipped to the viewport's height. */
+.cr-step { display: none; min-height: 100%; flex-direction: column; }
+.cr-step.active { display: flex; }
+
+/* ---------- Step 1: pick media ---------- */
+.cr-pick { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; padding: 24px; text-align: center; }
+.cr-pick-title { font-family: var(--font-display); font-size: 22px; font-weight: 800; }
+.cr-pick-sub { color: var(--text-mute); font-size: 14px; margin-top: -14px; }
+.cr-pick-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; width: min(420px, 100%); }
+.cr-pick-opt {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 24px 12px; border-radius: var(--radius-lg); background: var(--bg-elev);
+  border: 1px solid var(--line); transition: transform .15s var(--ease), border-color .15s;
+}
+.cr-pick-opt:hover { transform: translateY(-2px); border-color: var(--primary); }
+.cr-pick-opt i { font-size: 30px; color: var(--primary); }
+.cr-pick-opt span { font-size: 13px; font-weight: 600; }
+.cr-pick-hint { color: var(--text-mute); font-size: 12px; }
+
+/* ---------- Camera recorder ---------- */
+.cr-cam { position: relative; flex: 1; background: #000; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.cr-cam video { width: 100%; height: 100%; object-fit: cover; }
+.cr-cam-bar { position: absolute; bottom: 0; left: 0; right: 0; padding: 22px 0 calc(22px + env(safe-area-inset-bottom)); display: flex; align-items: center; justify-content: center; gap: 28px; }
+.cr-rec-btn {
+  width: 72px; height: 72px; border-radius: 50%; border: 4px solid #fff;
+  background: transparent; display: flex; align-items: center; justify-content: center;
+}
+.cr-rec-btn::before { content: ""; width: 56px; height: 56px; border-radius: 50%; background: #ff4d5e; transition: all .2s var(--ease); }
+.cr-rec-btn.recording::before { width: 26px; height: 26px; border-radius: 6px; }
+.cr-cam-timer { position: absolute; top: 18px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,.55); color: #fff; font-weight: 700; font-size: 13px; padding: 6px 14px; border-radius: var(--radius-pill); display: none; align-items: center; gap: 6px; }
+.cr-cam-timer.show { display: flex; }
+.cr-cam-timer .dot { width: 8px; height: 8px; border-radius: 50%; background: #ff4d5e; animation: crPulse 1s infinite; }
+@keyframes crPulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+.cr-cam-flip { position: absolute; top: 18px; right: 18px; width: 40px; height: 40px; border-radius: 50%; background: rgba(0,0,0,.45); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+.cr-cam-close { position: absolute; top: 18px; left: 18px; width: 40px; height: 40px; border-radius: 50%; background: rgba(0,0,0,.45); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+
+/* ---------- Step 2: editor ---------- */
+.cr-editor { flex: 1; display: flex; flex-direction: column; }
+.cr-slides-nav { display: flex; gap: 6px; justify-content: center; padding: 10px 0; flex-shrink: 0; }
+.cr-slide-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line); }
+.cr-slide-dot.active { background: var(--primary); width: 18px; border-radius: 4px; }
+
+.cr-stage-wrap { flex: 1; display: flex; align-items: center; justify-content: center; padding: 8px 12px; min-height: 0; }
+.cr-stage {
+  position: relative; max-width: 100%; max-height: 100%;
+  aspect-ratio: 9 / 16; width: min(360px, 100%);
+  background: #000; border-radius: var(--radius); overflow: hidden;
+  box-shadow: var(--shadow-lg);
+  touch-action: none;
+}
+.cr-stage img, .cr-stage video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+.cr-stage-thumbstrip { display: flex; gap: 6px; overflow-x: auto; padding: 8px 12px; flex-shrink: 0; }
+.cr-stage-thumb { width: 52px; height: 52px; border-radius: 10px; object-fit: cover; border: 2px solid transparent; flex-shrink: 0; cursor: pointer; }
+.cr-stage-thumb.active { border-color: var(--primary); }
+.cr-stage-thumb-add { width: 52px; height: 52px; border-radius: 10px; border: 1px dashed var(--line); display: flex; align-items: center; justify-content: center; color: var(--text-mute); flex-shrink: 0; }
+
+.cr-overlay-layer { position: absolute; inset: 0; }
+.cr-layer {
+  position: absolute; left: 0; top: 0; cursor: grab;
+  user-select: none; -webkit-user-select: none;
+  white-space: nowrap; touch-action: none;
+}
+.cr-layer.text {
+  font-family: var(--font-display); font-weight: 800; font-size: 26px;
+  color: #fff; text-shadow: 0 2px 10px rgba(0,0,0,.5); padding: 4px 8px;
+}
+.cr-layer.sticker { font-size: 44px; line-height: 1; filter: drop-shadow(0 2px 8px rgba(0,0,0,.4)); }
+.cr-layer.selected { outline: 2px dashed rgba(255,255,255,.85); border-radius: 6px; }
+.cr-layer-del {
+  position: absolute; top: -14px; right: -14px; width: 26px; height: 26px; border-radius: 50%;
+  background: var(--danger); color: #fff; display: none; align-items: center; justify-content: center; font-size: 14px;
+}
+.cr-layer.selected .cr-layer-del { display: flex; }
+
+.cr-editor-toolbar { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--line); flex-shrink: 0; flex-wrap: wrap; }
+.cr-tool-btn { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 14px; border-radius: 14px; font-size: 11px; font-weight: 600; color: var(--text-dim); }
+.cr-tool-btn i { font-size: 20px; }
+.cr-tool-btn:hover { background: var(--hover); color: var(--text); }
+
+.cr-layer-controls { display: none; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--line); flex-shrink: 0; }
+.cr-layer-controls.show { display: flex; }
+.cr-layer-controls label { display: flex; flex-direction: column; gap: 4px; flex: 1; font-size: 11px; color: var(--text-mute); }
+.cr-layer-controls input[type="range"] { width: 100%; }
+.cr-layer-controls input[type="color"] { width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--line); background: none; padding: 0; }
+
+.cr-sticker-panel, .cr-color-panel { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); }
+.cr-sticker-opt { font-size: 26px; width: 42px; height: 42px; border-radius: 10px; display: flex; align-items: center; justify-content: center; background: var(--bg-elev); }
+.cr-color-opt { width: 28px; height: 28px; border-radius: 50%; border: 2px solid transparent; }
+.cr-color-opt.active { border-color: var(--text); }
+
+/* ---------- Step 3: music ---------- */
+.cr-music { flex: 1; display: flex; flex-direction: column; padding: 16px; gap: 12px; overflow-y: auto; }
+.cr-music-search { display: flex; align-items: center; gap: 8px; background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--radius-pill); padding: 10px 14px; }
+.cr-music-search input { flex: 1; background: none; border: 0; color: var(--text); font-size: 14px; }
+.cr-music-search i { color: var(--text-mute); }
+.cr-music-none { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: var(--radius); background: var(--bg-elev); border: 1px solid var(--line); font-weight: 600; }
+.cr-track { display: flex; align-items: center; gap: 12px; padding: 10px; border-radius: var(--radius); }
+.cr-track:hover { background: var(--hover); }
+.cr-track.active { background: rgba(139,108,255,.12); }
+.cr-track-art { width: 44px; height: 44px; border-radius: 10px; background: var(--bg-elev-2); display: flex; align-items: center; justify-content: center; color: var(--primary); flex-shrink: 0; }
+.cr-track-info { flex: 1; min-width: 0; }
+.cr-track-info .n { font-weight: 700; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cr-track-info .a { font-size: 12px; color: var(--text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cr-track-play { width: 34px; height: 34px; border-radius: 50%; background: var(--bg-elev-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.cr-track-pick { padding: 6px 14px; border-radius: var(--radius-pill); font-size: 12px; font-weight: 700; color: var(--primary); border: 1px solid var(--primary); flex-shrink: 0; }
+.cr-track.active .cr-track-pick { background: var(--primary); color: var(--primary-ink); }
+.cr-music-empty { text-align: center; color: var(--text-mute); padding: 30px 0; font-size: 13px; }
+
+/* ---------- Step 4: details ---------- */
+.cr-details { flex: 1; display: flex; flex-direction: column; gap: 16px; padding: 16px; overflow-y: auto; }
+.cr-details-preview { display: flex; gap: 12px; align-items: flex-start; }
+.cr-details-thumb { width: 84px; height: 84px; border-radius: var(--radius); object-fit: cover; background: #000; flex-shrink: 0; }
+.cr-details textarea {
+  width: 100%; min-height: 90px; resize: vertical; background: var(--bg-elev); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 12px; color: var(--text); font-size: 14px; font-family: inherit;
+}
+.cr-details-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--radius); }
+.cr-details-row .l { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 13.5px; }
+.cr-details-row .l i { color: var(--primary); font-size: 18px; }
+.cr-details-row .v { color: var(--text-mute); font-size: 12.5px; }
+
+/* ---------- Feed: song attribution + mute toggle ---------- */
+.post-song-bar {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12.5px;
+  color: var(--text-dim); background: var(--bg-elev-2); border-radius: var(--radius-pill);
+  position: absolute; left: 10px; bottom: 54px; z-index: 5; max-width: 70%;
+  overflow: hidden; white-space: nowrap;
+}
+.post-song-bar i { color: var(--primary); flex-shrink: 0; }
+.post-song-bar span { overflow: hidden; text-overflow: ellipsis; }
+.post-song-bar .marquee { display: inline-block; animation: crMarquee 8s linear infinite; }
+@keyframes crMarquee { 0%,15% { transform: translateX(0); } 85%,100% { transform: translateX(calc(-100% + 40px)); } }
+.post-sound-toggle {
+  position: absolute; right: 10px; bottom: 12px; z-index: 6;
+  width: 34px; height: 34px; border-radius: 50%; background: rgba(0,0,0,.5); color: #fff;
+  display: flex; align-items: center; justify-content: center; font-size: 16px;
+}
+
+@media (max-width: 480px) {
+  .cr-stage { width: 100%; border-radius: 0; aspect-ratio: 9/16; }
+}

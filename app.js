@@ -125,7 +125,72 @@ const _cloudPoster = (url) => {
   try { return url.replace(/\.mp4(\?.*)?$/, ".jpg").replace(/\.webm(\?.*)?$/, ".jpg").replace(/\.mov(\?.*)?$/, ".jpg"); }
   catch { return ""; }
 };
-const buildVideoPlayer = (url) => {
+// Renders the text/sticker overlay layer created in the create-post studio
+// on top of a video (images have overlays already baked in at post time).
+function _renderFeedOverlays(wrap, overlays) {
+  if (!overlays || !overlays.length) return;
+  const layer = el("div", { class: "cr-overlay-layer", style: "pointer-events:none;" });
+  const paint = () => {
+    layer.innerHTML = "";
+    const w = wrap.clientWidth || 320;
+    overlays.forEach((ov) => {
+      const fontPx = w * ((ov.sizePct * ov.scale) / 100);
+      const style = `left:${ov.x}%;top:${ov.y}%;transform:translate(-50%,-50%) rotate(${ov.rotation}deg);font-size:${fontPx}px;` +
+        (ov.type === "text" ? `color:${ov.color};` : "");
+      layer.appendChild(el("div", { class: `cr-layer ${ov.type}`, style }, ov.type === "text" ? ov.text : ov.icon));
+    });
+  };
+  paint();
+  window.addEventListener("resize", paint);
+  // Feed posts are torn down via innerHTML replacement, not removal events,
+  // so detect detachment lazily and drop the global listener once the layer
+  // is no longer in the document (checked opportunistically on next resize).
+  const _cleanupOnDetach = () => {
+    if (!document.body.contains(layer)) window.removeEventListener("resize", _cleanupOnDetach);
+    else paint();
+  };
+  window.removeEventListener("resize", paint);
+  window.addEventListener("resize", _cleanupOnDetach);
+  wrap.appendChild(layer);
+}
+
+// Attaches an attached song to a post: plays/pauses in sync with visibility
+// (image/carousel posts) or with the video's own play state (video posts),
+// starting muted like Facebook/TikTok — tap the speaker to hear it.
+function _wireSongPlayback(wrap, song, videoEl) {
+  if (!song?.url) return;
+  const audio = new Audio(song.url);
+  audio.loop = true; audio.muted = true; audio.preload = "none";
+  _activeSongAudios.add(audio);
+  const soundBtn = el("button", { class: "post-sound-toggle" }, el("i", { class: "ri-volume-mute-line" }));
+  const songBar = el("div", { class: "post-song-bar" }, el("i", { class: "ri-music-2-fill" }),
+    el("span", {}, el("span", { class: "marquee" }, `${song.name} — ${song.artist}`)));
+  wrap.appendChild(songBar);
+  wrap.appendChild(soundBtn);
+  soundBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    audio.muted = !audio.muted;
+    if (videoEl) videoEl.muted = true; // song replaces the clip's own audio
+    soundBtn.querySelector("i").className = audio.muted ? "ri-volume-mute-line" : "ri-volume-up-line";
+    if (!audio.muted) audio.play().catch(() => {});
+  });
+  if (videoEl) {
+    videoEl.muted = true; // song is the only audio source for posts with music
+    videoEl.addEventListener("play", () => { audio.currentTime = videoEl.currentTime % (audio.duration || 1e9); audio.play().catch(() => {}); });
+    videoEl.addEventListener("pause", () => audio.pause());
+    videoEl.addEventListener("seeked", () => { audio.currentTime = videoEl.currentTime % (audio.duration || 1e9); });
+    videoEl.addEventListener("emptied", () => { audio.pause(); _activeSongAudios.delete(audio); }, { once: true });
+  } else {
+    const io = new IntersectionObserver((entries) => {
+      if (!document.body.contains(wrap)) { audio.pause(); _activeSongAudios.delete(audio); io.disconnect(); return; }
+      if (entries[0].isIntersecting) audio.play().catch(() => {}); else audio.pause();
+    }, { threshold: 0.6 });
+    io.observe(wrap);
+  }
+}
+
+const buildVideoPlayer = (url, opts = {}) => {
+  const { song, overlays } = opts;
   const poster = _cloudPoster(url);
   // muted enables browser auto-play-on-scroll; user can unmute via the button
   const video = el("video", { src: url, poster, preload: "metadata", playsinline: "", muted: "", style: "width:100%;display:block;" });
@@ -217,6 +282,9 @@ const buildVideoPlayer = (url) => {
   _io.observe(wrap);
   // Clean up observer if the player is ever removed from DOM
   video.addEventListener("emptied", () => _io.disconnect(), { once: true });
+
+  if (overlays) _renderFeedOverlays(wrap, overlays);
+  if (song) _wireSongPlayback(wrap, song, video);
 
   return wrap;
 };
@@ -908,7 +976,27 @@ let _feedScrollY = 0;
 let _feedCachedNode = null; // detached feed DOM preserved during post visit
 let _feedUnsub = null;      // kept alive so the cached node stays fresh
 
+// Attached-song <audio> elements are created detached from the DOM (so
+// querySelectorAll("audio") can't find them) — track them here so they can
+// still be paused on navigation.
+const _activeSongAudios = new Set();
+
+// Stops every playing <video>/<audio> in the app — called on every route
+// change so a clip or attached song doesn't keep playing in the background
+// after the user navigates away from the post that started it.
+function _pauseAllMedia(exceptEl = null) {
+  document.querySelectorAll("video, audio").forEach((m) => {
+    if (m === exceptEl) return;
+    try { m.pause(); } catch {}
+  });
+  _activeSongAudios.forEach((a) => {
+    if (a === exceptEl) return;
+    try { a.pause(); } catch {}
+  });
+}
+
 const router = () => {
+  _pauseAllMedia();
   const hash = (location.hash || "#feed").replace(/^#/, "");
   const [route, ...rest] = hash.split("/");
   const target = routes.includes(route) ? route : "feed";
@@ -1154,7 +1242,7 @@ const renderFeed = (root) => {
 
   const stub = el("div", { class: "composer-stub" },
     el("img", { class: "avatar sm", src: avatarFor(state.me), style: "cursor:pointer;", onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${state.uid}`; } }),
-    el("button", { onclick: () => openCompose("post") }, `What's orbiting your mind, ${(state.me?.name || "there").split(" ")[0]}?`)
+    el("button", { onclick: () => openCreatePost() }, `What's orbiting your mind, ${(state.me?.name || "there").split(" ")[0]}?`)
   );
   wrap.appendChild(stub);
 
@@ -1330,16 +1418,22 @@ const _makeGridCell = (m, spanRows = false, _allItems = [], _idx = 0, _postId = 
 };
 
 const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
-  const { detailView = false } = opts;
+  const { detailView = false, song = null } = opts;
   const items = Array.isArray(mediaRaw) ? mediaRaw : (mediaRaw ? [mediaRaw] : []);
   if (!items.length) return null;
+  // A song attaches at the post level; if the media itself isn't a single
+  // video (which syncs playback directly), sync the song to the whole
+  // media block scrolling into view instead.
+  const _wireStandaloneSong = (node) => { if (song) _wireSongPlayback(node, song, null); return node; };
 
   // ── Detail view: all items stacked vertically (Facebook-style) ──
   if (detailView && items.length > 1) {
-    const stack = el("div", { class: "post-media-stack", style: "display:flex;flex-direction:column;gap:4px;" });
+    const stack = el("div", { class: "post-media-stack", style: "display:flex;flex-direction:column;gap:4px;position:relative;" });
+    let sawVideo = false;
     items.forEach((m) => {
       if (m.type === "video") {
-        const player = buildVideoPlayer(m.url);
+        sawVideo = true;
+        const player = buildVideoPlayer(m.url, { song, overlays: m.overlays });
         player.style.borderRadius = "0";
         stack.appendChild(player);
       } else {
@@ -1351,6 +1445,7 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
         stack.appendChild(img);
       }
     });
+    if (song && !sawVideo) _wireStandaloneSong(stack);
     return stack;
   }
 
@@ -1359,7 +1454,7 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
     const m = items[0];
     if (m.type === "video") {
       // Full-width, no side border-radius so it stretches edge-to-edge
-      const player = buildVideoPlayer(m.url);
+      const player = buildVideoPlayer(m.url, { song, overlays: m.overlays });
       player.style.borderRadius = "0";
       const wrap = el("div", { class: "post-media", style: "border-radius:0;overflow:hidden;" });
       wrap.appendChild(player);
@@ -1367,16 +1462,19 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
     }
     const singleImg = el("img", { src: m.url, loading: "lazy", style: detailView ? "cursor:zoom-in;" : "" });
     if (detailView) singleImg.addEventListener("click", () => openImageZoom(m.url));
-    return el("div", { class: "post-media" }, singleImg);
+    const wrap = el("div", { class: "post-media", style: "position:relative;" }, singleImg);
+    if (song) _wireStandaloneSong(wrap);
+    return wrap;
   }
 
   // ── 2 items: side-by-side ──────────────────────────────────────
   if (items.length === 2) {
     const grid = el("div", {
       class: "post-media",
-      style: "display:grid;grid-template-columns:1fr 1fr;gap:2px;border-radius:12px;overflow:hidden;height:280px;",
+      style: "display:grid;grid-template-columns:1fr 1fr;gap:2px;border-radius:12px;overflow:hidden;height:280px;position:relative;",
     });
     items.forEach((m, i) => grid.appendChild(_makeGridCell(m, false, items, i, postId)));
+    if (song) _wireStandaloneSong(grid);
     return grid;
   }
 
@@ -1384,9 +1482,10 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
   if (items.length === 3) {
     const grid = el("div", {
       class: "post-media",
-      style: "display:grid;grid-template-columns:2fr 1fr;grid-template-rows:140px 140px;gap:2px;border-radius:12px;overflow:hidden;",
+      style: "display:grid;grid-template-columns:2fr 1fr;grid-template-rows:140px 140px;gap:2px;border-radius:12px;overflow:hidden;position:relative;",
     });
     items.forEach((m, i) => grid.appendChild(_makeGridCell(m, i === 0, items, i, postId)));
+    if (song) _wireStandaloneSong(grid);
     return grid;
   }
 
@@ -1395,7 +1494,7 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
   const slides = items.map((m, i) => {
     const slide = el("div", { class: "carousel-slide", style: i === 0 ? "" : "display:none;" });
     if (m.type === "video") {
-      const player = buildVideoPlayer(m.url);
+      const player = buildVideoPlayer(m.url, { overlays: m.overlays });
       // Clicking anywhere on the player navigates to the post detail
       if (postId) {
         const overlay = player.querySelector(".vp-overlay");
@@ -1422,7 +1521,8 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
     cur = (n + items.length) % items.length;
     slides[cur].style.display = ""; dots[cur].classList.add("active");
   };
-  const wrap = el("div", { class: "post-media carousel" }, ...slides, dotsWrap);
+  const wrap = el("div", { class: "post-media carousel", style: "position:relative;" }, ...slides, dotsWrap);
+  if (song) _wireStandaloneSong(wrap);
 
   // Touch swipe support
   let _swipeStartX = 0;
@@ -1565,7 +1665,7 @@ const renderPost = (p, author, opts = {}) => {
   }
 
   // Media (single, grid, or carousel)
-  const carousel = renderMediaCarousel(p.media, p.id, { detailView: _detailView });
+  const carousel = renderMediaCarousel(p.media, p.id, { detailView: _detailView, song: p.song });
   if (carousel) post.appendChild(carousel);
 
   // Feature: extra detail block for build/project posts (stage, progress, tags, links)
@@ -2741,7 +2841,7 @@ const requestLocationVerification = () => {
 // 14. COMPOSE MODAL — posts, groups, build, project
 // =========================================================================
 const composeModal = $("#composeModal");
-const openCompose = (which = "post") => {
+const openCompose = (which = "group") => {
   if ((which === "build" || which === "project") && !state.me?.isPro) {
     import("./features.js").then((m) => m.showGoProModal()).catch(() => {});
     return;
@@ -2750,8 +2850,10 @@ const openCompose = (which = "post") => {
   $$(".ct").forEach((b) => b.classList.toggle("active", b.dataset.ctab === which));
   $$(".compose-pane").forEach((p) => p.classList.toggle("hidden", !p.id.startsWith(which)));
 };
-$("#composeBtn")?.addEventListener("click", () => openCompose("post"));
-$("#composeBtnMobile")?.addEventListener("click", () => openCompose("post"));
+// "Post" now opens the dedicated full-page creation studio (see section 14c)
+// instead of the group/build/project modal above.
+$("#composeBtn")?.addEventListener("click", () => openCreatePost());
+$("#composeBtnMobile")?.addEventListener("click", () => openCreatePost());
 $$(".ct").forEach((b) => b.addEventListener("click", () => openCompose(b.dataset.ctab)));
 
 document.addEventListener("click", (e) => {
@@ -2763,125 +2865,8 @@ document.addEventListener("click", (e) => {
   }
 });
 
-// =========================================================================
-// Post media — up to 3 files (images and/or videos)
-// =========================================================================
-let postFiles = [];
-const MAX_POST_FILES = 3;
-
-const refreshPostPreviews = () => {
-  const prev = $("#postPreview");
-  if (!prev) return;
-  prev.innerHTML = "";
-  postFiles.forEach((file, i) => {
-    const url = URL.createObjectURL(file);
-    const isVid = file.type.startsWith("video/");
-    const wrap = el("div", { class: "post-preview-thumb" },
-      isVid
-        ? el("video", { src: url, muted: "", playsinline: "", style: "width:100%;height:100%;object-fit:cover;" })
-        : el("img", { src: url }),
-      el("button", { class: "thumb-remove", onclick: () => {
-        postFiles.splice(i, 1);
-        refreshPostPreviews();
-      }}, el("i", { class: "ri-close-circle-fill" })),
-    );
-    prev.appendChild(wrap);
-  });
-  const countEl = $("#postFileCount");
-  if (countEl) countEl.textContent = postFiles.length ? `${postFiles.length}/${MAX_POST_FILES} file${postFiles.length > 1 ? "s" : ""}` : "";
-};
-
-let _postLocation = null;
-document.getElementById("postLocationBtn")?.addEventListener("click", () => {
-  if (!("geolocation" in navigator)) { toast("Location not available"); return; }
-  const btn = document.getElementById("postLocationBtn");
-  btn.innerHTML = '<i class="ri-loader-4-line" style="animation:spin 1s linear infinite;"></i>';
-  navigator.geolocation.getCurrentPosition(async (pos) => {
-    const { latitude: lat, longitude: lng } = pos.coords; let city = null;
-    try { const r = await fetch("https://nominatim.openstreetmap.org/reverse?format=json&lat=" + lat + "&lon=" + lng + "&zoom=10"); const j = await r.json(); city = j.address?.city || j.address?.town || j.address?.state || (j.display_name || "").split(",")[0] || null; } catch {}
-    _postLocation = { lat: Math.round(lat * 100) / 100, lng: Math.round(lng * 100) / 100, city };
-    const tag = document.getElementById("postLocationTag"); if (tag) { tag.textContent = city || "My location"; tag.style.display = ""; }
-    btn.innerHTML = '<i class="ri-map-pin-fill" style="color:var(--primary);"></i>';
-    toast("Tagged: " + (city || "your location"));
-  }, () => { toast("Location access denied"); btn.innerHTML = '<i class="ri-map-pin-line"></i>'; }, { timeout: 8000 });
-});
-
-$("#postPickMedia").addEventListener("click", () => {
-  if (postFiles.length >= MAX_POST_FILES) { toast(`Max ${MAX_POST_FILES} files per post`); return; }
-  $("#postMedia").click();
-});
-$("#postMedia").addEventListener("change", (e) => {
-  const files = Array.from(e.target.files || []);
-  for (const file of files) {
-    if (postFiles.length >= MAX_POST_FILES) break;
-    postFiles.push(file);
-  }
-  e.target.value = "";
-  refreshPostPreviews();
-});
-
-$("#postForm").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const textEl = e.target.querySelector("textarea[name='text']");
-  const text = (textEl?.value || "").trim();
-  if (!text && !postFiles.length) { toast("Write something or pick a file first"); return; }
-  const btn = e.target.querySelector("button[type='submit']");
-  btn.disabled = true; btn.textContent = "Posting…";
-  try {
-    let media = null;
-    if (postFiles.length === 1) {
-      toast("Uploading…");
-      media = await uploadToCloudinary(postFiles[0], postFiles[0].type.startsWith("video/") ? "video" : "image");
-    } else if (postFiles.length > 1) {
-      toast("Uploading files…");
-      media = await Promise.all(postFiles.map((f) =>
-        uploadToCloudinary(f, f.type.startsWith("video/") ? "video" : "image")));
-    }
-    const hashtags = extractHashtags(text);
-    const _pd = { authorUid: state.uid, text, media, hashtags, orbits: [], orbitCount: 0, commentCount: 0, createdAt: serverTimestamp() };
-    if (_postLocation) { _pd.location = _postLocation; _postLocation = null; }
-    const _newPostRef = await addDoc(collection(db, "posts"), _pd);
-    sfxPost();
-    e.target.reset(); postFiles = []; refreshPostPreviews();
-    const _lt = document.getElementById("postLocationTag"); if (_lt) { _lt.style.display = "none"; _lt.textContent = ""; }
-    const _lb = document.getElementById("postLocationBtn"); if (_lb) _lb.innerHTML = '<i class="ri-map-pin-line"></i>';
-    composeModal.classList.add("hidden"); toast("Posted!");
-    // Confirm to the poster that their post is live (bell notification, not just a toast)
-    addDoc(collection(db, "notifications", state.uid, "items"), {
-      type: "postConfirm",
-      postId: _newPostRef.id,
-      text: "Your post is live!",
-      read: false,
-      createdAt: serverTimestamp(),
-    }).catch(() => {});
-    // Notify followers — in-app bell + push notification.
-    // Re-fetch the user's own doc instead of relying on cached state.me.followers,
-    // in case someone followed us during this session and the local cache is stale.
-    (async () => {
-      let _followers = (state.me?.followers || []);
-      try {
-        const _freshSnap = await getDoc(doc(db, "users", state.uid));
-        if (_freshSnap.exists()) _followers = _freshSnap.data().followers || _followers;
-      } catch {}
-      _followers = _followers.slice(0, 200);
-      if (!_followers.length) return;
-      const _preview = (text || "shared new media").slice(0, 60);
-      const _postThumb = Array.isArray(media) ? media[0]?.url : media?.url;
-      const { notifyUser } = await import("./notifications.js");
-      _followers.forEach((uid) => {
-        writeNotif(uid, "newPost", {
-          postId: _newPostRef.id,
-          text: `${state.me?.name || "Someone"} posted: "${_preview}"`,
-        }).catch(() => {});
-        notifyUser(uid, state.me?.name || "Someone", `New post: ${_preview}`, "/#post/" + _newPostRef.id, state.me?.photoURL || "", _postThumb || "").catch(() => {});
-      });
-    })().catch(() => {});
-  } catch (err) {
-    toast("Failed to post: " + (err.message || "unknown error"));
-  } finally {
-    btn.disabled = false; btn.textContent = "Post";
-  }
-});
+// Plain image/video posts are now created via the dedicated full-page
+// studio (openCreatePost, section 14c below) instead of a modal form.
 
 $("#groupForm").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -2914,6 +2899,609 @@ $("#groupForm").addEventListener("submit", async (e) => {
     btn.disabled = false; btn.textContent = "Create group";
   }
 });
+
+// =========================================================================
+// 14c. CREATE-POST STUDIO — dedicated full-page flow for image/video posts:
+// pick or record media, add text/sticker overlays, attach a song, write a
+// caption, then publish. Replaces the old "Post" tab in the compose modal.
+// =========================================================================
+
+// Music search uses the Internet Archive's public catalog — no API key,
+// signup, or billing required (see crSearchMusic below).
+const CR_STICKERS = ["🔥","❤️","⭐","👍","🎉","😂","💯","✨","🙌","😍","👏","🥳","😎","💜","🎶","⚡"];
+const CR_TEXT_COLORS = ["#ffffff","#000000","#ff5c7a","#ffb04a","#3fdca0","#5cd3ff","#8b6cff","#ff5cae"];
+
+let crState = null;
+const _crFreshState = () => ({
+  step: "pick",           // pick | cam | editor | music | details
+  slides: [],             // [{ type:'image'|'video', file, url, overlays:[] }]
+  song: null,             // { id, name, artist, url, duration }
+  caption: "",
+  location: null,
+  activeSlide: 0,
+  selectedLayerId: null,
+  camStream: null,
+  camRecorder: null,
+  camChunks: [],
+  camTimer: null,
+});
+
+const crLayerId = () => "l" + Math.random().toString(36).slice(2, 9);
+
+function openCreatePost() {
+  if (crState) return; // already open
+  _pauseAllMedia(); // don't let a background post's video/song keep playing under the studio
+  crState = _crFreshState();
+  const root = el("div", { class: "cr-root", id: "crRoot" });
+  document.body.appendChild(root);
+  crRenderShell(root);
+  crGoto("pick");
+}
+
+function crClose() {
+  if (!crState) return;
+  crStopCamera();
+  crStopPreview();
+  // Editor previews (looping muted video slides) don't route through the
+  // feed's media registry, so stop them explicitly on close.
+  $("#crRoot")?.querySelectorAll("video, audio").forEach((m) => { try { m.pause(); } catch {} });
+  crState.slides.forEach((s) => { try { URL.revokeObjectURL(s.url); } catch {} });
+  crState = null;
+  $("#crRoot")?.remove();
+}
+
+let _crShellRefs = null;
+function crRenderShell(root) {
+  const closeBtn = el("button", { class: "cr-head-close", onclick: () => crClose() }, el("i", { class: "ri-close-line" }));
+  const backBtn = el("button", { class: "cr-head-close", style: "display:none;", onclick: () => crBack() }, el("i", { class: "ri-arrow-left-line" }));
+  const title = el("div", { class: "cr-head-title", text: "New post" });
+  const nextBtn = el("button", { class: "cr-head-btn primary", style: "display:none;" }, "Next");
+  const head = el("div", { class: "cr-head" }, el("div", { style: "display:flex;align-items:center;gap:8px;" }, backBtn, closeBtn), title, nextBtn);
+  const stepsWrap = el("div", { class: "cr-steps" });
+  root.appendChild(head);
+  root.appendChild(stepsWrap);
+  _crShellRefs = { head, backBtn, closeBtn, title, nextBtn, stepsWrap };
+}
+
+function crBack() {
+  const order = ["pick", "editor", "music", "details"];
+  if (crState.step === "cam") { crStopCamera(); crGoto("pick"); return; }
+  const idx = order.indexOf(crState.step);
+  if (idx <= 0) { crClose(); return; }
+  crGoto(order[idx - 1]);
+}
+
+function crGoto(step) {
+  crState.step = step;
+  const { stepsWrap, backBtn, nextBtn, title } = _crShellRefs;
+  stepsWrap.innerHTML = "";
+  backBtn.style.display = step === "pick" ? "none" : "";
+  nextBtn.style.display = "none";
+  if (step === "pick") { title.textContent = "New post"; stepsWrap.appendChild(crBuildPickStep()); }
+  else if (step === "cam") { title.textContent = "Record video"; stepsWrap.appendChild(crBuildCamStep()); }
+  else if (step === "editor") {
+    title.textContent = "Edit";
+    stepsWrap.appendChild(crBuildEditorStep());
+    nextBtn.style.display = ""; nextBtn.textContent = "Next"; nextBtn.onclick = () => crGoto("music");
+  } else if (step === "music") {
+    title.textContent = "Add music";
+    stepsWrap.appendChild(crBuildMusicStep());
+    nextBtn.style.display = ""; nextBtn.textContent = "Next"; nextBtn.onclick = () => crGoto("details");
+  } else if (step === "details") {
+    title.textContent = "Share";
+    stepsWrap.appendChild(crBuildDetailsStep());
+    nextBtn.style.display = ""; nextBtn.textContent = "Post"; nextBtn.onclick = () => crSubmitPost(nextBtn);
+  }
+}
+
+// ---------------- Step 1: pick media ----------------
+function crBuildPickStep() {
+  const fileInput = el("input", { type: "file", accept: "image/*,video/*", multiple: true, hidden: true });
+  fileInput.addEventListener("change", (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    const hasVideo = files.some((f) => f.type.startsWith("video/"));
+    if (hasVideo) {
+      const f = files.find((f) => f.type.startsWith("video/"));
+      crState.slides = [{ type: "video", file: f, url: URL.createObjectURL(f), overlays: [] }];
+    } else {
+      crState.slides = files.slice(0, 10).map((f) => ({ type: "image", file: f, url: URL.createObjectURL(f), overlays: [] }));
+    }
+    crState.activeSlide = 0;
+    crGoto("editor");
+  });
+  const step = el("div", { class: "cr-step active" },
+    el("div", { class: "cr-pick" },
+      el("div", { class: "cr-pick-title" }, "Create a post"),
+      el("div", { class: "cr-pick-sub" }, "Photos, a video, or a carousel — add text, stickers and a song next."),
+      el("div", { class: "cr-pick-grid" },
+        el("button", { class: "cr-pick-opt", onclick: () => fileInput.click() },
+          el("i", { class: "ri-image-add-line" }), el("span", {}, "Photos / video")),
+        el("button", { class: "cr-pick-opt", onclick: () => crGoto("cam") },
+          el("i", { class: "ri-camera-line" }), el("span", {}, "Record video")),
+      ),
+      el("div", { class: "cr-pick-hint" }, "Pick multiple photos to make a swipeable carousel."),
+      fileInput,
+    ),
+  );
+  return step;
+}
+
+// ---------------- Camera recording ----------------
+function crStopCamera() {
+  if (crState?.camTimer) { clearInterval(crState.camTimer); crState.camTimer = null; }
+  if (crState?.camRecorder && crState.camRecorder.state !== "inactive") { try { crState.camRecorder.stop(); } catch {} }
+  if (crState?.camStream) { crState.camStream.getTracks().forEach((t) => t.stop()); crState.camStream = null; }
+}
+
+function crBuildCamStep() {
+  const video = el("video", { autoplay: true, muted: true, playsinline: true });
+  const timer = el("div", { class: "cr-cam-timer" }, el("span", { class: "dot" }), el("span", { class: "t" }, "0:00"));
+  const recBtn = el("button", { class: "cr-rec-btn" });
+  const cam = el("div", { class: "cr-cam" },
+    video, timer,
+    el("button", { class: "cr-cam-close", onclick: () => { crStopCamera(); crGoto("pick"); } }, el("i", { class: "ri-close-line" })),
+    el("div", { class: "cr-cam-bar" }, recBtn),
+  );
+  const step = el("div", { class: "cr-step active" }, cam);
+
+  navigator.mediaDevices?.getUserMedia({ video: { facingMode: "user" }, audio: true }).then((stream) => {
+    crState.camStream = stream;
+    video.srcObject = stream;
+  }).catch(() => { toast("Camera access denied or unavailable"); crGoto("pick"); });
+
+  let seconds = 0;
+  recBtn.addEventListener("click", () => {
+    if (!crState.camStream) return;
+    if (!crState.camRecorder || crState.camRecorder.state === "inactive") {
+      crState.camChunks = [];
+      const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus") ? "video/webm;codecs=vp9,opus" : "video/webm";
+      const rec = new MediaRecorder(crState.camStream, { mimeType: mime });
+      rec.ondataavailable = (ev) => { if (ev.data.size) crState.camChunks.push(ev.data); };
+      rec.onstop = () => {
+        const blob = new Blob(crState.camChunks, { type: "video/webm" });
+        const file = new File([blob], `orbit-recording-${Date.now()}.webm`, { type: "video/webm" });
+        crState.slides = [{ type: "video", file, url: URL.createObjectURL(file), overlays: [] }];
+        crState.activeSlide = 0;
+        crStopCamera();
+        crGoto("editor");
+      };
+      rec.start();
+      crState.camRecorder = rec;
+      recBtn.classList.add("recording");
+      seconds = 0; timer.classList.add("show");
+      crState.camTimer = setInterval(() => {
+        seconds++;
+        timer.querySelector(".t").textContent = `0:${String(seconds).padStart(2, "0")}`;
+        if (seconds >= 60) recBtn.click(); // 60s cap
+      }, 1000);
+    } else {
+      recBtn.classList.remove("recording");
+      timer.classList.remove("show");
+      if (crState.camTimer) { clearInterval(crState.camTimer); crState.camTimer = null; }
+      crState.camRecorder.stop();
+    }
+  });
+  return step;
+}
+
+// ---------------- Step 2: overlay editor ----------------
+function crFontPx(ov, stageWidth) { return stageWidth * ((ov.sizePct * ov.scale) / 100); }
+
+function crBuildEditorStep() {
+  const stage = el("div", { class: "cr-stage" });
+  const overlayLayer = el("div", { class: "cr-overlay-layer" });
+  const dotsNav = el("div", { class: "cr-slides-nav" });
+  const thumbstrip = el("div", { class: "cr-stage-thumbstrip" });
+  const layerControls = el("div", { class: "cr-layer-controls" });
+  const stickerPanel = el("div", { class: "cr-sticker-panel", style: "display:none;" });
+
+  const step = el("div", { class: "cr-step active" },
+    el("div", { class: "cr-editor" },
+      crState.slides.length > 1 ? dotsNav : null,
+      el("div", { class: "cr-stage-wrap" }, stage),
+      crState.slides.length > 1 || crState.slides[0]?.type === "image" ? thumbstrip : null,
+      stickerPanel,
+      layerControls,
+      el("div", { class: "cr-editor-toolbar" },
+        el("button", { class: "cr-tool-btn", onclick: () => crAddTextLayer(stage, overlayLayer) }, el("i", { class: "ri-text" }), "Text"),
+        el("button", { class: "cr-tool-btn", onclick: () => { stickerPanel.style.display = stickerPanel.style.display === "none" ? "flex" : "none"; } }, el("i", { class: "ri-emotion-happy-line" }), "Sticker"),
+        crState.slides[0]?.type === "image" ? el("button", { class: "cr-tool-btn", onclick: () => crAddMoreImages() }, el("i", { class: "ri-add-circle-line" }), "Add photo") : null,
+      ),
+    ),
+  );
+
+  CR_STICKERS.forEach((emo) => {
+    stickerPanel.appendChild(el("button", { class: "cr-sticker-opt", onclick: () => { crAddStickerLayer(stage, overlayLayer, emo); stickerPanel.style.display = "none"; } }, emo));
+  });
+
+  function paintDots() {
+    dotsNav.innerHTML = "";
+    crState.slides.forEach((_, i) => dotsNav.appendChild(el("div", { class: "cr-slide-dot" + (i === crState.activeSlide ? " active" : "") })));
+  }
+  function paintThumbs() {
+    thumbstrip.innerHTML = "";
+    crState.slides.forEach((s, i) => {
+      const t = s.type === "video"
+        ? el("video", { src: s.url, class: "cr-stage-thumb" + (i === crState.activeSlide ? " active" : ""), muted: true })
+        : el("img", { src: s.url, class: "cr-stage-thumb" + (i === crState.activeSlide ? " active" : "") });
+      t.addEventListener("click", () => { crState.activeSlide = i; crState.selectedLayerId = null; paintStage(); });
+      thumbstrip.appendChild(t);
+    });
+    if (crState.slides[0]?.type === "image" && crState.slides.length < 10) {
+      thumbstrip.appendChild(el("div", { class: "cr-stage-thumb-add", onclick: () => crAddMoreImages() }, el("i", { class: "ri-add-line" })));
+    }
+  }
+  function paintLayerControls() {
+    const slide = crState.slides[crState.activeSlide];
+    const ov = slide.overlays.find((o) => o.id === crState.selectedLayerId);
+    layerControls.innerHTML = "";
+    if (!ov) { layerControls.classList.remove("show"); return; }
+    layerControls.classList.add("show");
+    const sizeInput = el("input", { type: "range", min: "40", max: "260", value: String(Math.round(ov.scale * 100)) });
+    sizeInput.addEventListener("input", () => { ov.scale = Number(sizeInput.value) / 100; paintStage(); });
+    const rotInput = el("input", { type: "range", min: "-180", max: "180", value: String(ov.rotation) });
+    rotInput.addEventListener("input", () => { ov.rotation = Number(rotInput.value); paintStage(); });
+    layerControls.appendChild(el("label", {}, "Size", sizeInput));
+    layerControls.appendChild(el("label", {}, "Rotate", rotInput));
+    if (ov.type === "text") {
+      const colorInput = el("input", { type: "color", value: ov.color });
+      colorInput.addEventListener("input", () => { ov.color = colorInput.value; paintStage(); });
+      layerControls.appendChild(colorInput);
+    }
+    layerControls.appendChild(el("button", { class: "icon-btn", onclick: () => {
+      slide.overlays = slide.overlays.filter((o) => o.id !== ov.id);
+      crState.selectedLayerId = null;
+      paintStage();
+    } }, el("i", { class: "ri-delete-bin-line" })));
+  }
+
+  function paintStage() {
+    stage.innerHTML = "";
+    const slide = crState.slides[crState.activeSlide];
+    const media = slide.type === "video"
+      ? el("video", { src: slide.url, muted: true, loop: true, autoplay: true, playsinline: true })
+      : el("img", { src: slide.url });
+    stage.appendChild(media);
+    stage.appendChild(overlayLayer);
+    overlayLayer.innerHTML = "";
+    const rect = () => stage.getBoundingClientRect();
+    slide.overlays.forEach((ov) => {
+      // Note: the layer's scale is already baked into its px font-size below
+      // (via crFontPx), so the CSS transform only handles position + rotation.
+      const layer = el("div", {
+        class: `cr-layer ${ov.type}` + (ov.id === crState.selectedLayerId ? " selected" : ""),
+        style: `left:${ov.x}%;top:${ov.y}%;transform:translate(-50%,-50%) rotate(${ov.rotation}deg);` +
+          (ov.type === "text" ? `color:${ov.color};` : ""),
+      },
+        ov.type === "text" ? el("span", { text: ov.text, contenteditable: false }) : ov.icon,
+        el("button", { class: "cr-layer-del", onclick: (e) => { e.stopPropagation(); slide.overlays = slide.overlays.filter((o) => o.id !== ov.id); crState.selectedLayerId = null; paintStage(); } }, el("i", { class: "ri-close-line" })),
+      );
+      layer.style.fontSize = crFontPx(ov, rect().width || 320) + "px";
+
+      let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+      layer.addEventListener("pointerdown", (e) => {
+        crState.selectedLayerId = ov.id;
+        paintLayerControls();
+        $$(".cr-layer", overlayLayer).forEach((l) => l.classList.remove("selected"));
+        layer.classList.add("selected");
+        dragging = true; sx = e.clientX; sy = e.clientY; ox = ov.x; oy = ov.y;
+        layer.setPointerCapture(e.pointerId);
+      });
+      layer.addEventListener("pointermove", (e) => {
+        if (!dragging) return;
+        const r = rect();
+        ov.x = Math.min(96, Math.max(4, ox + ((e.clientX - sx) / r.width) * 100));
+        ov.y = Math.min(96, Math.max(4, oy + ((e.clientY - sy) / r.height) * 100));
+        layer.style.left = ov.x + "%"; layer.style.top = ov.y + "%";
+      });
+      layer.addEventListener("pointerup", () => { dragging = false; });
+      if (ov.type === "text") {
+        layer.addEventListener("dblclick", () => {
+          const span = layer.querySelector("span");
+          span.contentEditable = "true";
+          span.focus();
+          const sel = getSelection(); sel.selectAllChildren(span);
+          span.addEventListener("blur", () => { ov.text = span.textContent.trim() || "Tap to edit"; span.contentEditable = "false"; span.textContent = ov.text; }, { once: true });
+        });
+      }
+      overlayLayer.appendChild(layer);
+    });
+    paintDots(); paintThumbs(); paintLayerControls();
+  }
+
+  crAddMoreImages = () => {
+    const input = el("input", { type: "file", accept: "image/*", multiple: true, hidden: true });
+    input.addEventListener("change", (e) => {
+      const files = Array.from(e.target.files || []).slice(0, 10 - crState.slides.length);
+      files.forEach((f) => crState.slides.push({ type: "image", file: f, url: URL.createObjectURL(f), overlays: [] }));
+      paintStage();
+      input.remove();
+    });
+    document.body.appendChild(input);
+    input.click();
+  };
+
+  paintStage();
+  return step;
+}
+
+// Reassigned each time the editor step is built (needs access to that
+// step's local paintStage closure); declared once at module scope so the
+// toolbar/thumbstrip buttons above can reference it before it's built.
+let crAddMoreImages = () => {};
+
+function crAddTextLayer(stage) {
+  const slide = crState.slides[crState.activeSlide];
+  const ov = { id: crLayerId(), type: "text", text: "Tap to edit", x: 50, y: 50, rotation: 0, scale: 1, sizePct: 9, color: "#ffffff" };
+  slide.overlays.push(ov);
+  crState.selectedLayerId = ov.id;
+  crGoto("editor"); // re-render this step to pick up the new layer immediately
+}
+function crAddStickerLayer(stage, overlayLayer, emo) {
+  const slide = crState.slides[crState.activeSlide];
+  const ov = { id: crLayerId(), type: "sticker", icon: emo, x: 50, y: 50, rotation: 0, scale: 1, sizePct: 14 };
+  slide.overlays.push(ov);
+  crState.selectedLayerId = ov.id;
+  crGoto("editor");
+}
+
+// ---------------- Step 3: music ----------------
+let _crPreviewAudio = null;
+function crBuildMusicStep() {
+  const results = el("div", {});
+  const searchInput = el("input", { type: "text", placeholder: "Search songs, artists, moods…" });
+  const step = el("div", { class: "cr-step active" },
+    el("div", { class: "cr-music" },
+      el("div", {
+        class: "cr-music-none" + (!crState.song ? " active" : ""),
+        onclick: () => { crState.song = null; crStopPreview(); crBuildMusicStepPaint(results); },
+      }, el("i", { class: "ri-forbid-line" }), "No music"),
+      el("div", { class: "cr-music-search" }, el("i", { class: "ri-search-line" }), searchInput),
+      results,
+    ),
+  );
+  let t = null;
+  searchInput.addEventListener("input", () => {
+    clearTimeout(t);
+    t = setTimeout(() => crSearchMusic(searchInput.value.trim(), results), 350);
+  });
+  crSearchMusic("", results);
+  return step;
+}
+function crStopPreview() { if (_crPreviewAudio) { _crPreviewAudio.pause(); _crPreviewAudio = null; } }
+
+// Internet Archive's public catalog needs no API key/signup at all — its
+// search + metadata endpoints are open and CORS-enabled. We search the
+// "audio" mediatype for Creative-Commons-friendly netlabel/free-music
+// collections, then resolve a playable mp3 URL per result via /metadata.
+const ARCHIVE_AUDIO_COLLECTIONS = "(collection:netlabels OR collection:opensource_audio OR collection:free_music_archive)";
+async function crSearchMusic(qText, results) {
+  results.innerHTML = `<div class="cr-music-empty"><i class="ri-loader-4-line"></i> Loading…</div>`;
+  try {
+    const q = qText
+      ? `${ARCHIVE_AUDIO_COLLECTIONS} AND mediatype:audio AND (${qText})`
+      : `${ARCHIVE_AUDIO_COLLECTIONS} AND mediatype:audio`;
+    const searchUrl = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(q)}&fl[]=identifier&fl[]=title&fl[]=creator&rows=20&output=json`;
+    const r = await fetch(searchUrl);
+    const j = await r.json();
+    const docs = j.response?.docs || [];
+    results.innerHTML = "";
+    if (!docs.length) { results.appendChild(el("div", { class: "cr-music-empty" }, "No tracks found — try a different search")); return; }
+    docs.forEach((doc) => results.appendChild(crTrackRow(doc, results)));
+  } catch {
+    results.innerHTML = "";
+    results.appendChild(el("div", { class: "cr-music-empty" }, "Couldn't load music right now"));
+  }
+}
+// Each search result is an Archive.org "item" that can contain several
+// files; resolve the first playable mp3/ogg file lazily (only once the
+// user actually previews or picks the track, to avoid 20 metadata calls
+// per search).
+async function crResolveTrackUrl(identifier) {
+  const r = await fetch(`https://archive.org/metadata/${identifier}`);
+  const j = await r.json();
+  const file = (j.files || []).find((f) => /\.(mp3|ogg)$/i.test(f.name) && f.source === "derivative")
+    || (j.files || []).find((f) => /\.(mp3|ogg)$/i.test(f.name));
+  if (!file) return null;
+  return `https://archive.org/download/${identifier}/${encodeURIComponent(file.name)}`;
+}
+function crTrackRow(doc, results) {
+  const isActive = crState.song?.id === doc.identifier;
+  const title = doc.title || doc.identifier;
+  const creator = Array.isArray(doc.creator) ? doc.creator[0] : (doc.creator || "Unknown artist");
+  const playIcon = el("i", { class: "ri-play-fill" });
+  const playBtn = el("button", { class: "cr-track-play" }, playIcon);
+  const pickBtn = el("button", { class: "cr-track-pick" }, isActive ? "Selected" : "Use");
+  const row = el("div", { class: "cr-track" + (isActive ? " active" : "") },
+    el("div", { class: "cr-track-art" }, el("i", { class: "ri-music-2-fill" })),
+    el("div", { class: "cr-track-info" }, el("div", { class: "n" }, title), el("div", { class: "a" }, creator)),
+    playBtn,
+    pickBtn,
+  );
+  playBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (_crPreviewAudio && _crPreviewAudio._identifier === doc.identifier && !_crPreviewAudio.paused) {
+      crStopPreview(); playIcon.className = "ri-play-fill"; return;
+    }
+    crStopPreview();
+    playIcon.className = "ri-loader-4-line";
+    const url = await crResolveTrackUrl(doc.identifier).catch(() => null);
+    if (!url) { playIcon.className = "ri-play-fill"; toast("Couldn't load that track"); return; }
+    _crPreviewAudio = new Audio(url);
+    _crPreviewAudio._identifier = doc.identifier;
+    _crPreviewAudio.play().catch(() => {});
+    playIcon.className = "ri-pause-fill";
+    _crPreviewAudio.addEventListener("ended", () => { playIcon.className = "ri-play-fill"; });
+  });
+  pickBtn.addEventListener("click", async () => {
+    pickBtn.textContent = "…";
+    const url = _crPreviewAudio?._identifier === doc.identifier ? _crPreviewAudio.src : await crResolveTrackUrl(doc.identifier).catch(() => null);
+    if (!url) { toast("Couldn't load that track"); pickBtn.textContent = "Use"; return; }
+    crState.song = { id: doc.identifier, name: title, artist: creator, url };
+    crStopPreview();
+    crBuildMusicStepPaint(results);
+  });
+  return row;
+}
+function crBuildMusicStepPaint(results) {
+  crSearchMusic("", results);
+}
+
+// ---------------- Step 4: details + publish ----------------
+function crBuildDetailsStep() {
+  const thumbSlide = crState.slides[0];
+  const caption = el("textarea", { placeholder: "Write a caption… use #hashtags and @mentions" });
+  caption.value = crState.caption;
+  caption.addEventListener("input", () => { crState.caption = caption.value; });
+
+  const locRow = el("div", { class: "cr-details-row" },
+    el("div", { class: "l" }, el("i", { class: "ri-map-pin-line" }), "Tag location"),
+    el("div", { class: "v" }, crState.location?.city || "Not tagged"),
+  );
+  locRow.addEventListener("click", () => {
+    if (!("geolocation" in navigator)) { toast("Location not available on this device/browser"); return; }
+    // Geolocation only works in a secure context (https, or localhost) —
+    // fail fast with a clear message instead of silently hanging forever.
+    if (!window.isSecureContext) {
+      toast("Location requires HTTPS — this page is loaded over an insecure connection");
+      return;
+    }
+    const valueEl = locRow.querySelector(".v");
+    valueEl.textContent = "Locating…";
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+      const { latitude: lat, longitude: lng } = pos.coords; let city = null;
+      try {
+        // BigDataCloud's client-reverse-geocode endpoint is free, needs no
+        // API key, and is CORS-enabled for direct browser calls (Nominatim
+        // frequently blocks/throttles unidentified browser-origin requests).
+        const r = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lng}&localityLanguage=en`);
+        const j = await r.json();
+        city = j.city || j.locality || j.principalSubdivision || null;
+      } catch {}
+      crState.location = { lat: Math.round(lat * 100) / 100, lng: Math.round(lng * 100) / 100, city };
+      valueEl.textContent = city || "My location";
+    }, (err) => {
+      const msg = err.code === 1 ? "Location access denied — enable it in your browser/site settings"
+        : err.code === 2 ? "Couldn't determine your location right now"
+        : "Location request timed out";
+      toast(msg);
+      valueEl.textContent = crState.location?.city || "Not tagged";
+    }, { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 });
+  });
+
+  const musicRow = el("div", { class: "cr-details-row" },
+    el("div", { class: "l" }, el("i", { class: "ri-music-2-line" }), "Music"),
+    el("div", { class: "v" }, crState.song ? `${crState.song.name} — ${crState.song.artist}` : "None"),
+  );
+  musicRow.addEventListener("click", () => crGoto("music"));
+
+  return el("div", { class: "cr-step active" },
+    el("div", { class: "cr-details" },
+      el("div", { class: "cr-details-preview" },
+        thumbSlide.type === "video"
+          ? el("video", { src: thumbSlide.url, class: "cr-details-thumb", muted: true })
+          : el("img", { src: thumbSlide.url, class: "cr-details-thumb" }),
+        el("div", { style: "flex:1;color:var(--text-mute);font-size:13px;" },
+          crState.slides.length > 1 ? `${crState.slides.length} photos in this post` : (thumbSlide.type === "video" ? "1 video" : "1 photo")),
+      ),
+      caption,
+      locRow,
+      musicRow,
+    ),
+  );
+}
+
+// Bake all overlays for an image slide into a single flattened image file
+// (video overlays are NOT baked — they're stored as metadata and rendered
+// live over the <video> element during playback; see wireFeedOverlays).
+function crFlattenImageSlide(slide) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+      slide.overlays.forEach((ov) => {
+        ctx.save();
+        const px = (ov.x / 100) * canvas.width, py = (ov.y / 100) * canvas.height;
+        ctx.translate(px, py);
+        ctx.rotate((ov.rotation * Math.PI) / 180);
+        const fontPx = crFontPx(ov, canvas.width);
+        if (ov.type === "text") {
+          ctx.font = `800 ${fontPx}px "Plus Jakarta Sans", sans-serif`;
+          ctx.fillStyle = ov.color; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.shadowColor = "rgba(0,0,0,.5)"; ctx.shadowBlur = fontPx * 0.15;
+          ctx.fillText(ov.text, 0, 0);
+        } else {
+          ctx.font = `${fontPx}px sans-serif`;
+          ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText(ov.icon, 0, 0);
+        }
+        ctx.restore();
+      });
+      canvas.toBlob((blob) => resolve(new File([blob], slide.file.name.replace(/\.\w+$/, "") + "-edited.png", { type: "image/png" })), "image/png", 0.95);
+    };
+    img.onerror = reject;
+    img.src = slide.url;
+  });
+}
+
+async function crSubmitPost(btn) {
+  if (!crState.slides.length) { toast("Pick a photo or video first"); return; }
+  btn.disabled = true; btn.textContent = "Posting…";
+  try {
+    toast("Uploading…");
+    let media;
+    if (crState.slides[0].type === "video") {
+      const slide = crState.slides[0];
+      const uploaded = await uploadToCloudinary(slide.file, "video");
+      if (slide.overlays.length) uploaded.overlays = slide.overlays;
+      media = uploaded;
+    } else if (crState.slides.length === 1) {
+      const flat = await crFlattenImageSlide(crState.slides[0]);
+      media = await uploadToCloudinary(flat, "image");
+    } else {
+      const flats = await Promise.all(crState.slides.map(crFlattenImageSlide));
+      media = await Promise.all(flats.map((f) => uploadToCloudinary(f, "image")));
+    }
+    const text = crState.caption.trim();
+    const hashtags = extractHashtags(text);
+    const postData = {
+      authorUid: state.uid, text, media, hashtags,
+      orbits: [], orbitCount: 0, commentCount: 0, createdAt: serverTimestamp(),
+    };
+    if (crState.location) postData.location = crState.location;
+    if (crState.song) postData.song = crState.song;
+    const newPostRef = await addDoc(collection(db, "posts"), postData);
+    sfxPost();
+    toast("Posted!");
+    crClose();
+    addDoc(collection(db, "notifications", state.uid, "items"), {
+      type: "postConfirm", postId: newPostRef.id, text: "Your post is live!", read: false, createdAt: serverTimestamp(),
+    }).catch(() => {});
+    (async () => {
+      let followers = state.me?.followers || [];
+      try {
+        const freshSnap = await getDoc(doc(db, "users", state.uid));
+        if (freshSnap.exists()) followers = freshSnap.data().followers || followers;
+      } catch {}
+      followers = followers.slice(0, 200);
+      if (!followers.length) return;
+      const preview = (text || "shared new media").slice(0, 60);
+      const postThumb = Array.isArray(media) ? media[0]?.url : media?.url;
+      const { notifyUser } = await import("./notifications.js");
+      followers.forEach((uid) => {
+        writeNotif(uid, "newPost", { postId: newPostRef.id, text: `${state.me?.name || "Someone"} posted: "${preview}"` }).catch(() => {});
+        notifyUser(uid, state.me?.name || "Someone", `New post: ${preview}`, "/#post/" + newPostRef.id, state.me?.photoURL || "", postThumb || "").catch(() => {});
+      });
+    })().catch(() => {});
+  } catch (err) {
+    toast("Failed to post: " + (err.message || "unknown error"));
+    btn.disabled = false; btn.textContent = "Post";
+  }
+}
 
 // =========================================================================
 // 14b. INLINE FEED SUGGESTION CARDS (People / Groups / Spaces)
