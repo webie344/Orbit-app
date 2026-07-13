@@ -2550,8 +2550,8 @@ const renderPostDetail = async (root, postId) => {
     el("button", { class: "reply-cancel-btn", onclick: () => {
       _detailReplyTo = null;
       detailReplyBanner.classList.add("hidden");
-      cmtSection.querySelector("input").placeholder = "Write a comment…";
-      cmtSection.querySelector("input").value = "";
+      cmtSection.querySelector("input[type='text']").placeholder = "Write a comment…";
+      cmtSection.querySelector("input[type='text']").value = "";
     }}, el("i", { class: "ri-close-line" })),
   );
   cmtSection.appendChild(detailReplyBanner);
@@ -2589,7 +2589,7 @@ const renderPostDetail = async (root, postId) => {
       _detailReplyTo = { uid: a?.uid, name: a?.name || "user", username: a?.username || "" };
       detailReplyBanner.querySelector(".reply-banner-text").textContent = `Replying to @${a?.username || a?.name || "user"}`;
       detailReplyBanner.classList.remove("hidden");
-      const inp = cmtSection.querySelector("input");
+      const inp = cmtSection.querySelector("input[type='text']");
       inp.placeholder = `Reply to @${a?.username || a?.name || "user"}…`;
       inp.focus();
     }}, el("i", { class: "ri-chat-1-line" }), replyCountEl);
@@ -2809,7 +2809,7 @@ const renderPostDetail = async (root, postId) => {
 
   cForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const input = cForm.querySelector("input");
+    const input = cForm.querySelector("input[type='text']");
     const text = input.value.trim();
     if (!text && !_dCmtMediaFile && !_dCmtAudioBlob) return;
     const submitBtn = cForm.querySelector("button[type='submit']");
@@ -3384,17 +3384,43 @@ const renderProfile = async (root, uid) => {
       _profileTabUnsub = onSnapshot(
         query(collection(db, "posts"), where("authorUid", "==", uid), limit(60)),
         (snap) => {
-          body.innerHTML = "";
           if (snap.empty) {
+            body.innerHTML = "";
             body.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-image-line" }), el("div", { class: "t" }, "No posts yet")));
             return;
           }
+
+          // Diff approach: only add new posts / remove deleted ones so that
+          // existing video elements (and their IntersectionObserver autoplay)
+          // survive Firestore updates like orbitCount / vibeCount changes.
+          let profFeed = body.querySelector(".profile-feed-list");
+          if (!profFeed) {
+            body.innerHTML = "";
+            profFeed = el("div", { class: "profile-feed-list" });
+            body.appendChild(profFeed);
+          }
+
           const posts = snap.docs
             .map((d) => ({ id: d.id, ...d.data() }))
             .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
 
-          const profFeed = el("div", { class: "profile-feed-list" }); body.appendChild(profFeed);
-          posts.forEach((p) => profFeed.appendChild(renderPost(p, u)));
+          // Remove cards for posts that were deleted
+          const incomingIds = new Set(posts.map((p) => p.id));
+          profFeed.querySelectorAll("[data-post-id]").forEach((node) => {
+            if (!incomingIds.has(node.dataset.postId)) node.remove();
+          });
+
+          // Append only genuinely new posts — skip any already in the DOM
+          const existingIds = new Set(
+            Array.from(profFeed.querySelectorAll("[data-post-id]")).map((node) => node.dataset.postId)
+          );
+          posts.forEach((p) => {
+            if (!existingIds.has(p.id)) {
+              const postEl = renderPost(p, u, { hideComments: true });
+              postEl.dataset.postId = p.id;
+              profFeed.appendChild(postEl);
+            }
+          });
         },
         () => {}
       );
