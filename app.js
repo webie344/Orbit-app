@@ -3730,6 +3730,7 @@ const _crFreshState = () => ({
   location: null,
   activeSlide: 0,
   selectedLayerId: null,
+  textOnly: false,        // true → skip media steps entirely
   camStream: null,
   camRecorder: null,
   camChunks: [],
@@ -3778,9 +3779,11 @@ function crRenderShell(root) {
 
 function crBack() {
   // Music step only applies when a video was recorded in-app
-  const order = crState.isRecordedVideo
-    ? ["pick", "editor", "music", "details"]
-    : ["pick", "editor", "details"];
+  const order = crState.textOnly
+    ? ["pick", "details"]
+    : crState.isRecordedVideo
+      ? ["pick", "editor", "music", "details"]
+      : ["pick", "editor", "details"];
   if (crState.step === "cam") { crStopCamera(); crGoto("pick"); return; }
   const idx = order.indexOf(crState.step);
   if (idx <= 0) { crClose(); return; }
@@ -3832,12 +3835,14 @@ function crBuildPickStep() {
   const step = el("div", { class: "cr-step active" },
     el("div", { class: "cr-pick" },
       el("div", { class: "cr-pick-title" }, "Create a post"),
-      el("div", { class: "cr-pick-sub" }, "Photos, a video, or a carousel — add text, stickers and a song next."),
+      el("div", { class: "cr-pick-sub" }, "Share a photo, video, or just your thoughts — no media required."),
       el("div", { class: "cr-pick-grid" },
         el("button", { class: "cr-pick-opt", onclick: () => fileInput.click() },
           el("i", { class: "ri-image-add-line" }), el("span", {}, "Photos / video")),
         el("button", { class: "cr-pick-opt", onclick: () => crGoto("cam") },
           el("i", { class: "ri-camera-line" }), el("span", {}, "Record video")),
+        el("button", { class: "cr-pick-opt", onclick: () => { crState.textOnly = true; crState.slides = []; crGoto("details"); } },
+          el("i", { class: "ri-text" }), el("span", {}, "Text only")),
       ),
       el("div", { class: "cr-pick-hint" }, "Pick multiple photos to make a swipeable carousel."),
       fileInput,
@@ -4248,7 +4253,7 @@ function crBuildMusicStepPaint(results) {
 
 // ---------------- Step 4: details + publish ----------------
 function crBuildDetailsStep() {
-  const thumbSlide = crState.slides[0];
+  const thumbSlide = crState.slides[0] || null;
   const caption = el("textarea", { placeholder: "Write a caption… use #hashtags and @mentions" });
   caption.value = crState.caption;
   caption.addEventListener("input", () => { crState.caption = caption.value; });
@@ -4347,15 +4352,22 @@ function crBuildDetailsStep() {
     el("div", { class: "cr-tag-hint" }, "Tags help us match your post to people who'll love it."),
   );
 
-  return el("div", { class: "cr-step active" },
-    el("div", { class: "cr-details" },
-      el("div", { class: "cr-details-preview" },
+  const previewEl = thumbSlide
+    ? el("div", { class: "cr-details-preview" },
         thumbSlide.type === "video"
           ? el("video", { src: thumbSlide.url, class: "cr-details-thumb", muted: true })
           : el("img", { src: thumbSlide.url, class: "cr-details-thumb" }),
         el("div", { style: "flex:1;color:var(--text-mute);font-size:13px;" },
           crState.slides.length > 1 ? `${crState.slides.length} photos in this post` : (thumbSlide.type === "video" ? "1 video" : "1 photo")),
-      ),
+      )
+    : el("div", { class: "cr-details-preview cr-details-preview--text" },
+        el("i", { class: "ri-text", style: "font-size:28px;color:var(--text-mute);" }),
+        el("div", { style: "flex:1;color:var(--text-mute);font-size:13px;" }, "Text post"),
+      );
+
+  return el("div", { class: "cr-step active" },
+    el("div", { class: "cr-details" },
+      previewEl,
       caption,
       tagPrompt,
       locRow,
@@ -4401,27 +4413,30 @@ function crFlattenImageSlide(slide) {
 }
 
 async function crSubmitPost(btn) {
-  if (!crState.slides.length) { toast("Pick a photo or video first"); return; }
+  const text = crState.caption.trim();
+  if (!crState.slides.length && !text) { toast("Write something or pick a photo / video"); return; }
   btn.disabled = true; btn.textContent = "Posting…";
   try {
-    toast("Uploading…");
     let media;
-    if (crState.slides[0].type === "video") {
-      const slide = crState.slides[0];
-      const uploaded = await uploadToCloudinary(slide.file, "video");
-      if (slide.overlays.length) uploaded.overlays = slide.overlays;
-      media = uploaded;
-    } else if (crState.slides.length === 1) {
-      const flat = await crFlattenImageSlide(crState.slides[0]);
-      media = await uploadToCloudinary(flat, "image");
-    } else {
-      const flats = await Promise.all(crState.slides.map(crFlattenImageSlide));
-      media = await Promise.all(flats.map((f) => uploadToCloudinary(f, "image")));
+    if (crState.slides.length) {
+      toast("Uploading…");
+      if (crState.slides[0].type === "video") {
+        const slide = crState.slides[0];
+        const uploaded = await uploadToCloudinary(slide.file, "video");
+        if (slide.overlays.length) uploaded.overlays = slide.overlays;
+        media = uploaded;
+      } else if (crState.slides.length === 1) {
+        const flat = await crFlattenImageSlide(crState.slides[0]);
+        media = await uploadToCloudinary(flat, "image");
+      } else {
+        const flats = await Promise.all(crState.slides.map(crFlattenImageSlide));
+        media = await Promise.all(flats.map((f) => uploadToCloudinary(f, "image")));
+      }
     }
-    const text = crState.caption.trim();
     const hashtags = extractHashtags(text);
     const postData = {
-      authorUid: state.uid, text, media, hashtags,
+      authorUid: state.uid, text, hashtags,
+      ...(media !== undefined ? { media } : {}),
       orbits: [], orbitCount: 0, commentCount: 0, createdAt: serverTimestamp(),
     };
     if (crState.location) postData.location = crState.location;
