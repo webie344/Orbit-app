@@ -1,5 +1,5 @@
 // =========================================================================
-// Orbit — app.js
+// Vibe — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
 // Profile + Settings + Theme + Verified-by-location.
 // Chat + DM logic lives in chat.js (it imports state from this file).
@@ -59,9 +59,9 @@ export const state = {
     users: new Map(), // uid -> profile snapshot
   },
   // AI assistant settings (persisted in localStorage)
-  aiName:   localStorage.getItem("orbit:ai_name")   || "Aria",
-  aiAvatar: localStorage.getItem("orbit:ai_avatar") || "🤖",
-  aiTone:   localStorage.getItem("orbit:ai_tone")   || "friendly",
+  aiName:   localStorage.getItem("vibe:ai_name")   || "Aria",
+  aiAvatar: localStorage.getItem("vibe:ai_avatar") || "🤖",
+  aiTone:   localStorage.getItem("vibe:ai_tone")   || "friendly",
 };
 
 // =========================================================================
@@ -706,7 +706,187 @@ export const fetchUser = async (uid) => {
   return data;
 };
 
-// =========================================================================
+
+
+    // =========================================================================
+    // COMPATIBILITY ENGINE — Jaccard similarity matching + taste profile
+    // =========================================================================
+    const TASTE_QUESTIONS = [
+    { id: "music",     q: "What's your music vibe?",
+      opts: ["Hip-hop / R&B", "Pop", "Rock / Alt", "Electronic / EDM", "Afrobeats / Afropop", "Jazz / Soul", "Classical / Ambient", "Country / Folk"] },
+    { id: "shows",     q: "Your go-to watch?",
+      opts: ["Reality TV", "Sci-fi / Fantasy", "Drama / Thriller", "Comedy / Sitcoms", "Anime", "Docs & True Crime", "Action / Adventure", "Horror"] },
+    { id: "energy",    q: "Your social energy?",
+      opts: ["Total introvert", "Mostly introvert", "Balanced", "Mostly extrovert", "Total extrovert"] },
+    { id: "humor",     q: "Your humor style?",
+      opts: ["Dark & dry", "Sarcastic", "Wholesome & silly", "Puns & wordplay", "Deadpan", "Absurdist"] },
+    { id: "dayoff",    q: "Ideal day off?",
+      opts: ["Gaming / streaming", "Outdoors / active", "Creative projects", "Socializing", "Reading / learning", "Cooking / food", "Traveling", "Doing nothing"] },
+    { id: "values",    q: "What matters most to you?",
+      opts: ["Loyalty & trust", "Ambition & growth", "Freedom & independence", "Creativity & self-expression", "Family & community", "Adventure & experiences"] },
+    { id: "comms",     q: "How do you communicate?",
+      opts: ["Voice notes > texts", "Paragraph texter", "Short & direct", "Memes & reaction GIFs", "Voice / video calls", "Whatever fits the vibe"] },
+    { id: "aesthetic", q: "Your aesthetic?",
+      opts: ["Minimal & clean", "Dark & moody", "Colorful & chaotic", "Vintage & nostalgic", "Street / urban", "Soft & cozy", "Techy / futuristic"] },
+    { id: "goals",     q: "What are you building?",
+      opts: ["Career / skills", "A business", "Creative work", "Relationships", "Health & wellness", "Just vibing honestly"] },
+    { id: "content",   q: "What do you post / consume?",
+      opts: ["Tech & dev", "Art & design", "Fashion & style", "Sports & fitness", "Food & lifestyle", "Politics & news", "Entertainment", "Multiple / everything"] },
+    ];
+
+    // Jaccard similarity: intersection / union over two flat arrays
+    function jaccardScore(arrA, arrB) {
+    if (!arrA?.length || !arrB?.length) return 0;
+    const a = new Set(arrA), b = new Set(arrB);
+    let inter = 0;
+    for (const x of a) if (b.has(x)) inter++;
+    const union = a.size + b.size - inter;
+    return union === 0 ? 0 : inter / union;
+    }
+
+    // Weighted compatibility score 0–100 between two user profile objects
+    function computeCompatibility(me, them) {
+    let num = 0, den = 0;
+
+    // Taste answers — highest signal (explicit preferences)
+    const myA   = Object.values(me?.tasteAnswers  || {}).flat().map(v => v.toLowerCase());
+    const theirA = Object.values(them?.tasteAnswers || {}).flat().map(v => v.toLowerCase());
+    if (myA.length || theirA.length) { num += 0.45 * jaccardScore(myA, theirA); den += 0.45; }
+
+    // Interests / hashtags
+    if ((me?.interests?.length || 0) + (them?.interests?.length || 0)) {
+      num += 0.30 * jaccardScore(me.interests || [], them.interests || []); den += 0.30;
+    }
+
+    // Liked/reacted posts in common
+    if ((me?.likedPosts?.length || 0) + (them?.likedPosts?.length || 0)) {
+      num += 0.25 * jaccardScore(me.likedPosts || [], them.likedPosts || []); den += 0.25;
+    }
+
+    return den > 0 ? Math.round((num / den) * 100) : 0;
+    }
+
+    // Session-level compatibility cache
+    const _compatCache = new Map();
+    async function getCompatibility(theirUid) {
+    if (!state.me || !theirUid || theirUid === state.uid) return 0;
+    const key = state.uid + ":" + theirUid;
+    if (_compatCache.has(key)) return _compatCache.get(key);
+    const them = await fetchUser(theirUid).catch(() => null);
+    if (!them) return 0;
+    const score = computeCompatibility(state.me, them);
+    _compatCache.set(key, score);
+    return score;
+    }
+
+    // Shared taste items between two user profiles (for "why" signal)
+    function sharedTasteItems(me, them) {
+    const myA    = Object.values(me?.tasteAnswers  || {}).flat();
+    const theirA = Object.values(them?.tasteAnswers || {}).flat();
+    const set = new Set(theirA.map(v => v.toLowerCase()));
+    return myA.filter(v => set.has(v.toLowerCase()));
+    }
+
+    // ── Taste Quiz ─────────────────────────────────────────────────────────────
+    const openTasteQuiz = (onComplete) => {
+    let current = 0;
+    const answers = {};
+
+    const overlay = el("div", { class: "tq-overlay" });
+    const card    = el("div", { class: "tq-card" });
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+
+    const render = () => {
+      card.innerHTML = "";
+      const q    = TASTE_QUESTIONS[current];
+      const prog = Math.round((current / TASTE_QUESTIONS.length) * 100);
+
+      card.appendChild(el("div", { class: "tq-progress-bar" },
+        el("div", { class: "tq-progress-fill", style: "width:" + prog + "%" })
+      ));
+      card.appendChild(el("div", { class: "tq-count" }, (current + 1) + " / " + TASTE_QUESTIONS.length));
+      card.appendChild(el("h2",  { class: "tq-q" }, q.q));
+
+      const opts = el("div", { class: "tq-opts" });
+      q.opts.forEach((opt) => {
+        const selected = answers[q.id] === opt;
+        const btn = el("button", { class: "tq-opt" + (selected ? " selected" : "") }, opt);
+        btn.addEventListener("click", () => {
+          answers[q.id] = opt;
+          if (current < TASTE_QUESTIONS.length - 1) { current++; render(); }
+          else { _saveTasteProfile(answers, overlay, onComplete); }
+        });
+        opts.appendChild(btn);
+      });
+      card.appendChild(opts);
+
+      if (current > 0) {
+        card.appendChild(el("button", { class: "tq-back" }, "← Back",
+          // onclick added as listener to avoid el() onclick conflict
+        ));
+        card.querySelector(".tq-back").addEventListener("click", () => { current--; render(); });
+      }
+      const skip = el("button", { class: "tq-skip" }, "Skip for now");
+      skip.addEventListener("click", () => _saveTasteProfile(answers, overlay, onComplete));
+      card.appendChild(skip);
+    };
+
+    render();
+    };
+
+    async function _saveTasteProfile(answers, overlay, onComplete) {
+    overlay?.remove();
+    if (!state.uid || !Object.keys(answers).length) {
+      if (typeof onComplete === "function") onComplete(null);
+      return;
+    }
+    try {
+      const interests = [...new Set(
+        Object.values(answers).flat().map(v => v.toLowerCase().replace(/[^a-z0-9]/g, "_"))
+      )];
+      await updateDoc(doc(db, "users", state.uid), {
+        tasteAnswers: answers,
+        interests,
+        tasteProfiledAt: serverTimestamp(),
+      });
+      if (state.me) { state.me.tasteAnswers = answers; state.me.interests = interests; }
+      state.cache.users.delete(state.uid);
+      toast("✨ Taste profile saved! We'll use this to find your people.");
+      if (typeof onComplete === "function") onComplete(answers);
+    } catch (err) {
+      console.warn("saveTasteProfile:", err);
+      toast("Couldn't save taste profile — try again");
+      if (typeof onComplete === "function") onComplete(null);
+    }
+    }
+
+    // Show taste profile summary sheet
+    const openTasteProfileSheet = () => {
+    const answers = state.me?.tasteAnswers || {};
+    const chips   = Object.values(answers).flat();
+    if (!chips.length) { openTasteQuiz(() => {}); return; }
+
+    const modal = el("div", { class: "taste-profile-modal" });
+    const sheet = el("div", { class: "taste-profile-sheet" });
+    const closeBtn = el("button", { class: "icon-btn" }, el("i", { class: "ri-close-line" }));
+    closeBtn.addEventListener("click", () => modal.remove());
+    sheet.appendChild(el("div", { class: "tps-header" },
+      el("h3", {}, "✦ Your Taste Map"),
+      closeBtn,
+    ));
+    const chipsEl = el("div", { class: "tps-chips" });
+    chips.slice(0, 20).forEach(c => chipsEl.appendChild(el("span", { class: "tps-chip" }, c)));
+    sheet.appendChild(chipsEl);
+    const retake = el("button", { class: "btn primary tps-retake" }, "Retake quiz");
+    retake.addEventListener("click", () => { modal.remove(); openTasteQuiz(() => {}); });
+    sheet.appendChild(retake);
+    modal.appendChild(sheet);
+    modal.addEventListener("click", (e) => { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+    };
+
+    // =========================================================================
 // 4. CLOUDINARY UPLOAD
 // =========================================================================
 export const uploadToCloudinary = async (file, kind = "image") => {
@@ -735,11 +915,11 @@ export const uploadToCloudinary = async (file, kind = "image") => {
 // =========================================================================
 const applyTheme = (theme) => {
   document.documentElement.setAttribute("data-theme", theme);
-  localStorage.setItem("orbit:theme", theme);
+  localStorage.setItem("vibe:theme", theme);
   $("#themeToggle")?.querySelector("i")?.classList.toggle("ri-sun-line", theme === "dark");
   $("#themeToggle")?.querySelector("i")?.classList.toggle("ri-moon-line", theme === "light");
 };
-const initTheme = () => applyTheme(localStorage.getItem("orbit:theme") || "dark");
+const initTheme = () => applyTheme(localStorage.getItem("vibe:theme") || "dark");
 const toggleTheme = () =>
   applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark");
 
@@ -788,7 +968,7 @@ const showOnboarding = () => {
 };
 
 const finishOnboarding = () => {
-  localStorage.setItem("orbit_onboarded", "1");
+  localStorage.setItem("vibe_onboarded", "1");
   $("#onboarding").classList.add("hidden");
   showAuth();
 };
@@ -822,7 +1002,7 @@ const ensureUserDoc = async (user, extras = {}) => {
     // Welcome notification for new users
     await addDoc(collection(db, "notifications", user.uid, "items"), {
       type: "welcome",
-      text: `Welcome to Orbit, ${profile.name.split(" ")[0]}! 👋 Explore groups, join spaces, and connect with people who share your interests.`,
+      text: `Welcome to Vibe, ${profile.name.split(" ")[0]}! 👋 Explore groups, join spaces, and connect with people who actually get you.`,
       read: false,
       createdAt: serverTimestamp(),
     }).catch(() => {});
@@ -836,7 +1016,7 @@ const ensureUserDoc = async (user, extras = {}) => {
 onAuthStateChanged(auth, async (user) => {
   if (!user) {
     state.me = null; state.uid = null;
-    if (!localStorage.getItem("orbit_onboarded")) { showOnboarding(); } else { showAuth(); }
+    if (!localStorage.getItem("vibe_onboarded")) { showOnboarding(); } else { showAuth(); }
     return;
   }
   state.uid = user.uid;
@@ -851,10 +1031,26 @@ onAuthStateChanged(auth, async (user) => {
   watchOfflineOnUnload();
   startNewsBot(); // kick off official news/sport/social bot (throttled to every 5 h)
   // Show onboarding modal for brand-new users; otherwise prompt incomplete profiles
-  if (state.me._isNew) showOnboardingModal();
-  else checkProfileSetup();
+  if (state.me._isNew) {
+    showOnboardingModal();
+    // After onboarding, launch taste quiz so new user has a profile immediately
+    setTimeout(() => {
+      if (!state.me?.tasteAnswers) {
+        openTasteQuiz(async (answers) => {
+          if (answers) await _showFirstMatchPreview();
+        });
+      }
+    }, 1800);
+  } else {
+    checkProfileSetup();
+    // Existing user with no taste profile — prompt once per session
+    if (!state.me?.tasteAnswers && !sessionStorage.getItem("vibe:tq_prompted")) {
+      sessionStorage.setItem("vibe:tq_prompted", "1");
+      setTimeout(() => openTasteQuiz(() => {}), 3000);
+    }
+  }
   // Notify chat module
-  document.dispatchEvent(new CustomEvent("orbit:auth-ready", { detail: state.me }));
+  document.dispatchEvent(new CustomEvent("vibe:auth-ready", { detail: state.me }));
 });
 
 const watchOfflineOnUnload = () => {
@@ -906,16 +1102,18 @@ document.getElementById("onboardGetStarted")?.addEventListener("click", () => {
 // Creates (or reuses) a full-screen overlay with the animated logo mark so
 // users see branded feedback instead of a frozen form during sign-in/up.
 function _showAuthLoader(label = "Signing in…") {
-  let overlay = document.getElementById("orbitAuthLoader");
+  let overlay = document.getElementById("vibeAuthLoader");
   if (!overlay) {
     overlay = document.createElement("div");
-    overlay.id = "orbitAuthLoader";
+    overlay.id = "vibeAuthLoader";
     overlay.innerHTML = `
       <div class="oal-inner">
-        <div class="oal-mark">
-          <span></span><span></span><span></span>
+        <div class="oal-logo-wrap">
+          <div class="oal-pulse-ring oal-ring-1"></div>
+          <div class="oal-pulse-ring oal-ring-2"></div>
+          <div class="oal-logo-icon">✦</div>
         </div>
-        <div class="oal-brand">Orbit</div>
+        <div class="oal-brand">Vibe</div>
         <div class="oal-label" id="oalLabel"></div>
       </div>`;
     document.body.appendChild(overlay);
@@ -924,7 +1122,7 @@ function _showAuthLoader(label = "Signing in…") {
   overlay.classList.remove("oal-hidden");
 }
 function _hideAuthLoader() {
-  const overlay = document.getElementById("orbitAuthLoader");
+  const overlay = document.getElementById("vibeAuthLoader");
   if (overlay) {
     overlay.classList.add("oal-hidden");
     // Remove from DOM after fade-out so it doesn't block future interactions
@@ -949,7 +1147,7 @@ $("#signupForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
   const name = fd.get("name"), username = fd.get("username");
-  _showAuthLoader("Creating your Orbit…");
+  _showAuthLoader("Creating your Vibe…");
   try {
     const cred = await createUserWithEmailAndPassword(auth, fd.get("email"), fd.get("password"));
     await updateProfile(cred.user, { displayName: name });
@@ -1137,7 +1335,7 @@ const router = () => {
       if (rest[0] === "ai") {
         renderAIChat(content);
       } else {
-        document.dispatchEvent(new CustomEvent("orbit:open-chats", { detail: { peerUid: rest[0] || null } }));
+        document.dispatchEvent(new CustomEvent("vibe:open-chats", { detail: { peerUid: rest[0] || null } }));
         // Inject AI entry at top of chat list after chat.js renders
         setTimeout(() => _injectAIChatEntry(), 350);
       }
@@ -1184,7 +1382,95 @@ $$(".nav-item, .sidebar-foot .link").forEach((b) =>
   b.addEventListener("click", () => { if (window.innerWidth <= 640) closeMobileSidebar(); })
 );
 
-// =========================================================================
+
+
+    // ── Compat card helper (used in Explore) ──────────────────────────────────
+    const _appendCompatCard = (scroller, u, score) => {
+    let iFollow = (state.me?.following || []).includes(u.uid);
+    const circumference = 2 * Math.PI * 15.9;
+    const dash = score > 0 ? (score / 100) * circumference : 0;
+    const gap  = circumference - dash;
+
+    const card = el("div", { class: "compat-card", onclick: () => location.hash = "#profile/" + u.uid });
+    const ring = el("div", { class: "compat-score-ring" });
+    ring.innerHTML = '<svg viewBox="0 0 36 36">' +
+      '<circle class="ring-bg"   cx="18" cy="18" r="15.9"/>' +
+      '<circle class="ring-fill" cx="18" cy="18" r="15.9" style="stroke-dasharray:' + dash.toFixed(1) + ' ' + gap.toFixed(1) + ';stroke-dashoffset:25;"/>' +
+      '</svg>';
+    ring.appendChild(el("img", { src: u.photoURL || ("https://api.dicebear.com/7.x/shapes/svg?seed=" + u.uid), alt: u.name || "User" }));
+    if (score > 0) ring.appendChild(el("span", { class: "compat-score-label" }, score + "%"));
+    card.appendChild(ring);
+    card.appendChild(el("div", { class: "compat-name" }, u.name || "User"));
+
+    const sharedItems = sharedTasteItems(state.me, u);
+    if (sharedItems.length) {
+      card.appendChild(el("div", { class: "compat-shared" }, "Both into: " + sharedItems.slice(0, 2).join(", ")));
+    } else if (score > 0) {
+      card.appendChild(el("div", { class: "compat-shared" }, score + "% taste overlap"));
+    } else {
+      card.appendChild(el("div", { class: "compat-shared" }, "Discover their vibe"));
+    }
+
+    const followBtn = el("button", { class: "btn sm " + (iFollow ? "ghost" : "primary") + " compat-follow-btn" },
+      iFollow ? "Following" : "Follow");
+    followBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const meRef = doc(db, "users", state.uid);
+      const themRef = doc(db, "users", u.uid);
+      const batch = writeBatch(db);
+      if (iFollow) { batch.update(meRef, { following: arrayRemove(u.uid) }); batch.update(themRef, { followers: arrayRemove(state.uid) }); }
+      else          { batch.update(meRef, { following: arrayUnion(u.uid) }); batch.update(themRef, { followers: arrayUnion(state.uid) }); }
+      await batch.commit().catch(() => {});
+      state.cache.users.delete(u.uid); state.cache.users.delete(state.uid);
+      iFollow = !iFollow;
+      followBtn.className = "btn sm " + (iFollow ? "ghost" : "primary") + " compat-follow-btn";
+      followBtn.textContent = iFollow ? "Following" : "Follow";
+    });
+    card.appendChild(followBtn);
+    scroller.appendChild(card);
+    };
+
+    // ── First match preview — shown after new users complete taste quiz ─────────
+    const _showFirstMatchPreview = async () => {
+    if (!state.uid || !state.me?.tasteAnswers) return;
+    try {
+      const snap = await getDocs(query(collection(db, "users"), limit(60)));
+      const candidates = snap.docs
+        .map(d => ({ uid: d.id, ...d.data() }))
+        .filter(u => u.uid !== state.uid);
+      if (!candidates.length) return;
+
+      const scored = candidates.map(u => ({ u, score: computeCompatibility(state.me, u) }));
+      scored.sort((a, b) => b.score - a.score);
+      const best = scored[0];
+      if (!best || best.score === 0) return;
+
+      const { u, score } = best;
+      const sharedItems = sharedTasteItems(state.me, u);
+      const why = sharedItems.length
+        ? "You both vibe with: " + sharedItems.slice(0, 2).join(", ")
+        : score + "% taste compatibility";
+
+      // Insert as first card in feed if feed is visible
+      const feedList = document.querySelector(".feed-list");
+      if (!feedList) return;
+
+      const card = el("div", { class: "first-match-card", onclick: () => location.hash = "#profile/" + u.uid },
+        el("img", { class: "avatar md", src: u.photoURL || ("https://api.dicebear.com/7.x/shapes/svg?seed=" + u.uid) }),
+        el("div", { class: "fmc-meta" },
+          el("div", { class: "fmc-label" }, "✦ Your First Match"),
+          el("div", { class: "fmc-name" }, u.name || "User"),
+          el("div", { class: "fmc-why" }, why),
+        ),
+        el("div", { class: "fmc-score" }, score + "%"),
+      );
+      feedList.insertBefore(card, feedList.firstChild);
+    } catch (err) {
+      console.warn("_showFirstMatchPreview:", err);
+    }
+    };
+
+    // =========================================================================
 // MUTUALS — Daily & All-Time mutual score engine
 // Computes closeness from shared orbits + shared comment threads
 // =========================================================================
@@ -1325,7 +1611,7 @@ const renderFeed = (root) => {
 
   const stub = el("div", { class: "composer-stub" },
     el("img", { class: "avatar sm", src: avatarFor(state.me), style: "cursor:pointer;", onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${state.uid}`; } }),
-    el("button", { onclick: () => openCreatePost() }, `What's orbiting your mind, ${(state.me?.name || "there").split(" ")[0]}?`)
+    el("button", { onclick: () => openCreatePost() }, `What's on your vibe, ${(state.me?.name || "there").split(" ")[0]}?`)
   );
   wrap.appendChild(stub);
 
@@ -1358,20 +1644,11 @@ const renderFeed = (root) => {
     });
   });
 
-  // Trending lane container (filled later)
-  const trendingLane = el("div", { class: "trending-lane hidden" });
-  trendingLane.appendChild(el("div", { class: "trending-head" },
-    el("i", { class: "ri-fire-fill" }), "Trending in your orbit"
-  ));
-  const trendingScroller = el("div", { class: "trending-scroller" });
-  trendingLane.appendChild(trendingScroller);
-  feedMainContent.appendChild(trendingLane);
-
   // Posts container
   const list = el("div", { class: "feed-list" });
   list.appendChild(el("div", { class: "empty" },
     el("i", { class: "ri-loader-4-line" }),
-    el("div", { class: "t" }, "Loading your orbit"),
+    el("div", { class: "t" }, "Loading your vibe"),
   ));
   feedMainContent.appendChild(list);
   root.appendChild(wrap);
@@ -1383,11 +1660,10 @@ const renderFeed = (root) => {
     if (_newIds === _lastPostIds && list.children.length > 0) return;
     _lastPostIds = _newIds;
     list.innerHTML = "";
-    trendingScroller.innerHTML = "";
     if (snap.empty) {
       list.appendChild(el("div", { class: "empty" },
         el("i", { class: "ri-planet-line" }),
-        el("div", { class: "t" }, "Your orbit is quiet"),
+        el("div", { class: "t" }, "Your vibe is quiet"),
         el("div", {}, "Be the first to post — tap Create above."),
       ));
       return;
@@ -1398,34 +1674,67 @@ const renderFeed = (root) => {
     const authors = await Promise.all([...new Set(posts.map((p) => p.authorUid))].map(fetchUser));
     const byUid = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
 
-    // Trending = top 5 by orbitCount with at least 3 orbits
-    const trending = [...posts].filter((p) => (p.orbitCount || 0) >= 3)
-      .sort((a, b) => (b.orbitCount || 0) - (a.orbitCount || 0)).slice(0, 5);
-    if (trending.length) {
-      trendingLane.classList.remove("hidden");
-      trending.forEach((p) => trendingScroller.appendChild(renderTrendingCard(p, byUid[p.authorUid])));
-    } else {
-      trendingLane.classList.add("hidden");
-    }
-
-    // Algorithm: score posts by affinity (following > hashtag match > engagement > recency)
-    // A random component (+0–15) shuffles the feed differently on each fresh load
+    // ── Algorithm: compatibility-first ranking ──────────────────────────────
+    // Primary signal = taste compatibility (Jaccard match 0–100).
+    // Secondary = following, hashtag overlap, engagement, recency jitter.
     const _following = state.me?.following || [];
     const _interests = state.me?.interests || [];
+
+    // Pre-compute compatibility scores for all unique authors (parallel)
+    const _uniqueAuthors = [...new Set(posts.map(p => p.authorUid).filter(u => u && u !== state.uid))];
+    const _compatScores = {};
+    await Promise.all(_uniqueAuthors.map(async (uid) => {
+      _compatScores[uid] = await getCompatibility(uid).catch(() => 0);
+    }));
+
     const _scored = posts.map((p) => {
       let score = 0;
-      if (_following.includes(p.authorUid)) score += 50;
-      if (_interests.some((tag) => (p.hashtags || []).includes(tag))) score += 30;
-      score += Math.min((p.orbitCount || 0) * 2 + (p.commentCount || 0), 30);
-      score += Math.max(0, 20 - Math.floor(((Date.now() - (p.createdAt?.toMillis?.() || Date.now())) / 3600000)));
-      score += Math.random() * 15; // freshness jitter — varies order each fresh load
-      return { p, score };
+      const compat = _compatScores[p.authorUid] || 0;
+      score += compat * 0.9;                             // compatibility is the spine
+      if (_following.includes(p.authorUid)) score += 35;
+      if (_interests.some((tag) => (p.hashtags || []).includes(tag))) score += 20;
+      score += Math.min((p.orbitCount || 0) * 1.5 + (p.commentCount || 0), 25);
+      score += Math.max(0, 15 - Math.floor(((Date.now() - (p.createdAt?.toMillis?.() || Date.now())) / 3600000)));
+      score += Math.random() * 10; // freshness jitter
+      return { p, score, compat };
     });
     _scored.sort((a, b) => b.score - a.score);
+
+    // Taste map banner — shown once above the feed for users with a taste profile
+    if (!list._tasteMapShown && state.me?.tasteAnswers && Object.keys(state.me.tasteAnswers).length) {
+      list._tasteMapShown = true;
+      const banner = el("div", { class: "taste-map-banner" },
+        el("div", { class: "tmb-icon" }, "✦"),
+        el("div", { class: "tmb-body" },
+          el("div", { class: "tmb-title" }, "Your Taste Map"),
+          el("div", { class: "tmb-sub" }, "See what you're into — and who matches."),
+        ),
+        el("i", { class: "ri-arrow-right-line", style: "color:var(--text-mute);flex-shrink:0;" }),
+      );
+      banner.addEventListener("click", openTasteProfileSheet);
+      list.appendChild(banner);
+    }
+
     const _suggTypes = ["people", "groups", "spaces"];
     let _suggShown = 0;
-    _scored.forEach(({ p }, idx) => {
-      list.appendChild(renderPost(p, byUid[p.authorUid]));
+    for (let idx = 0; idx < _scored.length; idx++) {
+      const { p, compat } = _scored[idx];
+      const postEl = renderPost(p, byUid[p.authorUid], { hideComments: true });
+      list.appendChild(postEl);
+
+      // "Why you're seeing this" signal — shown for any meaningful compatibility
+      if (compat >= 40 && byUid[p.authorUid] && p.authorUid !== state.uid) {
+        const firstName = (byUid[p.authorUid].name || "them").split(" ")[0];
+        const shared = sharedTasteItems(state.me, byUid[p.authorUid]);
+        const label = shared.length
+          ? `You and ${firstName} both vibe with: ${shared[0]}`
+          : `${compat}% taste match with ${firstName}`;
+        postEl.appendChild(el("div", { class: "why-signal" },
+          el("i", { class: "ri-fire-fill" }),
+          label
+        ));
+      }
+
       // Suggestion card at post 4, then every 7 after that
       if (idx === 4 || (idx > 4 && (idx - 4) % 7 === 0)) {
         const type = _suggTypes[_suggShown % 3];
@@ -1434,7 +1743,7 @@ const renderFeed = (root) => {
         else if (type === "groups") list.appendChild(renderInlineGroupSuggestion());
         else list.appendChild(renderInlineSpaceSuggestion());
       }
-    });
+    }
   });
 
   // store unsub globally and on root so route changes can clean up
@@ -1442,19 +1751,6 @@ const renderFeed = (root) => {
   root._unsub = unsub;
 };
 
-const renderTrendingCard = (p, author) => {
-  return el("div", { class: "trending-card", onclick: () => location.hash = `#feed` /* stays; could open detail */ },
-    el("div", { class: "t-head" },
-      el("img", { class: "avatar xs", src: avatarFor(author), onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${author?.uid}`; } }),
-      el("div", { class: "t-name" }, author?.name || "User"),
-    ),
-    el("div", { class: "t-text", text: (p.text || "").slice(0, 140) }),
-    el("div", { class: "t-meta" },
-      el("i", { class: "ri-fire-fill", style: "color: var(--grad-2);" }),
-      `${p.orbitCount || 0} Orbits · ${fmtTime(p.createdAt)}`
-    ),
-  );
-};
 
 // =========================================================================
 // 8a. MEDIA CAROUSEL / GRID
@@ -1790,7 +2086,7 @@ const renderPost = (p, author, opts = {}) => {
         notifyUser(author.uid, state.me?.name || "Someone", "orbited your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
       ).catch(() => {});
     }
-  }}, orbitIcon, el("span", {}, "Orbit · "), orbitCount);
+  }}, orbitIcon, el("span", {}, "Vibe · "), orbitCount);
 
   const saveIcon = (state.me?.saved || []).includes(p.id) ? "ri-bookmark-fill" : "ri-bookmark-line";
 
@@ -1808,7 +2104,7 @@ const renderPost = (p, author, opts = {}) => {
       el("button", { class: "post-act", onclick: async (e) => {
         e.stopPropagation();
         const url = `${location.origin}${location.pathname}#post/${p.id}`;
-        try { await navigator.share?.({ title: "Orbit", text: p.text || "Check this out", url }); }
+        try { await navigator.share?.({ title: "Vibe", text: p.text || "Check this out", url }); }
         catch { await navigator.clipboard.writeText(url); toast("Link copied"); }
       }},
         el("i", { class: "ri-share-forward-line" }),
@@ -2397,138 +2693,201 @@ const renderGroups = (root) => {
 // 11. EXPLORE / SAVED
 // =========================================================================
 const renderExplore = (root, hashtagFilter = null) => {
-  const title = hashtagFilter ? `#${hashtagFilter}` : "Explore";
-  const head = el("div", { class: "section-head" },
-    hashtagFilter
-      ? el("button", { class: "icon-btn", style: "margin-right:8px;", onclick: () => history.back() },
-          el("i", { class: "ri-arrow-left-line" }))
-      : null,
-    el("h2", {}, title),
-  );
-  root.appendChild(head);
 
-  // ── Search bar ──────────────────────────────────────────────────────────
-  const searchWrap = el("div", { class: "explore-search-wrap" });
-  const searchInput = el("input", { type: "text", class: "explore-search-input", placeholder: "Search people, hashtags…" });
-  const searchResults = el("div", { class: "explore-search-results hidden" });
-  searchWrap.appendChild(el("div", { class: "explore-search-box" }, el("i", { class: "ri-search-line" }), searchInput));
-  searchWrap.appendChild(searchResults);
-  root.appendChild(searchWrap);
-
-  let _searchDebounce = null;
-  searchInput.addEventListener("input", () => {
-    clearTimeout(_searchDebounce);
-    const q1 = searchInput.value.trim().toLowerCase();
-    if (!q1) { searchResults.classList.add("hidden"); searchResults.innerHTML = ""; return; }
-    _searchDebounce = setTimeout(async () => {
-      searchResults.innerHTML = "";
-      searchResults.classList.remove("hidden");
-      if (q1.startsWith("#")) {
-        searchResults.appendChild(el("div", { class: "explore-search-item", onclick: () => location.hash = `#explore/${q1.slice(1)}` },
-          el("i", { class: "ri-hashtag" }), el("span", {}, q1)));
-        return;
+  // ── Hashtag view ────────────────────────────────────────────────────────
+  if (hashtagFilter) {
+    root.appendChild(el("div", { class: "section-head" },
+      el("button", { class: "icon-btn", style: "margin-right:8px;", onclick: () => history.back() },
+        el("i", { class: "ri-arrow-left-line" })),
+      el("h2", {}, `#${hashtagFilter}`),
+    ));
+    const grid = el("div", { class: "grid-3" });
+    root.appendChild(grid);
+    onSnapshot(
+      query(collection(db, "posts"), where("hashtags", "array-contains", hashtagFilter.toLowerCase()), limit(60)),
+      (snap) => {
+        grid.innerHTML = "";
+        if (snap.empty) {
+          grid.appendChild(el("div", { class: "empty", style: "grid-column:1/-1;" },
+            el("i", { class: "ri-hashtag" }),
+            el("div", { class: "t" }, `No posts tagged #${hashtagFilter}`)));
+          return;
+        }
+        [...snap.docs]
+          .sort((a, b) => (b.data().createdAt?.seconds || 0) - (a.data().createdAt?.seconds || 0))
+          .forEach((d) => {
+            const p = { id: d.id, ...d.data() };
+            const cell = el("div", { class: "cell", onclick: () => location.hash = `#post/${p.id}` });
+            const mediaItems = Array.isArray(p.media) ? p.media : (p.media ? [p.media] : []);
+            if (mediaItems.length) {
+              const m = mediaItems[0];
+              if (m.type === "video") {
+                cell.appendChild(el("video", { src: m.url, muted: "", playsinline: "", preload: "metadata" }));
+                cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-play-fill" })));
+              } else {
+                cell.appendChild(el("img", { src: m.url, loading: "lazy" }));
+                if (mediaItems.length > 1) cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-image-2-line" })));
+              }
+            } else {
+              cell.appendChild(el("div", { class: "cell-text", text: (p.text || "").slice(0, 80) }));
+            }
+            if (p.text) cell.appendChild(el("div", { class: "cell-overlay", text: (p.text || "").slice(0, 55) }));
+            cell.appendChild(el("span", { class: "cell-views" }, el("i", { class: "ri-eye-line" }), " " + String(p.views || 0)));
+            grid.appendChild(cell);
+          });
       }
-      const snap = await getDocs(query(collection(db, "users"), orderBy("username"), limit(200))).catch(() => null);
-      if (!snap) { searchResults.appendChild(el("div", { class: "explore-search-empty" }, "Search failed")); return; }
-      const matches = snap.docs
-        .map((d) => ({ uid: d.id, ...d.data() }))
-        .filter((u) => u.uid !== state.uid && ((u.name || "").toLowerCase().includes(q1) || (u.username || "").toLowerCase().includes(q1)))
-        .slice(0, 12);
-      if (!matches.length) { searchResults.appendChild(el("div", { class: "explore-search-empty" }, "No matches")); return; }
-      matches.forEach((u) => {
-        searchResults.appendChild(el("div", { class: "explore-search-item", onclick: () => location.hash = `#profile/${u.uid}` },
-          el("img", { class: "avatar xs", src: avatarFor(u) }),
-          el("div", {}, el("div", { class: "esi-name" }, u.name || "User"), el("div", { class: "esi-sub" }, "@" + (u.username || "user"))),
-        ));
-      });
-    }, 250);
-  });
-  document.addEventListener("click", (e) => {
-    if (!searchWrap.contains(e.target)) { searchResults.classList.add("hidden"); }
-  });
-
-  // ── Suggested profiles ──────────────────────────────────────────────────
-  if (!hashtagFilter) {
-    const suggSection = el("div", { class: "explore-suggested" });
-    suggSection.appendChild(el("div", { class: "explore-suggested-head" }, "Suggested for you"));
-    const suggScroller = el("div", { class: "explore-suggested-scroller" });
-    suggSection.appendChild(suggScroller);
-    root.appendChild(suggSection);
-    getDocs(query(collection(db, "users"), orderBy("createdAt", "desc"), limit(30))).then((snap) => {
-      const all = snap.docs.map((d) => ({ uid: d.id, ...d.data() }))
-        .filter((u) => u.uid !== state.uid && !(state.me?.following || []).includes(u.uid));
-      for (let i = all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [all[i], all[j]] = [all[j], all[i]]; }
-      if (!all.length) { suggSection.classList.add("hidden"); return; }
-      all.slice(0, 10).forEach((u) => {
-        let iFollow = (state.me?.following || []).includes(u.uid);
-        const followBtn = el("button", { class: `btn sm ${iFollow ? "ghost" : "primary"}` }, iFollow ? "Following" : "Follow");
-        followBtn.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          const meRef = doc(db, "users", state.uid);
-          const themRef = doc(db, "users", u.uid);
-          const batch = writeBatch(db);
-          if (iFollow) { batch.update(meRef, { following: arrayRemove(u.uid) }); batch.update(themRef, { followers: arrayRemove(state.uid) }); }
-          else { batch.update(meRef, { following: arrayUnion(u.uid) }); batch.update(themRef, { followers: arrayUnion(state.uid) }); }
-          await batch.commit().catch(() => {});
-          state.cache.users.delete(u.uid);
-          state.cache.users.delete(state.uid);
-          iFollow = !iFollow;
-          followBtn.className = `btn sm ${iFollow ? "ghost" : "primary"}`;
-          followBtn.textContent = iFollow ? "Following" : "Follow";
-          if (state.me.following) iFollow ? state.me.following.push(u.uid) : (state.me.following = state.me.following.filter((x) => x !== u.uid));
-        });
-        suggScroller.appendChild(el("div", { class: "explore-sugg-card", onclick: () => location.hash = `#profile/${u.uid}` },
-          el("img", { class: "avatar md", src: avatarFor(u) }),
-          el("div", { class: "esc-name" }, u.name || "User"),
-          el("div", { class: "esc-sub" }, "@" + (u.username || "user")),
-          followBtn,
-        ));
-      });
-    }).catch(() => {});
+    );
+    return;
   }
 
+  // ── Full Discover page ───────────────────────────────────────────────────
+
+  // Hero search bar
+  const searchHero = el("div", { class: "disc-search-hero" });
+  const searchInput = el("input", { type: "text", class: "disc-search-input", placeholder: "Search people, posts, hashtags…" });
+  const searchResults = el("div", { class: "disc-search-results hidden" });
+  searchHero.appendChild(el("div", { class: "disc-search-box" },
+    el("i", { class: "ri-search-2-line" }), searchInput, el("span", { class: "disc-search-kbd" }, "⌘K")
+  ));
+  searchHero.appendChild(searchResults);
+  root.appendChild(searchHero);
+
+  // Search logic (people + hashtags in one list)
+  let _debounce = null;
+  const _runSearch = async (raw) => {
+    const q1 = raw.trim().toLowerCase();
+    searchResults.innerHTML = "";
+    if (!q1) { searchResults.classList.add("hidden"); return; }
+    searchResults.classList.remove("hidden");
+
+    // Hashtag shortcut row
+    if (q1.startsWith("#") || /^[a-z]/.test(q1)) {
+      const tag = q1.startsWith("#") ? q1.slice(1) : q1;
+      searchResults.appendChild(el("div", { class: "dsr-item dsr-tag",
+          onclick: () => location.hash = `#explore/${tag}` },
+        el("div", { class: "dsr-tag-icon" }, el("i", { class: "ri-hashtag" })),
+        el("div", {}, el("div", { class: "dsr-primary" }, `#${tag}`), el("div", { class: "dsr-sub" }, "See all posts"))
+      ));
+    }
+
+    const snap = await getDocs(query(collection(db, "users"), orderBy("username"), limit(200))).catch(() => null);
+    if (!snap) return;
+    const matches = snap.docs.map(d => ({ uid: d.id, ...d.data() }))
+      .filter(u => u.uid !== state.uid &&
+        ((u.name || "").toLowerCase().includes(q1) || (u.username || "").toLowerCase().includes(q1)))
+      .slice(0, 8);
+    matches.forEach((u) => {
+      searchResults.appendChild(el("div", { class: "dsr-item", onclick: () => location.hash = `#profile/${u.uid}` },
+        el("img", { class: "dsr-avatar", src: avatarFor(u) }),
+        el("div", {},
+          el("div", { class: "dsr-primary" }, u.name || "User"),
+          el("div", { class: "dsr-sub" }, "@" + (u.username || "user"))
+        )
+      ));
+    });
+    if (!matches.length && !q1.startsWith("#")) {
+      searchResults.appendChild(el("div", { class: "dsr-empty" }, `No results for "${raw}"`));
+    }
+  };
+  searchInput.addEventListener("input", () => {
+    clearTimeout(_debounce);
+    _debounce = setTimeout(() => _runSearch(searchInput.value), 220);
+  });
+  searchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { searchResults.classList.add("hidden"); searchInput.blur(); }
+  });
+  document.addEventListener("click", (e) => {
+    if (!searchHero.contains(e.target)) searchResults.classList.add("hidden");
+  });
+  // Keyboard shortcut ⌘K / Ctrl+K
+  document.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "k") { e.preventDefault(); searchInput.focus(); }
+  });
+
+  // Trending hashtag chips
+  const tagsSection = el("div", { class: "disc-tags-section" });
+  tagsSection.appendChild(el("div", { class: "disc-section-label" },
+    el("i", { class: "ri-hashtag" }), "Trending topics"
+  ));
+  const tagsRow = el("div", { class: "disc-tags-row" });
+  tagsSection.appendChild(tagsRow);
+  root.appendChild(tagsSection);
+
+  // Pull top hashtags from recent posts client-side
+  getDocs(query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(100))).then((snap) => {
+    const freq = {};
+    snap.docs.forEach(d => {
+      (d.data().hashtags || []).forEach(t => { freq[t] = (freq[t] || 0) + 1; });
+    });
+    const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 14);
+    if (!sorted.length) { tagsSection.classList.add("hidden"); return; }
+    sorted.forEach(([tag, count]) => {
+      tagsRow.appendChild(el("button", {
+        class: "disc-tag-chip",
+        onclick: () => location.hash = `#explore/${tag}`
+      }, `#${tag}`, el("span", { class: "disc-tag-count" }, String(count))));
+    });
+  }).catch(() => tagsSection.classList.add("hidden"));
+
+  // Section header: Trending posts
+  root.appendChild(el("div", { class: "disc-section-label disc-trending-label" },
+    el("i", { class: "ri-fire-fill" }), "Trending right now"
+  ));
+
+  // Post grid — sorted by engagement score (orbits + likes + views)
   const grid = el("div", { class: "grid-3" });
   root.appendChild(grid);
 
-  // No compound orderBy on hashtag queries — sort client-side to avoid composite index
-  const baseQ = hashtagFilter
-    ? query(collection(db, "posts"), where("hashtags", "array-contains", hashtagFilter.toLowerCase()), limit(60))
-    : query(collection(db, "posts"), orderBy("orbitCount", "desc"), limit(60));
-
-  onSnapshot(baseQ, (snap) => {
-    grid.innerHTML = "";
-    if (snap.empty) {
-      grid.appendChild(el("div", { class: "empty", style: "grid-column:1/-1;" },
-        el("i", { class: hashtagFilter ? "ri-hashtag" : "ri-compass-3-line" }),
-        el("div", { class: "t" }, hashtagFilter ? `No posts tagged #${hashtagFilter}` : "Nothing to explore yet")));
-      return;
-    }
-    // Client-side sort for hashtag queries (no compound index needed)
-    const docs = [...snap.docs].sort((a, b) => {
-      if (hashtagFilter) return (b.data().createdAt?.seconds || 0) - (a.data().createdAt?.seconds || 0);
-      return (b.data().orbitCount || 0) - (a.data().orbitCount || 0);
-    });
-    docs.forEach((d) => {
-      const p = { id: d.id, ...d.data() };
-      const cell = el("div", { class: "cell", onclick: () => location.hash = `#post/${p.id}` });
-      const mediaItems = Array.isArray(p.media) ? p.media : (p.media ? [p.media] : []);
-      if (mediaItems.length) {
-        const m = mediaItems[0];
-        if (m.type === "video") {
-          cell.appendChild(el("video", { src: m.url, muted: "", playsinline: "", preload: "metadata" }));
-          cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-play-fill" })));
-        } else {
-          cell.appendChild(el("img", { src: m.url, loading: "lazy" }));
-          if (mediaItems.length > 1) cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-image-2-line" })));
-        }
-      } else {
-        cell.appendChild(el("div", { class: "cell-text", text: (p.text || "").slice(0, 80) }));
+  onSnapshot(
+    query(collection(db, "posts"), orderBy("orbitCount", "desc"), limit(60)),
+    (snap) => {
+      grid.innerHTML = "";
+      if (snap.empty) {
+        grid.appendChild(el("div", { class: "empty", style: "grid-column:1/-1;" },
+          el("i", { class: "ri-compass-3-line" }),
+          el("div", { class: "t" }, "Nothing trending yet"),
+          el("div", {}, "Be the first to post something amazing.")));
+        return;
       }
-      if (p.text) cell.appendChild(el("div", { class: "cell-overlay", text: (p.text || "").slice(0, 55) }));
-      cell.appendChild(el("span", { class: "cell-views" }, el("i", { class: "ri-eye-line" }), " " + String(p.views || 0)));
-      grid.appendChild(cell);
-    });
-  });
+      // Composite score: orbits ×3 + likes ×2 + views ×0.1 + recency boost
+      const now = Date.now() / 1000;
+      const docs = [...snap.docs].sort((a, b) => {
+        const score = (d) => {
+          const data = d.data();
+          const age = now - (data.createdAt?.seconds || now);
+          const recency = Math.exp(-age / (60 * 60 * 48)); // 48h half-life
+          return (data.orbitCount || 0) * 3 + (data.likes?.length || 0) * 2 + (data.views || 0) * 0.1 + recency * 10;
+        };
+        return score(b) - score(a);
+      });
+      docs.forEach((d) => {
+        const p = { id: d.id, ...d.data() };
+        const cell = el("div", { class: "cell", onclick: () => location.hash = `#post/${p.id}` });
+        const mediaItems = Array.isArray(p.media) ? p.media : (p.media ? [p.media] : []);
+        if (mediaItems.length) {
+          const m = mediaItems[0];
+          if (m.type === "video") {
+            cell.appendChild(el("video", { src: m.url, muted: "", playsinline: "", preload: "metadata" }));
+            cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-play-fill" })));
+          } else {
+            cell.appendChild(el("img", { src: m.url, loading: "lazy" }));
+            if (mediaItems.length > 1) cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-image-2-line" })));
+          }
+        } else {
+          cell.appendChild(el("div", { class: "cell-text", text: (p.text || "").slice(0, 80) }));
+        }
+        if (p.text) cell.appendChild(el("div", { class: "cell-overlay", text: (p.text || "").slice(0, 55) }));
+        const eng = (p.orbitCount || 0) + (p.likes?.length || 0);
+        cell.appendChild(el("span", { class: "cell-views" },
+          eng > 0
+            ? [el("i", { class: "ri-fire-fill", style: "color:var(--grad-1)" }), ` ${eng}`]
+            : [el("i", { class: "ri-eye-line" }), ` ${p.views || 0}`]
+        ));
+        grid.appendChild(cell);
+      });
+    }
+  );
+
 };
 
 const renderSaved = (root) => {
@@ -2549,7 +2908,7 @@ const renderSaved = (root) => {
     const posts = docs.filter((d) => d.exists()).map((d) => ({ id: d.id, ...d.data() }));
     const authors = await Promise.all([...new Set(posts.map((p) => p.authorUid))].map(fetchUser));
     const map = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
-    posts.forEach((p) => list.appendChild(renderPost(p, map[p.authorUid])));
+    posts.forEach((p) => list.appendChild(renderPost(p, map[p.authorUid], { hideComments: true })));
   });
 };
 
@@ -2821,7 +3180,19 @@ const renderSettings = (root) => {
           el("div", { class: "t" }, state.me.verified ? "Verified ✓" : "Get verified by location"),
           el("div", { class: "d" }, state.me.verified
             ? `You're verified${state.me.location?.city ? " in " + state.me.location.city : ""}.`
-            : "Allow Orbit to read your location once. We only store an approximate area, never live tracking."),
+            : "Allow Vibe to read your location once. We only store an approximate area, never live tracking."),
+
+            // Taste quiz button in settings
+            el("div", { class: "settings-row" },
+              el("div", { class: "settings-row-label" },
+                el("i", { class: "ri-heart-3-line", style: "color:var(--grad-1);" }),
+                el("div", {},
+                  el("div", { class: "settings-row-title" }, "Taste Profile"),
+                  el("div", { class: "settings-row-sub" }, state.me?.tasteAnswers ? "Edit your taste matches" : "Set up compatibility matching"),
+                ),
+              ),
+              el("button", { class: "btn sm primary", onclick: () => openTasteProfileSheet() }, "Open"),
+            ),
         ),
         state.me.verified
           ? el("button", { class: "btn ghost", onclick: async () => {
@@ -2838,7 +3209,7 @@ const renderSettings = (root) => {
       el("div", { class: "row" },
         el("div", { class: "label" },
           el("div", { class: "t" }, "Browser notifications"),
-          el("div", { class: "d" }, "Get pings for new messages and Orbits.")),
+          el("div", { class: "d" }, "Get pings for new messages and Vibes.")),
         el("button", { class: "btn ghost", onclick: async () => {
           const p = await Notification.requestPermission();
           toast(p === "granted" ? "Notifications enabled" : "Notifications denied");
@@ -2865,13 +3236,13 @@ const renderSettings = (root) => {
     ),
 
     el("div", { class: "group" },
-      el("h3", {}, el("i", { class: "ri-vip-crown-line", style: "color:var(--grad-1);margin-right:6px;" }), "Orbit Pro"),
+      el("h3", {}, el("i", { class: "ri-vip-crown-line", style: "color:var(--grad-1);margin-right:6px;" }), "Vibe Pro"),
       el("div", { class: "row" },
         el("div", { class: "label" },
           el("div", { class: "t" }, state.me.isPro ? "Pro activated ✦" : "Go Professional"),
           el("div", { class: "d" }, state.me.isPro
-            ? "You have access to Orbit Score, Tech Stack, Skill Badges, Build in Public and Project Showcase."
-            : "Unlock developer features: Orbit Score, Tech Stack, Skill Badges, Build in Public & Project Showcase."),
+            ? "You have access to Vibe Score, Tech Stack, Skill Badges, Build in Public and Project Showcase."
+            : "Unlock developer features: Vibe Score, Tech Stack, Skill Badges, Build in Public & Project Showcase."),
         ),
         state.me.isPro
           ? el("span", { class: "pro-active-badge" }, el("i", { class: "ri-vip-crown-fill" }), " Active")
@@ -2881,7 +3252,7 @@ const renderSettings = (root) => {
               await updateDoc(doc(db, "users", state.uid), { isPro: true }).catch(() => {});
               state.me.isPro = true;
               state.cache.users.delete(state.uid);
-              toast("Welcome to Orbit Pro! ✦");
+              toast("Welcome to Vibe Pro! ✦");
               router();
             }}, el("i", { class: "ri-vip-crown-line" }), " Activate Pro"),
       ),
@@ -2996,7 +3367,7 @@ $("#groupForm").addEventListener("submit", async (e) => {
 // Music search uses the Internet Archive's public catalog — no API key,
 // signup, or billing required (see crSearchMusic below).
 const CR_STICKERS = ["🔥","❤️","⭐","👍","🎉","😂","💯","✨","🙌","😍","👏","🥳","😎","💜","🎶","⚡"];
-const CR_TEXT_COLORS = ["#ffffff","#000000","#ff5c7a","#ffb04a","#3fdca0","#5cd3ff","#8b6cff","#ff5cae"];
+const CR_TEXT_COLORS = ["#ffffff","#000000","#ff5c7a","#ffb04a","#3fdca0","#5cd3ff","#e63950","#ff5cae"];
 
 let crState = null;
 const _crFreshState = () => ({
@@ -3852,7 +4223,7 @@ const showOnboardingModal = () => {
   // Header
   modal.appendChild(el("div", { class: "onboard-header" },
     el("div", { class: "onboard-logo" }, el("i", { class: "ri-planet-fill" })),
-    el("h2", {}, `Welcome to Orbit, ${(state.me?.name || "there").split(" ")[0]}! 🚀`),
+    el("h2", {}, `Welcome to Vibe, ${(state.me?.name || "there").split(" ")[0]}! 🚀`),
     el("p", {}, "Follow people, join groups, and discover spaces to get started.")
   ));
 
@@ -4250,16 +4621,16 @@ const _injectAIChatEntry = () => {
     const toneInfo = AI_TONES[state.aiTone] || AI_TONES.friendly;
     return el("div", {
       class: "orbit-ai-entry chat-row",
-      style: "display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer;border-bottom:1px solid var(--border,rgba(255,255,255,0.07));background:linear-gradient(90deg,rgba(108,99,255,0.10) 0%,transparent 100%);flex-shrink:0;",
+      style: "display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer;border-bottom:1px solid var(--border,rgba(255,255,255,0.07));background:linear-gradient(90deg,rgba(230,57,80,0.10) 0%,transparent 100%);flex-shrink:0;",
       onclick: () => location.hash = "#chats/ai",
     },
       el("div", { class: "av", style: "position:relative;" },
-        el("div", { style: "width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#6c63ff,#ff6b9d);display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0;" }, state.aiAvatar),
+        el("div", { style: "width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#e63950,#ff6b6b);display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0;" }, state.aiAvatar),
         el("span", { style: "position:absolute;bottom:1px;right:1px;width:10px;height:10px;border-radius:50%;background:#22c55e;border:2px solid var(--bg2,#1a1a2e);" }),
       ),
       el("div", { class: "meta", style: "min-width:0;flex:1;" },
         el("div", { class: "name", style: "font-weight:700;font-size:15px;" }, state.aiName,
-          el("span", { style: "font-size:10px;font-weight:700;color:#6c63ff;margin-left:6px;background:rgba(108,99,255,.15);padding:1px 6px;border-radius:20px;" }, "AI"),
+          el("span", { style: "font-size:10px;font-weight:700;color:#e63950;margin-left:6px;background:rgba(230,57,80,.15);padding:1px 6px;border-radius:20px;" }, "AI"),
         ),
         el("div", { class: "preview", style: "font-size:12px;color:var(--text3);margin-top:2px;" }, `${toneInfo.emoji} ${toneInfo.label} · Always here for you`),
       ),
@@ -4302,9 +4673,9 @@ const _aiBubbleEl = (m) => {
   const isAI = m.role === "ai";
   const wrap = el("div", { class: `chat-bubble-wrap ${isAI ? "ai" : "user"}`, style: `display:flex;align-items:flex-end;gap:8px;margin:6px 14px;${isAI ? "" : "flex-direction:row-reverse;"}` });
   if (isAI) {
-    wrap.appendChild(el("div", { style: "width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--grad-1,#6c63ff),var(--grad-2,#ff6b9d));display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;" }, state.aiAvatar));
+    wrap.appendChild(el("div", { style: "width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--grad-1,#e63950),var(--grad-2,#ff6b6b));display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;" }, state.aiAvatar));
   }
-  const bubble = el("div", { style: `max-width:75%;padding:10px 14px;border-radius:${isAI ? "4px 18px 18px 18px" : "18px 4px 18px 18px"};background:${isAI ? "var(--bg3,#2a2a3a)" : "var(--primary,#6c63ff)"};color:${isAI ? "var(--text)" : "#fff"};font-size:14px;line-height:1.5;word-break:break-word;` });
+  const bubble = el("div", { style: `max-width:75%;padding:10px 14px;border-radius:${isAI ? "4px 18px 18px 18px" : "18px 4px 18px 18px"};background:${isAI ? "var(--bg3,#2a2a3a)" : "var(--primary,#e63950)"};color:${isAI ? "var(--text)" : "#fff"};font-size:14px;line-height:1.5;word-break:break-word;` });
   bubble.textContent = m.text;
   wrap.appendChild(bubble);
   return wrap;
@@ -4322,7 +4693,7 @@ const _aiRenderMessages = () => {
   _aiMessages.forEach((m) => box.appendChild(_aiBubbleEl(m)));
   if (_aiTyping) {
     const typingWrap = el("div", { style: "display:flex;align-items:flex-end;gap:8px;margin:6px 14px;" });
-    typingWrap.appendChild(el("div", { style: "width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--grad-1,#6c63ff),var(--grad-2,#ff6b9d));display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;" }, state.aiAvatar));
+    typingWrap.appendChild(el("div", { style: "width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--grad-1,#e63950),var(--grad-2,#ff6b6b));display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;" }, state.aiAvatar));
     const dots = el("div", { style: "padding:12px 16px;border-radius:4px 18px 18px 18px;background:var(--bg3,#2a2a3a);" });
     dots.innerHTML = `<span style="display:inline-flex;gap:4px;align-items:center;height:14px;"><span style="width:6px;height:6px;border-radius:50%;background:var(--text3);animation:aiDot 1.2s infinite 0s;"></span><span style="width:6px;height:6px;border-radius:50%;background:var(--text3);animation:aiDot 1.2s infinite .2s;"></span><span style="width:6px;height:6px;border-radius:50%;background:var(--text3);animation:aiDot 1.2s infinite .4s;"></span></span>`;
     typingWrap.appendChild(dots);
@@ -4345,18 +4716,18 @@ const _aiInjectStyles = () => {
     .ai-chat-bottom { flex-shrink:0;border-top:1px solid var(--border,rgba(255,255,255,0.07));padding:10px 14px;display:flex;flex-direction:column;gap:8px;background:var(--bg2,#1a1a2e); }
     .ai-chat-input-row { display:flex;align-items:center;gap:8px; }
     .ai-chat-textarea { flex:1;resize:none;border:1px solid var(--border,rgba(255,255,255,0.12));border-radius:22px;padding:10px 16px;background:var(--bg3,#2a2a3a);color:var(--text);font-size:14px;outline:none;max-height:120px;line-height:1.4; }
-    .ai-chat-textarea:focus { border-color:var(--primary,#6c63ff); }
-    .ai-chat-send-btn { width:40px;height:40px;border-radius:50%;background:var(--primary,#6c63ff);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#fff; }
+    .ai-chat-textarea:focus { border-color:var(--primary,#e63950); }
+    .ai-chat-send-btn { width:40px;height:40px;border-radius:50%;background:var(--primary,#e63950);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#fff; }
     .ai-chat-send-btn:hover { opacity:.85; }
     .ai-settings-sheet { display:flex;flex-direction:column;gap:10px;max-height:80dvh;overflow-y:auto; }
     .ai-settings-section { font-size:11px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--text3);margin-top:8px; }
     .ai-name-input { width:100%;padding:10px 14px;border:1px solid var(--border,rgba(255,255,255,0.12));border-radius:12px;background:var(--bg3);color:var(--text);font-size:14px;outline:none;box-sizing:border-box; }
     .ai-avatar-grid { display:flex;flex-wrap:wrap;gap:8px;margin-top:4px; }
     .ai-avatar-opt { width:42px;height:42px;border-radius:50%;border:2px solid transparent;display:flex;align-items:center;justify-content:center;font-size:22px;cursor:pointer;background:var(--bg3);transition:border-color .15s; }
-    .ai-avatar-opt.sel { border-color:var(--primary,#6c63ff); }
+    .ai-avatar-opt.sel { border-color:var(--primary,#e63950); }
     .ai-tone-list { display:flex;flex-direction:column;gap:6px;margin-top:4px; }
     .ai-tone-opt { display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:12px;border:1px solid transparent;cursor:pointer;background:var(--bg3);transition:border-color .15s; }
-    .ai-tone-opt.sel { border-color:var(--primary,#6c63ff);background:rgba(108,99,255,.1); }
+    .ai-tone-opt.sel { border-color:var(--primary,#e63950);background:rgba(230,57,80,.1); }
     .ai-tone-emoji { font-size:18px; }
     .ai-tone-label { font-size:14px;color:var(--text); }
   `;
@@ -4474,9 +4845,9 @@ window._aiOpenSettings = function() {
     state.aiName   = name;
     state.aiAvatar = _pendingAvatar;
     state.aiTone   = _pendingTone;
-    localStorage.setItem("orbit:ai_name",   state.aiName);
-    localStorage.setItem("orbit:ai_avatar", state.aiAvatar);
-    localStorage.setItem("orbit:ai_tone",   state.aiTone);
+    localStorage.setItem("vibe:ai_name",   state.aiName);
+    localStorage.setItem("vibe:ai_avatar", state.aiAvatar);
+    localStorage.setItem("vibe:ai_tone",   state.aiTone);
     overlay.remove();
     toast(`${state.aiAvatar} ${state.aiName} is ready!`);
     // Re-render AI chat if open
@@ -4500,7 +4871,7 @@ const renderAIChat = async (root) => {
   // Header
   const header = el("div", { class: "ai-chat-header" },
     el("button", { class: "icon-btn", onclick: () => history.back() }, el("i", { class: "ri-arrow-left-line" })),
-    el("div", { style: "width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,var(--grad-1,#6c63ff),var(--grad-2,#ff6b9d));display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;" }, state.aiAvatar),
+    el("div", { style: "width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,var(--grad-1,#e63950),var(--grad-2,#ff6b6b));display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;" }, state.aiAvatar),
     el("div", { style: "flex:1;min-width:0;" },
       el("div", { style: "font-weight:700;font-size:15px;" }, state.aiName),
       el("div", { style: "font-size:12px;color:var(--text3);" }, `${toneInfo.emoji} ${toneInfo.label}`),
