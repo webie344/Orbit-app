@@ -1,5 +1,5 @@
 // =========================================================================
-// Vibe — app.js
+// Orbit — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
 // Profile + Settings + Theme + Verified-by-location.
 // Chat + DM logic lives in chat.js (it imports state from this file).
@@ -59,9 +59,9 @@ export const state = {
     users: new Map(), // uid -> profile snapshot
   },
   // AI assistant settings (persisted in localStorage)
-  aiName:   localStorage.getItem("vibe:ai_name")   || "Aria",
-  aiAvatar: localStorage.getItem("vibe:ai_avatar") || "🤖",
-  aiTone:   localStorage.getItem("vibe:ai_tone")   || "friendly",
+  aiName:   localStorage.getItem("orbit:ai_name")   || "Aria",
+  aiAvatar: localStorage.getItem("orbit:ai_avatar") || "🤖",
+  aiTone:   localStorage.getItem("orbit:ai_tone")   || "friendly",
 };
 
 // =========================================================================
@@ -154,43 +154,34 @@ function _renderFeedOverlays(wrap, overlays) {
   wrap.appendChild(layer);
 }
 
-// Browsers block unmuted autoplay until the user has interacted with the
-// page at least once. We unlock on the very first tap/click/key anywhere
-// (standard pattern) and unmute any songs already playing at that point;
-// until then, songs still autoplay — just muted — so they don't silently
-// fail to start.
-let _audioUnlocked = false;
-const _songAudioWrap = new WeakMap(); // audio -> its post's wrapper element, for liveness pruning
-["pointerdown", "keydown"].forEach((evt) => {
-  document.addEventListener(evt, () => {
-    if (_audioUnlocked) return;
-    _audioUnlocked = true;
-    _activeSongAudios.forEach((a) => { if (!a.paused) a.muted = false; });
-  }, { once: true, capture: true });
-});
-
-// Attaches an attached song to a post so it just plays quietly in the
-// background, TikTok-style — mixed underneath the video's own audio, no
-// overlay bar, no mute toggle. Image/carousel posts (no native audio) play
-// the song at normal volume while visible.
+// Attaches an attached song to a post: plays/pauses in sync with visibility
+// (image/carousel posts) or with the video's own play state (video posts),
+// starting muted like Facebook/TikTok — tap the speaker to hear it.
 function _wireSongPlayback(wrap, song, videoEl) {
   if (!song?.url) return;
   const audio = new Audio(song.url);
-  audio.loop = true; audio.preload = "none";
-  audio.volume = videoEl ? 0.22 : 0.9; // ducked under the clip's own audio when there is one
-  _activeSongAudios.add(audio);
-  _songAudioWrap.set(audio, wrap);
-  const play = () => { audio.muted = !_audioUnlocked; audio.play().catch(() => {}); };
+  audio.loop = true; audio.muted = true; audio.preload = "none";
+  const soundBtn = el("button", { class: "post-sound-toggle" }, el("i", { class: "ri-volume-mute-line" }));
+  const songBar = el("div", { class: "post-song-bar" }, el("i", { class: "ri-music-2-fill" }),
+    el("span", {}, el("span", { class: "marquee" }, `${song.name} — ${song.artist}`)));
+  wrap.appendChild(songBar);
+  wrap.appendChild(soundBtn);
+  soundBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    audio.muted = !audio.muted;
+    if (videoEl) videoEl.muted = true; // song replaces the clip's own audio
+    soundBtn.querySelector("i").className = audio.muted ? "ri-volume-mute-line" : "ri-volume-up-line";
+    if (!audio.muted) audio.play().catch(() => {});
+  });
   if (videoEl) {
-    // Video keeps its own audio; the song just plays underneath it.
-    videoEl.addEventListener("play", () => { audio.currentTime = videoEl.currentTime % (audio.duration || 1e9); play(); });
+    videoEl.muted = true; // song is the only audio source for posts with music
+    videoEl.addEventListener("play", () => { audio.currentTime = videoEl.currentTime % (audio.duration || 1e9); audio.play().catch(() => {}); });
     videoEl.addEventListener("pause", () => audio.pause());
     videoEl.addEventListener("seeked", () => { audio.currentTime = videoEl.currentTime % (audio.duration || 1e9); });
-    videoEl.addEventListener("emptied", () => { audio.pause(); _activeSongAudios.delete(audio); }, { once: true });
   } else {
     const io = new IntersectionObserver((entries) => {
-      if (!document.body.contains(wrap)) { audio.pause(); _activeSongAudios.delete(audio); io.disconnect(); return; }
-      if (entries[0].isIntersecting) play(); else audio.pause();
+      if (!document.body.contains(wrap)) { audio.pause(); io.disconnect(); return; }
+      if (entries[0].isIntersecting) audio.play().catch(() => {}); else audio.pause();
     }, { threshold: 0.6 });
     io.observe(wrap);
   }
@@ -246,19 +237,7 @@ const buildVideoPlayer = (url, opts = {}) => {
     }
   }, { passive: true });
 
-  // _userPaused: set when the user explicitly taps pause, cleared on explicit play.
-  // The IntersectionObserver respects this flag and will never auto-resume a
-  // video that the user intentionally stopped.
-  let _userPaused = false;
-  const togglePlay = () => {
-    if (video.paused || video.ended) {
-      _userPaused = false;
-      video.play().catch(() => {});
-    } else {
-      _userPaused = true;
-      video.pause();
-    }
-  };
+  const togglePlay = () => { video.paused ? video.play() : video.pause(); };
   overlay.onclick = togglePlay;
   playSmBtn.onclick = (e) => { e.stopPropagation(); togglePlay(); };
   video.addEventListener("play",  () => {
@@ -290,25 +269,11 @@ const buildVideoPlayer = (url, opts = {}) => {
   fullBtn.onclick = (e) => { e.stopPropagation(); (video.requestFullscreen || video.webkitRequestFullscreen || (() => {})).call(video); };
 
   // ── Play on scroll into view / pause on scroll out ────────────────────────
-  // _wasPlaying remembers whether the video was actively playing the last time
-  // it left the viewport.  The IO callback only resumes playback when that flag
-  // is true — this prevents orbit/like button clicks from restarting a video
-  // the user has paused or that had already finished playing (video.play() on
-  // an ended video restarts from 0, which is the root cause of the "replay on
-  // action" bug).  _userPaused is also checked so a deliberate manual pause is
-  // never overridden by a scroll-triggered IO fire.
-  let _wasPlaying = false;
+  // Uses IntersectionObserver: starts playing when ≥50% visible, pauses when less.
   const _io = new IntersectionObserver((entries) => {
     if (entries[0].isIntersecting) {
-      if (_wasPlaying && !_userPaused) {
-        video.play().catch(() => {});
-      } else if (video.currentTime === 0 && !_userPaused) {
-        // Auto-start only on first encounter (video hasn't been touched yet)
-        video.play().catch(() => {});
-      }
+      video.play().catch(() => {});
     } else {
-      // Record whether it was playing so we can decide on re-entry
-      _wasPlaying = !video.paused && !video.ended;
       video.pause();
     }
   }, { threshold: 0.5 });
@@ -706,253 +671,7 @@ export const fetchUser = async (uid) => {
   return data;
 };
 
-
-
-    // =========================================================================
-    // COMPATIBILITY ENGINE — Jaccard similarity matching + taste profile
-    // =========================================================================
-    const TASTE_QUESTIONS = [
-    { id: "music",     q: "What's your music vibe?",
-      opts: ["Hip-hop / R&B", "Pop", "Rock / Alt", "Electronic / EDM", "Afrobeats / Afropop", "Jazz / Soul", "Classical / Ambient", "Country / Folk"] },
-    { id: "shows",     q: "Your go-to watch?",
-      opts: ["Reality TV", "Sci-fi / Fantasy", "Drama / Thriller", "Comedy / Sitcoms", "Anime", "Docs & True Crime", "Action / Adventure", "Horror"] },
-    { id: "energy",    q: "Your social energy?",
-      opts: ["Total introvert", "Mostly introvert", "Balanced", "Mostly extrovert", "Total extrovert"] },
-    { id: "humor",     q: "Your humor style?",
-      opts: ["Dark & dry", "Sarcastic", "Wholesome & silly", "Puns & wordplay", "Deadpan", "Absurdist"] },
-    { id: "dayoff",    q: "Ideal day off?",
-      opts: ["Gaming / streaming", "Outdoors / active", "Creative projects", "Socializing", "Reading / learning", "Cooking / food", "Traveling", "Doing nothing"] },
-    { id: "values",    q: "What matters most to you?",
-      opts: ["Loyalty & trust", "Ambition & growth", "Freedom & independence", "Creativity & self-expression", "Family & community", "Adventure & experiences"] },
-    { id: "comms",     q: "How do you communicate?",
-      opts: ["Voice notes > texts", "Paragraph texter", "Short & direct", "Memes & reaction GIFs", "Voice / video calls", "Whatever fits the vibe"] },
-    { id: "aesthetic", q: "Your aesthetic?",
-      opts: ["Minimal & clean", "Dark & moody", "Colorful & chaotic", "Vintage & nostalgic", "Street / urban", "Soft & cozy", "Techy / futuristic"] },
-    { id: "goals",     q: "What are you building?",
-      opts: ["Career / skills", "A business", "Creative work", "Relationships", "Health & wellness", "Just vibing honestly"] },
-    { id: "content",   q: "What do you post / consume?",
-      opts: ["Tech & dev", "Art & design", "Fashion & style", "Sports & fitness", "Food & lifestyle", "Politics & news", "Entertainment", "Multiple / everything"] },
-    ];
-
-    // Jaccard similarity: intersection / union over two flat arrays
-    function jaccardScore(arrA, arrB) {
-    if (!arrA?.length || !arrB?.length) return 0;
-    const a = new Set(arrA), b = new Set(arrB);
-    let inter = 0;
-    for (const x of a) if (b.has(x)) inter++;
-    const union = a.size + b.size - inter;
-    return union === 0 ? 0 : inter / union;
-    }
-
-    // Weighted compatibility score 0–100 between two user profile objects
-    function computeCompatibility(me, them) {
-    let num = 0, den = 0;
-
-    // Taste answers — highest signal (explicit preferences)
-    const myA   = Object.values(me?.tasteAnswers  || {}).flat().map(v => v.toLowerCase());
-    const theirA = Object.values(them?.tasteAnswers || {}).flat().map(v => v.toLowerCase());
-    if (myA.length || theirA.length) { num += 0.45 * jaccardScore(myA, theirA); den += 0.45; }
-
-    // Interests / hashtags
-    if ((me?.interests?.length || 0) + (them?.interests?.length || 0)) {
-      num += 0.30 * jaccardScore(me.interests || [], them.interests || []); den += 0.30;
-    }
-
-    // Liked/reacted posts in common
-    if ((me?.likedPosts?.length || 0) + (them?.likedPosts?.length || 0)) {
-      num += 0.25 * jaccardScore(me.likedPosts || [], them.likedPosts || []); den += 0.25;
-    }
-
-    return den > 0 ? Math.round((num / den) * 100) : 0;
-    }
-
-    // Session-level compatibility cache
-    const _compatCache = new Map();
-    async function getCompatibility(theirUid) {
-    if (!state.me || !theirUid || theirUid === state.uid) return 0;
-    const key = state.uid + ":" + theirUid;
-    if (_compatCache.has(key)) return _compatCache.get(key);
-    const them = await fetchUser(theirUid).catch(() => null);
-    if (!them) return 0;
-    const score = computeCompatibility(state.me, them);
-    _compatCache.set(key, score);
-    return score;
-    }
-
-    // Shared taste items between two user profiles (for "why" signal)
-    function sharedTasteItems(me, them) {
-    const myA    = Object.values(me?.tasteAnswers  || {}).flat();
-    const theirA = Object.values(them?.tasteAnswers || {}).flat();
-    const set = new Set(theirA.map(v => v.toLowerCase()));
-    return myA.filter(v => set.has(v.toLowerCase()));
-    }
-
-    // ── Taste Quiz ─────────────────────────────────────────────────────────────
-    const openTasteQuiz = (onComplete) => {
-    let current = 0;
-    const answers = {};
-
-    const overlay = el("div", { class: "tq-overlay" });
-    const card    = el("div", { class: "tq-card" });
-    overlay.appendChild(card);
-    document.body.appendChild(overlay);
-
-    const render = () => {
-      card.innerHTML = "";
-      const q    = TASTE_QUESTIONS[current];
-      const prog = Math.round((current / TASTE_QUESTIONS.length) * 100);
-
-      card.appendChild(el("div", { class: "tq-progress-bar" },
-        el("div", { class: "tq-progress-fill", style: "width:" + prog + "%" })
-      ));
-      card.appendChild(el("div", { class: "tq-count" }, (current + 1) + " / " + TASTE_QUESTIONS.length));
-      card.appendChild(el("h2",  { class: "tq-q" }, q.q));
-
-      const opts = el("div", { class: "tq-opts" });
-      q.opts.forEach((opt) => {
-        const selected = answers[q.id] === opt;
-        const btn = el("button", { class: "tq-opt" + (selected ? " selected" : "") }, opt);
-        btn.addEventListener("click", () => {
-          answers[q.id] = opt;
-          if (current < TASTE_QUESTIONS.length - 1) { current++; render(); }
-          else { _saveTasteProfile(answers, overlay, onComplete); }
-        });
-        opts.appendChild(btn);
-      });
-      card.appendChild(opts);
-
-      if (current > 0) {
-        card.appendChild(el("button", { class: "tq-back" }, "← Back",
-          // onclick added as listener to avoid el() onclick conflict
-        ));
-        card.querySelector(".tq-back").addEventListener("click", () => { current--; render(); });
-      }
-      const skip = el("button", { class: "tq-skip" }, "Skip for now");
-      skip.addEventListener("click", () => _saveTasteProfile(answers, overlay, onComplete));
-      card.appendChild(skip);
-    };
-
-    render();
-    };
-
-    // ── Day-one "Your Vibe So Far" summary card ──────────────────────────
-    const showVibeSummary = async () => {
-      const snap = await getDocs(query(collection(db, "users"), limit(60))).catch(() => null);
-      if (!snap) return;
-      const others = snap.docs.map(d => ({ uid: d.id, ...d.data() })).filter(u => u.uid !== state.uid && u.name);
-      const scored = others
-        .map(u => ({ u, score: computeCompatibility(state.me, u) }))
-        .filter(x => x.score >= 25)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 3);
-
-      const overlay = el("div", { class: "vbs-overlay" });
-      const card = el("div", { class: "vbs-card" },
-        el("div", { class: "vbs-icon" }, "✦"),
-        el("div", { class: "vbs-title" }, "Your Vibe Is Set"),
-        el("div", { class: "vbs-sub" }, scored.length
-          ? "Here's who already matches your taste:"
-          : "Post something and we'll start finding your people."),
-      );
-
-      if (scored.length) {
-        const people = el("div", { class: "vbs-people" });
-        scored.forEach(({ u, score }) => {
-          let _following = (state.me?.following || []).includes(u.uid);
-          const followBtn = el("button", { class: `btn sm${_following ? "" : " primary"}` },
-            _following ? "Following" : "Follow");
-          followBtn.addEventListener("click", async (e) => {
-            e.stopPropagation();
-            _following = !_following;
-            followBtn.textContent = _following ? "Following" : "Follow";
-            followBtn.className = `btn sm${_following ? "" : " primary"}`;
-            await updateDoc(doc(db, "users", state.uid), {
-              following: _following ? arrayUnion(u.uid) : arrayRemove(u.uid),
-            }).catch(() => {});
-            await updateDoc(doc(db, "users", u.uid), {
-              followers: _following ? arrayUnion(state.uid) : arrayRemove(state.uid),
-            }).catch(() => {});
-            if (state.me) state.me.following = _following
-              ? [...(state.me.following || []), u.uid]
-              : (state.me.following || []).filter(x => x !== u.uid);
-          });
-          people.appendChild(el("div", { class: "vbs-person", onclick: () => { overlay.remove(); location.hash = `#profile/${u.uid}`; }},
-            el("img", { class: "vbs-avatar", src: avatarFor(u) }),
-            el("div", { class: "vbs-person-info" },
-              el("div", { class: "vbs-person-name" }, u.name || "User"),
-              el("div", { class: "vbs-person-score" },
-                el("i", { class: "ri-fire-fill", style: "color:var(--grad-1)" }),
-                ` ${score}% match`),
-            ),
-            followBtn,
-          ));
-        });
-        card.appendChild(people);
-      }
-
-      card.appendChild(el("button", {
-        class: "btn primary vbs-done",
-        onclick: () => { overlay.remove(); location.hash = "#discover"; }
-      }, "Explore Vibe →"));
-      overlay.appendChild(card);
-      overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
-      document.body.appendChild(overlay);
-    };
-
-    async function _saveTasteProfile(answers, overlay, onComplete) {
-    overlay?.remove();
-    if (!state.uid || !Object.keys(answers).length) {
-      if (typeof onComplete === "function") onComplete(null);
-      return;
-    }
-    try {
-      const interests = [...new Set(
-        Object.values(answers).flat().map(v => v.toLowerCase().replace(/[^a-z0-9]/g, "_"))
-      )];
-      await updateDoc(doc(db, "users", state.uid), {
-        tasteAnswers: answers,
-        interests,
-        tasteProfiledAt: serverTimestamp(),
-      });
-      if (state.me) { state.me.tasteAnswers = answers; state.me.interests = interests; }
-      state.cache.users.delete(state.uid);
-      toast("✨ Taste profile saved! We'll use this to find your people.");
-      if (typeof onComplete === "function") onComplete(answers);
-      // Show day-one summary after a brief delay so toast is visible first
-      setTimeout(() => showVibeSummary().catch(() => {}), 800);
-    } catch (err) {
-      console.warn("saveTasteProfile:", err);
-      toast("Couldn't save taste profile — try again");
-      if (typeof onComplete === "function") onComplete(null);
-    }
-    }
-
-    // Show taste profile summary sheet
-    const openTasteProfileSheet = () => {
-    const answers = state.me?.tasteAnswers || {};
-    const chips   = Object.values(answers).flat();
-    if (!chips.length) { openTasteQuiz(() => {}); return; }
-
-    const modal = el("div", { class: "taste-profile-modal" });
-    const sheet = el("div", { class: "taste-profile-sheet" });
-    const closeBtn = el("button", { class: "icon-btn" }, el("i", { class: "ri-close-line" }));
-    closeBtn.addEventListener("click", () => modal.remove());
-    sheet.appendChild(el("div", { class: "tps-header" },
-      el("h3", {}, "✦ Your Taste Map"),
-      closeBtn,
-    ));
-    const chipsEl = el("div", { class: "tps-chips" });
-    chips.slice(0, 20).forEach(c => chipsEl.appendChild(el("span", { class: "tps-chip" }, c)));
-    sheet.appendChild(chipsEl);
-    const retake = el("button", { class: "btn primary tps-retake" }, "Retake quiz");
-    retake.addEventListener("click", () => { modal.remove(); openTasteQuiz(() => {}); });
-    sheet.appendChild(retake);
-    modal.appendChild(sheet);
-    modal.addEventListener("click", (e) => { if (e.target === modal) modal.remove(); });
-    document.body.appendChild(modal);
-    };
-
-    // =========================================================================
+// =========================================================================
 // 4. CLOUDINARY UPLOAD
 // =========================================================================
 export const uploadToCloudinary = async (file, kind = "image") => {
@@ -981,11 +700,11 @@ export const uploadToCloudinary = async (file, kind = "image") => {
 // =========================================================================
 const applyTheme = (theme) => {
   document.documentElement.setAttribute("data-theme", theme);
-  localStorage.setItem("vibe:theme", theme);
+  localStorage.setItem("orbit:theme", theme);
   $("#themeToggle")?.querySelector("i")?.classList.toggle("ri-sun-line", theme === "dark");
   $("#themeToggle")?.querySelector("i")?.classList.toggle("ri-moon-line", theme === "light");
 };
-const initTheme = () => applyTheme(localStorage.getItem("vibe:theme") || "dark");
+const initTheme = () => applyTheme(localStorage.getItem("orbit:theme") || "dark");
 const toggleTheme = () =>
   applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark");
 
@@ -1034,7 +753,7 @@ const showOnboarding = () => {
 };
 
 const finishOnboarding = () => {
-  localStorage.setItem("vibe_onboarded", "1");
+  localStorage.setItem("orbit_onboarded", "1");
   $("#onboarding").classList.add("hidden");
   showAuth();
 };
@@ -1068,7 +787,7 @@ const ensureUserDoc = async (user, extras = {}) => {
     // Welcome notification for new users
     await addDoc(collection(db, "notifications", user.uid, "items"), {
       type: "welcome",
-      text: `Welcome to Vibe, ${profile.name.split(" ")[0]}! 👋 Explore groups, join spaces, and connect with people who actually get you.`,
+      text: `Welcome to Orbit, ${profile.name.split(" ")[0]}! 👋 Explore groups, join spaces, and connect with people who share your interests.`,
       read: false,
       createdAt: serverTimestamp(),
     }).catch(() => {});
@@ -1076,30 +795,18 @@ const ensureUserDoc = async (user, extras = {}) => {
   }
   // mark online + lastSeen
   await updateDoc(ref, { online: true, lastSeen: serverTimestamp() });
-  // ── Streak tracking ─────────────────────────────────────────────────────
-  const _today = new Date().toISOString().slice(0, 10);
-  const _sd = snap.data();
-  const _lastStreakDate = _sd.lastStreakDate || null;
-  const _streakCount = _sd.streakCount || 0;
-  let _newStreak = _streakCount;
-  if (_lastStreakDate !== _today) {
-    const _yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-    _newStreak = _lastStreakDate === _yesterday ? _streakCount + 1 : 1;
-    await updateDoc(ref, { streakCount: _newStreak, lastStreakDate: _today });
-  }
-  return { uid: user.uid, ...snap.data(), online: true, streakCount: _newStreak };
+  return { uid: user.uid, ...snap.data(), online: true };
 };
 
 onAuthStateChanged(auth, async (user) => {
   if (!user) {
     state.me = null; state.uid = null;
-    if (!localStorage.getItem("vibe_onboarded")) { showOnboarding(); } else { showAuth(); }
+    if (!localStorage.getItem("orbit_onboarded")) { showOnboarding(); } else { showAuth(); }
     return;
   }
   state.uid = user.uid;
   state.me = await ensureUserDoc(user);
   $("#meAvatar").src = avatarFor(state.me);
-  _hideAuthLoader(); // dismiss branded loader if sign-in/up triggered it
   showApp();
   startMyProfileListener();
   startNotifListener();
@@ -1108,26 +815,10 @@ onAuthStateChanged(auth, async (user) => {
   watchOfflineOnUnload();
   startNewsBot(); // kick off official news/sport/social bot (throttled to every 5 h)
   // Show onboarding modal for brand-new users; otherwise prompt incomplete profiles
-  if (state.me._isNew) {
-    showOnboardingModal();
-    // After onboarding, launch taste quiz so new user has a profile immediately
-    setTimeout(() => {
-      if (!state.me?.tasteAnswers) {
-        openTasteQuiz(async (answers) => {
-          if (answers) await _showFirstMatchPreview();
-        });
-      }
-    }, 1800);
-  } else {
-    checkProfileSetup();
-    // Existing user with no taste profile — prompt once per session
-    if (!state.me?.tasteAnswers && !sessionStorage.getItem("vibe:tq_prompted")) {
-      sessionStorage.setItem("vibe:tq_prompted", "1");
-      setTimeout(() => openTasteQuiz(() => {}), 3000);
-    }
-  }
+  if (state.me._isNew) showOnboardingModal();
+  else checkProfileSetup();
   // Notify chat module
-  document.dispatchEvent(new CustomEvent("vibe:auth-ready", { detail: state.me }));
+  document.dispatchEvent(new CustomEvent("orbit:auth-ready", { detail: state.me }));
 });
 
 const watchOfflineOnUnload = () => {
@@ -1175,76 +866,28 @@ document.getElementById("onboardGetStarted")?.addEventListener("click", () => {
   $("#signupForm").classList.remove("hidden");
 });
 
-// ── Orbit-branded auth loader ────────────────────────────────────────────
-// Creates (or reuses) a full-screen overlay with the animated logo mark so
-// users see branded feedback instead of a frozen form during sign-in/up.
-function _showAuthLoader(label = "Signing in…") {
-  let overlay = document.getElementById("vibeAuthLoader");
-  if (!overlay) {
-    overlay = document.createElement("div");
-    overlay.id = "vibeAuthLoader";
-    overlay.innerHTML = `
-      <div class="oal-inner">
-        <div class="oal-logo-wrap">
-          <div class="oal-pulse-ring oal-ring-1"></div>
-          <div class="oal-pulse-ring oal-ring-2"></div>
-          <div class="oal-logo-icon">✦</div>
-        </div>
-        <div class="oal-brand">Vibe</div>
-        <div class="oal-label" id="oalLabel"></div>
-      </div>`;
-    document.body.appendChild(overlay);
-  }
-  overlay.querySelector("#oalLabel").textContent = label;
-  overlay.classList.remove("oal-hidden");
-}
-function _hideAuthLoader() {
-  const overlay = document.getElementById("vibeAuthLoader");
-  if (overlay) {
-    overlay.classList.add("oal-hidden");
-    // Remove from DOM after fade-out so it doesn't block future interactions
-    setTimeout(() => overlay.remove(), 350);
-  }
-}
-
 $("#signinForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
-  _showAuthLoader("Signing in…");
   try {
     await signInWithEmailAndPassword(auth, fd.get("email"), fd.get("password"));
-    // Loader stays visible — Firebase auth state change will trigger the app
-  } catch (err) {
-    _hideAuthLoader();
-    toast(err.message.replace("Firebase: ", ""));
-  }
+  } catch (err) { toast(err.message.replace("Firebase: ", "")); }
 });
 
 $("#signupForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
   const name = fd.get("name"), username = fd.get("username");
-  _showAuthLoader("Creating your Vibe…");
   try {
     const cred = await createUserWithEmailAndPassword(auth, fd.get("email"), fd.get("password"));
     await updateProfile(cred.user, { displayName: name });
     await ensureUserDoc(cred.user, { name, username });
-    // Loader stays visible — auth state listener will navigate to the app
-  } catch (err) {
-    _hideAuthLoader();
-    toast(err.message.replace("Firebase: ", ""));
-  }
+  } catch (err) { toast(err.message.replace("Firebase: ", "")); }
 });
 
 $("#googleBtn").addEventListener("click", async () => {
-  _showAuthLoader("Connecting with Google…");
-  try {
-    await signInWithPopup(auth, new GoogleAuthProvider());
-    // Loader stays — auth state listener handles navigation
-  } catch (err) {
-    _hideAuthLoader();
-    toast(err.message.replace("Firebase: ", ""));
-  }
+  try { await signInWithPopup(auth, new GoogleAuthProvider()); }
+  catch (err) { toast(err.message.replace("Firebase: ", "")); }
 });
 
 $("#signOutBtn").addEventListener("click", async () => {
@@ -1331,30 +974,7 @@ let _feedScrollY = 0;
 let _feedCachedNode = null; // detached feed DOM preserved during post visit
 let _feedUnsub = null;      // kept alive so the cached node stays fresh
 
-// Attached-song <audio> elements are created detached from the DOM (so
-// querySelectorAll("audio") can't find them) — track them here so they can
-// still be paused on navigation.
-const _activeSongAudios = new Set();
-
-// Stops every playing <video>/<audio> in the app — called on every route
-// change so a clip or attached song doesn't keep playing in the background
-// after the user navigates away from the post that started it.
-function _pauseAllMedia(exceptEl = null) {
-  document.querySelectorAll("video, audio").forEach((m) => {
-    if (m === exceptEl) return;
-    try { m.pause(); } catch {}
-  });
-  _activeSongAudios.forEach((a) => {
-    if (a !== exceptEl) { try { a.pause(); } catch {} }
-    // Prune entries whose post node has been removed from the DOM (e.g. the
-    // feed re-rendered) so the set doesn't grow unbounded across a session.
-    const wrap = _songAudioWrap.get(a);
-    if (wrap && !document.body.contains(wrap)) _activeSongAudios.delete(a);
-  });
-}
-
 const router = () => {
-  _pauseAllMedia();
   const hash = (location.hash || "#feed").replace(/^#/, "");
   const [route, ...rest] = hash.split("/");
   const target = routes.includes(route) ? route : "feed";
@@ -1412,7 +1032,7 @@ const router = () => {
       if (rest[0] === "ai") {
         renderAIChat(content);
       } else {
-        document.dispatchEvent(new CustomEvent("vibe:open-chats", { detail: { peerUid: rest[0] || null } }));
+        document.dispatchEvent(new CustomEvent("orbit:open-chats", { detail: { peerUid: rest[0] || null } }));
         // Inject AI entry at top of chat list after chat.js renders
         setTimeout(() => _injectAIChatEntry(), 350);
       }
@@ -1459,95 +1079,7 @@ $$(".nav-item, .sidebar-foot .link").forEach((b) =>
   b.addEventListener("click", () => { if (window.innerWidth <= 640) closeMobileSidebar(); })
 );
 
-
-
-    // ── Compat card helper (used in Explore) ──────────────────────────────────
-    const _appendCompatCard = (scroller, u, score) => {
-    let iFollow = (state.me?.following || []).includes(u.uid);
-    const circumference = 2 * Math.PI * 15.9;
-    const dash = score > 0 ? (score / 100) * circumference : 0;
-    const gap  = circumference - dash;
-
-    const card = el("div", { class: "compat-card", onclick: () => location.hash = "#profile/" + u.uid });
-    const ring = el("div", { class: "compat-score-ring" });
-    ring.innerHTML = '<svg viewBox="0 0 36 36">' +
-      '<circle class="ring-bg"   cx="18" cy="18" r="15.9"/>' +
-      '<circle class="ring-fill" cx="18" cy="18" r="15.9" style="stroke-dasharray:' + dash.toFixed(1) + ' ' + gap.toFixed(1) + ';stroke-dashoffset:25;"/>' +
-      '</svg>';
-    ring.appendChild(el("img", { src: u.photoURL || ("https://api.dicebear.com/7.x/shapes/svg?seed=" + u.uid), alt: u.name || "User" }));
-    if (score > 0) ring.appendChild(el("span", { class: "compat-score-label" }, score + "%"));
-    card.appendChild(ring);
-    card.appendChild(el("div", { class: "compat-name" }, u.name || "User"));
-
-    const sharedItems = sharedTasteItems(state.me, u);
-    if (sharedItems.length) {
-      card.appendChild(el("div", { class: "compat-shared" }, "Both into: " + sharedItems.slice(0, 2).join(", ")));
-    } else if (score > 0) {
-      card.appendChild(el("div", { class: "compat-shared" }, score + "% taste overlap"));
-    } else {
-      card.appendChild(el("div", { class: "compat-shared" }, "Discover their vibe"));
-    }
-
-    const followBtn = el("button", { class: "btn sm " + (iFollow ? "ghost" : "primary") + " compat-follow-btn" },
-      iFollow ? "Following" : "Follow");
-    followBtn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      const meRef = doc(db, "users", state.uid);
-      const themRef = doc(db, "users", u.uid);
-      const batch = writeBatch(db);
-      if (iFollow) { batch.update(meRef, { following: arrayRemove(u.uid) }); batch.update(themRef, { followers: arrayRemove(state.uid) }); }
-      else          { batch.update(meRef, { following: arrayUnion(u.uid) }); batch.update(themRef, { followers: arrayUnion(state.uid) }); }
-      await batch.commit().catch(() => {});
-      state.cache.users.delete(u.uid); state.cache.users.delete(state.uid);
-      iFollow = !iFollow;
-      followBtn.className = "btn sm " + (iFollow ? "ghost" : "primary") + " compat-follow-btn";
-      followBtn.textContent = iFollow ? "Following" : "Follow";
-    });
-    card.appendChild(followBtn);
-    scroller.appendChild(card);
-    };
-
-    // ── First match preview — shown after new users complete taste quiz ─────────
-    const _showFirstMatchPreview = async () => {
-    if (!state.uid || !state.me?.tasteAnswers) return;
-    try {
-      const snap = await getDocs(query(collection(db, "users"), limit(60)));
-      const candidates = snap.docs
-        .map(d => ({ uid: d.id, ...d.data() }))
-        .filter(u => u.uid !== state.uid);
-      if (!candidates.length) return;
-
-      const scored = candidates.map(u => ({ u, score: computeCompatibility(state.me, u) }));
-      scored.sort((a, b) => b.score - a.score);
-      const best = scored[0];
-      if (!best || best.score === 0) return;
-
-      const { u, score } = best;
-      const sharedItems = sharedTasteItems(state.me, u);
-      const why = sharedItems.length
-        ? "You both vibe with: " + sharedItems.slice(0, 2).join(", ")
-        : score + "% taste compatibility";
-
-      // Insert as first card in feed if feed is visible
-      const feedList = document.querySelector(".feed-list");
-      if (!feedList) return;
-
-      const card = el("div", { class: "first-match-card", onclick: () => location.hash = "#profile/" + u.uid },
-        el("img", { class: "avatar md", src: u.photoURL || ("https://api.dicebear.com/7.x/shapes/svg?seed=" + u.uid) }),
-        el("div", { class: "fmc-meta" },
-          el("div", { class: "fmc-label" }, "✦ Your First Match"),
-          el("div", { class: "fmc-name" }, u.name || "User"),
-          el("div", { class: "fmc-why" }, why),
-        ),
-        el("div", { class: "fmc-score" }, score + "%"),
-      );
-      feedList.insertBefore(card, feedList.firstChild);
-    } catch (err) {
-      console.warn("_showFirstMatchPreview:", err);
-    }
-    };
-
-    // =========================================================================
+// =========================================================================
 // MUTUALS — Daily & All-Time mutual score engine
 // Computes closeness from shared orbits + shared comment threads
 // =========================================================================
@@ -1688,26 +1220,53 @@ const renderFeed = (root) => {
 
   const stub = el("div", { class: "composer-stub" },
     el("img", { class: "avatar sm", src: avatarFor(state.me), style: "cursor:pointer;", onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${state.uid}`; } }),
-    el("button", { onclick: () => openCreatePost() }, `What's on your vibe, ${(state.me?.name || "there").split(" ")[0]}?`)
+    el("button", { onclick: () => openCreatePost() }, `What's orbiting your mind, ${(state.me?.name || "there").split(" ")[0]}?`)
   );
   wrap.appendChild(stub);
 
-  // ── Doing Now button row ────────────────────────────────────────────────
-  const doingNowRow = el("div", { class: "doing-now-row" },
-    el("button", { class: "doing-now-btn", onclick: () => openDoingNowModal() },
-      el("i", { class: "ri-camera-line" }), " What are you doing now?")
+  // ── Feed filter tabs (For You | Mutuals) ───────────────────────────
+  const feedFilterTabs = el("div", { class: "feed-filter-tabs" },
+    el("button", { class: "feed-filter-tab active", "data-ftab": "foryou" }, "For You"),
+    el("button", { class: "feed-filter-tab", "data-ftab": "mutuals" },
+      el("i", { class: "ri-team-line" }), " Mutuals"),
   );
-  wrap.appendChild(doingNowRow);
+  wrap.appendChild(feedFilterTabs);
 
-  // Feed main content wrapper
+  // Mutuals panel — shown when Mutuals tab is active
+  const mutualsPanel = el("div", { class: "mutuals-feed-panel hidden" });
+  wrap.appendChild(mutualsPanel);
+
+  // Feed main content wrapper — toggled by tab
   const feedMainContent = el("div", { class: "feed-main-content" });
   wrap.appendChild(feedMainContent);
+
+  feedFilterTabs.querySelectorAll(".feed-filter-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      feedFilterTabs.querySelectorAll(".feed-filter-tab").forEach((t) => t.classList.toggle("active", t === tab));
+      const isMutuals = tab.dataset.ftab === "mutuals";
+      mutualsPanel.classList.toggle("hidden", !isMutuals);
+      feedMainContent.classList.toggle("hidden", isMutuals);
+      if (isMutuals && !mutualsPanel._loaded) {
+        mutualsPanel._loaded = true;
+        renderMutuals(mutualsPanel, true);
+      }
+    });
+  });
+
+  // Trending lane container (filled later)
+  const trendingLane = el("div", { class: "trending-lane hidden" });
+  trendingLane.appendChild(el("div", { class: "trending-head" },
+    el("i", { class: "ri-fire-fill" }), "Trending in your orbit"
+  ));
+  const trendingScroller = el("div", { class: "trending-scroller" });
+  trendingLane.appendChild(trendingScroller);
+  feedMainContent.appendChild(trendingLane);
 
   // Posts container
   const list = el("div", { class: "feed-list" });
   list.appendChild(el("div", { class: "empty" },
     el("i", { class: "ri-loader-4-line" }),
-    el("div", { class: "t" }, "Loading your vibe"),
+    el("div", { class: "t" }, "Loading your orbit"),
   ));
   feedMainContent.appendChild(list);
   root.appendChild(wrap);
@@ -1719,10 +1278,11 @@ const renderFeed = (root) => {
     if (_newIds === _lastPostIds && list.children.length > 0) return;
     _lastPostIds = _newIds;
     list.innerHTML = "";
+    trendingScroller.innerHTML = "";
     if (snap.empty) {
       list.appendChild(el("div", { class: "empty" },
         el("i", { class: "ri-planet-line" }),
-        el("div", { class: "t" }, "Your vibe is quiet"),
+        el("div", { class: "t" }, "Your orbit is quiet"),
         el("div", {}, "Be the first to post — tap Create above."),
       ));
       return;
@@ -1733,67 +1293,34 @@ const renderFeed = (root) => {
     const authors = await Promise.all([...new Set(posts.map((p) => p.authorUid))].map(fetchUser));
     const byUid = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
 
-    // ── Algorithm: compatibility-first ranking ──────────────────────────────
-    // Primary signal = taste compatibility (Jaccard match 0–100).
-    // Secondary = following, hashtag overlap, engagement, recency jitter.
-    const _following = state.me?.following || [];
-    const _interests = state.me?.interests || [];
-
-    // Pre-compute compatibility scores for all unique authors (parallel)
-    const _uniqueAuthors = [...new Set(posts.map(p => p.authorUid).filter(u => u && u !== state.uid))];
-    const _compatScores = {};
-    await Promise.all(_uniqueAuthors.map(async (uid) => {
-      _compatScores[uid] = await getCompatibility(uid).catch(() => 0);
-    }));
-
-    const _scored = posts.map((p) => {
-      let score = 0;
-      const compat = _compatScores[p.authorUid] || 0;
-      score += compat * 0.9;                             // compatibility is the spine
-      if (_following.includes(p.authorUid)) score += 35;
-      if (_interests.some((tag) => (p.hashtags || []).includes(tag))) score += 20;
-      score += Math.min((p.orbitCount || 0) * 1.5 + (p.commentCount || 0), 25);
-      score += Math.max(0, 15 - Math.floor(((Date.now() - (p.createdAt?.toMillis?.() || Date.now())) / 3600000)));
-      score += Math.random() * 10; // freshness jitter
-      return { p, score, compat };
-    });
-    _scored.sort((a, b) => b.score - a.score);
-
-    // Taste map banner — shown once above the feed for users with a taste profile
-    if (!list._tasteMapShown && state.me?.tasteAnswers && Object.keys(state.me.tasteAnswers).length) {
-      list._tasteMapShown = true;
-      const banner = el("div", { class: "taste-map-banner" },
-        el("div", { class: "tmb-icon" }, "✦"),
-        el("div", { class: "tmb-body" },
-          el("div", { class: "tmb-title" }, "Your Taste Map"),
-          el("div", { class: "tmb-sub" }, "See what you're into — and who matches."),
-        ),
-        el("i", { class: "ri-arrow-right-line", style: "color:var(--text-mute);flex-shrink:0;" }),
-      );
-      banner.addEventListener("click", openTasteProfileSheet);
-      list.appendChild(banner);
+    // Trending = top 5 by orbitCount with at least 3 orbits
+    const trending = [...posts].filter((p) => (p.orbitCount || 0) >= 3)
+      .sort((a, b) => (b.orbitCount || 0) - (a.orbitCount || 0)).slice(0, 5);
+    if (trending.length) {
+      trendingLane.classList.remove("hidden");
+      trending.forEach((p) => trendingScroller.appendChild(renderTrendingCard(p, byUid[p.authorUid])));
+    } else {
+      trendingLane.classList.add("hidden");
     }
 
+    // Algorithm: score posts by affinity (following > hashtag match > engagement > recency)
+    // A random component (+0–15) shuffles the feed differently on each fresh load
+    const _following = state.me?.following || [];
+    const _interests = state.me?.interests || [];
+    const _scored = posts.map((p) => {
+      let score = 0;
+      if (_following.includes(p.authorUid)) score += 50;
+      if (_interests.some((tag) => (p.hashtags || []).includes(tag))) score += 30;
+      score += Math.min((p.orbitCount || 0) * 2 + (p.commentCount || 0), 30);
+      score += Math.max(0, 20 - Math.floor(((Date.now() - (p.createdAt?.toMillis?.() || Date.now())) / 3600000)));
+      score += Math.random() * 15; // freshness jitter — varies order each fresh load
+      return { p, score };
+    });
+    _scored.sort((a, b) => b.score - a.score);
     const _suggTypes = ["people", "groups", "spaces"];
     let _suggShown = 0;
-    for (let idx = 0; idx < _scored.length; idx++) {
-      const { p, compat } = _scored[idx];
-      const postEl = renderPost(p, byUid[p.authorUid], { hideComments: true });
-      list.appendChild(postEl);
-
-      // "Why you're seeing this" signal — shown for any meaningful compatibility
-      if (compat >= 40 && byUid[p.authorUid] && p.authorUid !== state.uid) {
-        const firstName = (byUid[p.authorUid].name || "them").split(" ")[0];
-        const shared = sharedTasteItems(state.me, byUid[p.authorUid]);
-        const label = shared.length
-          ? `You and ${firstName} both vibe with: ${shared[0]}`
-          : `${compat}% taste match with ${firstName}`;
-        postEl.appendChild(el("div", { class: "why-signal" },
-          el("i", { class: "ri-fire-fill" }),
-          label
-        ));
-      }
-
+    _scored.forEach(({ p }, idx) => {
+      list.appendChild(renderPost(p, byUid[p.authorUid]));
       // Suggestion card at post 4, then every 7 after that
       if (idx === 4 || (idx > 4 && (idx - 4) % 7 === 0)) {
         const type = _suggTypes[_suggShown % 3];
@@ -1802,7 +1329,7 @@ const renderFeed = (root) => {
         else if (type === "groups") list.appendChild(renderInlineGroupSuggestion());
         else list.appendChild(renderInlineSpaceSuggestion());
       }
-    }
+    });
   });
 
   // store unsub globally and on root so route changes can clean up
@@ -1810,6 +1337,19 @@ const renderFeed = (root) => {
   root._unsub = unsub;
 };
 
+const renderTrendingCard = (p, author) => {
+  return el("div", { class: "trending-card", onclick: () => location.hash = `#feed` /* stays; could open detail */ },
+    el("div", { class: "t-head" },
+      el("img", { class: "avatar xs", src: avatarFor(author), onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${author?.uid}`; } }),
+      el("div", { class: "t-name" }, author?.name || "User"),
+    ),
+    el("div", { class: "t-text", text: (p.text || "").slice(0, 140) }),
+    el("div", { class: "t-meta" },
+      el("i", { class: "ri-fire-fill", style: "color: var(--grad-2);" }),
+      `${p.orbitCount || 0} Orbits · ${fmtTime(p.createdAt)}`
+    ),
+  );
+};
 
 // =========================================================================
 // 8a. MEDIA CAROUSEL / GRID
@@ -1993,82 +1533,6 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
   return wrap;
 };
 
-// =========================================================================
-// openDoingNowModal — "What are you doing now?" composer (kind: doingNow)
-// =========================================================================
-const openDoingNowModal = () => {
-  let _doingNowFile = null;
-
-  const overlay = el("div", { class: "modal doing-now-modal", style: "z-index:1050;" });
-  const card = el("div", { class: "modal-card" });
-
-  card.appendChild(el("div", { class: "modal-head" },
-    el("h3", {}, "What are you doing now?"),
-    el("button", { class: "icon-btn", onclick: () => overlay.remove() }, el("i", { class: "ri-close-line" }))
-  ));
-
-  const body = el("div", { class: "compose-pane", style: "gap:14px;" });
-
-  // Photo preview / picker
-  const photoPreview = el("div", { class: "dn-photo-preview",
-    style: "width:100%;aspect-ratio:1;background:var(--bg-elev-2);border-radius:14px;border:1.5px dashed var(--line);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;position:relative;" });
-  photoPreview.appendChild(el("div", { style: "display:flex;flex-direction:column;align-items:center;gap:8px;color:var(--text-mute);" },
-    el("i", { class: "ri-image-add-line", style: "font-size:32px;" }),
-    el("span", { style: "font-size:13px;font-weight:600;" }, "Tap to add photo")
-  ));
-  const photoInput = el("input", { type: "file", accept: "image/*" });
-  photoInput.style.display = "none";
-  photoInput.addEventListener("change", (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    _doingNowFile = file;
-    const previewUrl = URL.createObjectURL(file);
-    photoPreview.innerHTML = "";
-    photoPreview.appendChild(el("img", { src: previewUrl, style: "width:100%;height:100%;object-fit:cover;" }));
-    const changeBtn = el("button", { style: "position:absolute;bottom:8px;right:8px;background:rgba(0,0,0,.55);color:#fff;border-radius:999px;padding:4px 10px;font-size:12px;font-weight:600;" }, "Change");
-    changeBtn.addEventListener("click", (ev) => { ev.stopPropagation(); photoInput.click(); });
-    photoPreview.appendChild(changeBtn);
-  });
-  photoPreview.addEventListener("click", () => photoInput.click());
-  body.appendChild(photoPreview);
-  body.appendChild(photoInput);
-
-  // Status text
-  const statusInput = el("input", { type: "text", placeholder: "Add a short status… (e.g. 'Making coffee ☕')", maxlength: 80 });
-  body.appendChild(statusInput);
-
-  const submitBtn = el("button", { class: "btn primary block" }, el("i", { class: "ri-send-plane-line" }), " Share moment");
-  submitBtn.addEventListener("click", async () => {
-    const text = statusInput.value.trim();
-    if (!_doingNowFile && !text) { toast("Add a photo or status text"); return; }
-    submitBtn.disabled = true;
-    submitBtn.textContent = "Sharing…";
-    try {
-      const postData = {
-        kind: "doingNow",
-        text: text || "",
-        authorUid: state.uid,
-        createdAt: serverTimestamp(),
-        orbits: [], orbitCount: 0, commentCount: 0, views: 0,
-      };
-      if (_doingNowFile) {
-        const up = await uploadToCloudinary(_doingNowFile, "image");
-        postData.media = [{ type: "image", url: up.url }];
-        postData.doingNowPhoto = up.url;
-      }
-      await addDoc(collection(db, "posts"), postData);
-      sfxPost();
-      toast("Moment shared! 📸");
-      overlay.remove();
-    } catch { toast("Failed to share moment"); submitBtn.disabled = false; submitBtn.textContent = "Share moment"; }
-  });
-  body.appendChild(submitBtn);
-  card.appendChild(body);
-  overlay.appendChild(card);
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
-  document.body.appendChild(overlay);
-};
-
 const renderPost = (p, author, opts = {}) => {
   const iOrbited = (p.orbits || []).includes(state.uid);
   const isMine = p.authorUid === state.uid;
@@ -2086,23 +1550,6 @@ const renderPost = (p, author, opts = {}) => {
 
   const post = el("article", { class: `post${trending ? " is-trending" : ""}` });
 
-  // ── "Doing Now" posts render as a circular moment card ──────────────────
-  if (p.kind === "doingNow") {
-    const _photo = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
-    const nowCard = el("article", { class: "post post-now-card", onclick: () => location.hash = `#post/${p.id}` });
-    if (_photo) nowCard.appendChild(el("img", { class: "now-card-photo", src: _photo, loading: "lazy" }));
-    const _overlay = el("div", { class: "now-card-overlay" },
-      el("div", { class: "now-card-author" },
-        el("img", { class: "avatar xs", src: avatarFor(author) }),
-        el("span", {}, author?.name || "User"),
-      ),
-    );
-    if (p.text) _overlay.appendChild(el("div", { class: "now-card-text" }, p.text));
-    nowCard.appendChild(_overlay);
-    nowCard.appendChild(el("div", { style: "padding:6px 12px 4px;font-size:11px;color:var(--text-mute);" }, fmtTime(p.createdAt)));
-    return nowCard;
-  }
-
   const head = el("div", { class: "post-head" },
     el("img", { class: "avatar md", src: avatarFor(author), onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${author?.uid}`; } }),
     el("div", { class: "meta", style: "cursor:pointer;", onclick: () => location.hash = `#post/${p.id}` },
@@ -2116,10 +1563,6 @@ const renderPost = (p, author, opts = {}) => {
         fmtTime(p.createdAt),
       )
     ),
-    p.song ? el("div", { class: "post-song-tag", title: `${p.song.name} — ${p.song.artist}` },
-      el("i", { class: "ri-music-2-fill" }),
-      el("span", {}, `${p.song.name} · ${p.song.artist}`),
-    ) : null,
     !isMine ? (() => {
       let _isFollowing = (state.me?.following || []).includes(author?.uid);
       const fbtn = el("button", { class: `follow-btn${_isFollowing ? " following" : ""}` },
@@ -2238,7 +1681,7 @@ const renderPost = (p, author, opts = {}) => {
         notifyUser(author.uid, state.me?.name || "Someone", "orbited your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
       ).catch(() => {});
     }
-  }}, orbitIcon, el("span", {}, "Vibe · "), orbitCount);
+  }}, orbitIcon, el("span", {}, "Orbit · "), orbitCount);
 
   const saveIcon = (state.me?.saved || []).includes(p.id) ? "ri-bookmark-fill" : "ri-bookmark-line";
 
@@ -2256,7 +1699,7 @@ const renderPost = (p, author, opts = {}) => {
       el("button", { class: "post-act", onclick: async (e) => {
         e.stopPropagation();
         const url = `${location.origin}${location.pathname}#post/${p.id}`;
-        try { await navigator.share?.({ title: "Vibe", text: p.text || "Check this out", url }); }
+        try { await navigator.share?.({ title: "Orbit", text: p.text || "Check this out", url }); }
         catch { await navigator.clipboard.writeText(url); toast("Link copied"); }
       }},
         el("i", { class: "ri-share-forward-line" }),
@@ -2388,11 +1831,11 @@ const renderPost = (p, author, opts = {}) => {
       if (!text && !_cmtMediaFile && !_cmtAudioBlob) return;
       const submitBtn = cForm.querySelector("button[type='submit']");
       submitBtn.disabled = true;
+      const commentData = {
+        text: text || "", authorUid: state.uid, createdAt: serverTimestamp(), likes: [],
+        ..._replyTo ? { replyToUid: _replyTo.uid, replyToName: _replyTo.name, replyToUsername: _replyTo.username } : {},
+      };
       try {
-        const commentData = {
-          text: text || "", authorUid: state.uid, createdAt: serverTimestamp(), likes: [],
-          ..._replyTo ? { replyToUid: _replyTo.uid, replyToName: _replyTo.name, replyToUsername: _replyTo.username } : {},
-        };
         if (_cmtMediaFile) {
           const kind = _cmtMediaFile.type.startsWith("video") ? "video" : "image";
           const up = await uploadToCloudinary(_cmtMediaFile, kind);
@@ -2402,36 +1845,37 @@ const renderPost = (p, author, opts = {}) => {
           const up = await uploadToCloudinary(audioFile, "video");
           commentData.audioUrl = up.url;
         }
-        input.value = ""; _replyTo = null;
-        replyBanner.classList.add("hidden"); input.placeholder = "Write a comment…";
-        clearCmtAttach();
-        // Optimistic UI
-        cBox.classList.remove("hidden");
-        cBox.appendChild(el("div", { class: "comment" },
-          el("img", { class: "avatar xs", src: avatarFor(state.me), onclick: () => location.hash = `#profile/${state.uid}` }),
-          el("div", { class: "body" },
-            el("div", { class: "name" }, state.me?.name || "User"),
-            commentData.text ? el("div", { class: "text", text: commentData.text }) : null,
-          ),
-        ));
-        sfxComment();
-        await addDoc(collection(db, "posts", p.id, "comments"), commentData);
-        await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
-        const notifSnippet = commentData.text ? `"${commentData.text.slice(0, 60)}"` : commentData.mediaType ? "📷 sent a photo" : "🎙️ sent a voice note";
-        if (author?.uid && author.uid !== state.uid) {
-          writeNotif(author.uid, "comment", { postId: p.id, text: `${state.me?.name || "Someone"} commented: ${notifSnippet}` }).catch(() => {});
-          const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
-          import("./notifications.js").then(({ notifyUser }) =>
-            notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
-          ).catch(() => {});
-        }
-        if (commentData.replyToUid && commentData.replyToUid !== state.uid && commentData.replyToUid !== author?.uid) {
-          writeNotif(commentData.replyToUid, "commentReply", { postId: p.id, text: `${state.me?.name || "Someone"} replied to your comment: ${notifSnippet}` }).catch(() => {});
-          import("./notifications.js").then(({ notifyUser }) =>
-            notifyUser(commentData.replyToUid, state.me?.name || "Someone", "replied to your comment", "/#post/" + p.id, state.me?.photoURL || "")
-          ).catch(() => {});
-        }
-      } catch { toast("Failed to send comment"); } finally { submitBtn.disabled = false; }
+      } catch { toast("Media upload failed"); submitBtn.disabled = false; return; }
+      input.value = ""; _replyTo = null;
+      replyBanner.classList.add("hidden"); input.placeholder = "Write a comment…";
+      clearCmtAttach();
+      // Optimistic UI
+      cBox.classList.remove("hidden");
+      cBox.appendChild(el("div", { class: "comment" },
+        el("img", { class: "avatar xs", src: avatarFor(state.me), onclick: () => location.hash = `#profile/${state.uid}` }),
+        el("div", { class: "body" },
+          el("div", { class: "name" }, state.me?.name || "User"),
+          commentData.text ? el("div", { class: "text", text: commentData.text }) : null,
+        ),
+      ));
+      sfxComment();
+      submitBtn.disabled = false;
+      await addDoc(collection(db, "posts", p.id, "comments"), commentData);
+      await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
+      const notifSnippet = commentData.text ? `"${commentData.text.slice(0, 60)}"` : commentData.mediaType ? "📷 sent a photo" : "🎙️ sent a voice note";
+      if (author?.uid && author.uid !== state.uid) {
+        writeNotif(author.uid, "comment", { postId: p.id, text: `${state.me?.name || "Someone"} commented: ${notifSnippet}` }).catch(() => {});
+        const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
+        import("./notifications.js").then(({ notifyUser }) =>
+          notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
+        ).catch(() => {});
+      }
+      if (commentData.replyToUid && commentData.replyToUid !== state.uid && commentData.replyToUid !== author?.uid) {
+        writeNotif(commentData.replyToUid, "commentReply", { postId: p.id, text: `${state.me?.name || "Someone"} replied to your comment: ${notifSnippet}` }).catch(() => {});
+        import("./notifications.js").then(({ notifyUser }) =>
+          notifyUser(commentData.replyToUid, state.me?.name || "Someone", "replied to your comment", "/#post/" + p.id, state.me?.photoURL || "")
+        ).catch(() => {});
+      }
     });
     post.appendChild(cForm);
 
@@ -2550,27 +1994,22 @@ const renderPostDetail = async (root, postId) => {
     el("button", { class: "reply-cancel-btn", onclick: () => {
       _detailReplyTo = null;
       detailReplyBanner.classList.add("hidden");
-      cmtSection.querySelector("input[type='text']").placeholder = "Write a comment…";
-      cmtSection.querySelector("input[type='text']").value = "";
+      cmtSection.querySelector("input").placeholder = "Write a comment…";
+      cmtSection.querySelector("input").value = "";
     }}, el("i", { class: "ri-close-line" })),
   );
   cmtSection.appendChild(detailReplyBanner);
 
-  // ── Twitter / X style comment renderer ──────────────────────────────────
-  // Layout: avatar column (with optional thread line) + body column
-  // Header: Name · @username · time on one line
-  // Actions: Reply | Like (count) | Share — spread horizontally
-  const renderDetailComment = (c, a, compatPct = 0) => {
+  const renderDetailComment = (c, a) => {
     const isLiked = (c.likes || []).includes(state.uid);
+    const likeCountEl = el("span", { text: String((c.likes || []).length || "") });
+    const likeIconEl = el("i", { class: isLiked ? "ri-heart-fill" : "ri-heart-line", style: isLiked ? "color:var(--danger);" : "" });
     let _liked = isLiked;
-    const likeCountEl = el("span", { class: "tw-act-count", text: (c.likes?.length || 0) > 0 ? String(c.likes.length) : "" });
-    const likeIconEl  = el("i",    { class: isLiked ? "ri-heart-fill" : "ri-heart-line" });
-
-    const likeBtn = el("button", { class: `tw-act-btn${isLiked ? " tw-liked" : ""}`, onclick: async (ev) => {
+    const likeBtn = el("button", { class: "cmt-like-btn", onclick: async (ev) => {
       ev.stopPropagation();
       _liked = !_liked;
       likeIconEl.className = _liked ? "ri-heart-fill" : "ri-heart-line";
-      likeBtn.classList.toggle("tw-liked", _liked);
+      likeIconEl.style.color = _liked ? "var(--danger)" : "";
       const newCount = (c.likes?.length || 0) + (_liked ? 1 : -1);
       likeCountEl.textContent = newCount > 0 ? String(newCount) : "";
       await updateDoc(doc(db, "posts", p.id, "comments", c.id), {
@@ -2584,83 +2023,37 @@ const renderPostDetail = async (root, postId) => {
       }
     }}, likeIconEl, likeCountEl);
 
-    const replyCountEl = el("span", { class: "tw-act-count" });
-    const replyBtn = el("button", { class: "tw-act-btn", onclick: () => {
+    const replyBtn = el("button", { class: "cmt-reply-btn", onclick: () => {
       _detailReplyTo = { uid: a?.uid, name: a?.name || "user", username: a?.username || "" };
       detailReplyBanner.querySelector(".reply-banner-text").textContent = `Replying to @${a?.username || a?.name || "user"}`;
       detailReplyBanner.classList.remove("hidden");
-      const inp = cmtSection.querySelector("input[type='text']");
+      const inp = cmtSection.querySelector("input");
       inp.placeholder = `Reply to @${a?.username || a?.name || "user"}…`;
       inp.focus();
-    }}, el("i", { class: "ri-chat-1-line" }), replyCountEl);
+    }}, "Reply");
 
-    const shareBtn = el("button", { class: "tw-act-btn", onclick: async () => {
-      const url = `${location.origin}${location.pathname}#post/${p.id}`;
-      try { await navigator.share?.({ title: "Vibe", text: c.text || "", url }); }
-      catch { await navigator.clipboard.writeText(url); toast("Link copied"); }
-    }}, el("i", { class: "ri-share-forward-line" }));
-
-    // Avatar column — with thread line connecting to next reply if present
-    const avatarCol = el("div", { class: "tw-av-col" },
-      el("img", {
-        class: "tw-av",
-        src: avatarFor(a),
-        onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${a?.uid}`; }
-      }),
-    );
-
-    // Compatibility badge (only for well-matched commenters)
-    const compatBadge = compatPct >= 50
-      ? el("span", { class: "tw-compat-badge" }, `✦ ${compatPct}%`)
-      : null;
-
-    // Reply-to label
-    const replyLabel = (c.replyToUsername || c.replyToName)
-      ? el("div", { class: "tw-reply-label" },
-          el("span", { class: "tw-reply-at" }, `Replying to @${c.replyToUsername || c.replyToName}`)
-        )
-      : null;
-
-    // Media block
-    let mediaEl = null;
-    if (c.mediaUrl) {
-      mediaEl = el("div", { class: "tw-cmt-media", onclick: (ev) => {
-        ev.stopPropagation();
-        c.mediaType === "video" ? openVideoViewer([{ type: "video", url: c.mediaUrl }], 0) : openImageZoom(c.mediaUrl);
-      }},
-        c.mediaType === "video"
-          ? el("div", { class: "cmt-media-video-wrap" },
-              el("video", { src: c.mediaUrl, muted: "", preload: "metadata" }),
-              el("div", { class: "cmt-media-video-play", html: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>` }),
-            )
-          : el("img", { src: c.mediaUrl, loading: "lazy" }),
-      );
-    } else if (c.audioUrl) {
-      mediaEl = el("div", { class: "cmt-voice-note" },
-        el("span", { html: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>` }),
-        el("audio", { src: c.audioUrl, controls: true, style: "height:28px;max-width:180px;" }),
-      );
-    }
-
-    return el("div", { class: "tw-comment" },
-      avatarCol,
-      el("div", { class: "tw-body" },
-        el("div", { class: "tw-header" },
-          el("span", { class: "tw-name" }, a?.name || "User"),
+    return el("div", { class: "comment detail-cmt" },
+      el("img", { class: "avatar xs", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
+      el("div", { class: "body" },
+        el("div", { class: "name" }, a?.name || "User",
           a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
-          el("span", { class: "tw-username" }, `@${a?.username || "user"}`),
-          el("span", { class: "tw-dot" }, "·"),
-          el("span", { class: "tw-time" }, fmtTime(c.createdAt)),
-          compatBadge,
+          el("span", { class: "cmt-time" }, fmtTime(c.createdAt)),
         ),
-        replyLabel,
-        c.text ? el("div", { class: "tw-text" }, c.text) : null,
-        mediaEl,
-        el("div", { class: "tw-actions" },
-          replyBtn,
-          likeBtn,
-          shareBtn,
-        ),
+        (c.replyToUsername || c.replyToName) ? el("div", { class: "reply-to-label" }, el("i", { class: "ri-corner-down-right-line" }), el("a", { class: "mention", href: `#profile-u/${c.replyToUsername || c.replyToName}` }, `@${c.replyToUsername || c.replyToName}`)) : null,
+        c.text ? el("div", { class: "text", text: c.text }) : null,
+        c.mediaUrl ? el("div", { class: "cmt-media", onclick: (ev) => { ev.stopPropagation(); c.mediaType === "video" ? openVideoViewer([{ type: "video", url: c.mediaUrl }], 0) : openImageZoom(c.mediaUrl); }},
+          c.mediaType === "video"
+            ? el("div", { class: "cmt-media-video-wrap" },
+                el("video", { src: c.mediaUrl, muted: "", preload: "metadata", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;" }),
+                el("div", { class: "cmt-media-video-play", html: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>` }),
+              )
+            : el("img", { src: c.mediaUrl, loading: "lazy", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;" }),
+        ) : null,
+        c.audioUrl ? el("div", { class: "cmt-voice-note" },
+          el("span", { html: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>` }),
+          el("audio", { src: c.audioUrl, controls: true, style: "height:28px;max-width:150px;" }),
+        ) : null,
+        el("div", { class: "cmt-meta-row" }, replyBtn, likeBtn),
       ),
     );
   };
@@ -2676,36 +2069,15 @@ const renderPostDetail = async (root, postId) => {
     _detailCmtSnap = onSnapshot(q, async (snap) => {
       cList.innerHTML = "";
       if (snap.empty) {
-        cList.appendChild(el("div", { class: "tw-cmt-empty" },
-          el("i", { class: "ri-chat-3-line" }),
-          el("div", {}, "No comments yet — be the first to reply!")
-        ));
+        cList.appendChild(el("div", { class: "reel-cmt-empty" }, "No comments yet. Be the first!"));
         return;
       }
       const comments = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       const auths = await Promise.all([...new Set(comments.map((c) => c.authorUid))].map(fetchUser));
       const map = Object.fromEntries(auths.filter(Boolean).map((u) => [u.uid, u]));
+      comments.forEach((c) => cList.appendChild(renderDetailComment(c, map[c.authorUid])));
 
-      // ── Rank comments by compatibility with viewer ────────────────────────
-      // Taste-compatible commenters surface first; fall back to chronological.
-      const uniqueCommenters = [...new Set(comments.map(c => c.authorUid).filter(u => u && u !== state.uid))];
-      const cmtCompatMap = {};
-      await Promise.all(uniqueCommenters.map(async uid => {
-        cmtCompatMap[uid] = await getCompatibility(uid).catch(() => 0);
-      }));
-      const ranked = [...comments].sort((a, b) => {
-        const ca = cmtCompatMap[a.authorUid] || 0;
-        const cb = cmtCompatMap[b.authorUid] || 0;
-        if (Math.abs(ca - cb) > 10) return cb - ca;          // compat-first
-        return (a.createdAt?.toMillis?.() || 0) - (b.createdAt?.toMillis?.() || 0); // then chrono
-      });
-
-      ranked.forEach((c) => {
-        const compat = cmtCompatMap[c.authorUid] || 0;
-        cList.appendChild(renderDetailComment(c, map[c.authorUid], compat));
-      });
-
-      // "Load more" button
+      // Show "Load more" button only if we might have more and haven't loaded all yet
       if (!showAll && snap.docs.length >= DETAIL_CMT_PAGE) {
         const total = p.commentCount || 0;
         const remaining = total - snap.docs.length;
@@ -2809,16 +2181,16 @@ const renderPostDetail = async (root, postId) => {
 
   cForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const input = cForm.querySelector("input[type='text']");
+    const input = cForm.querySelector("input");
     const text = input.value.trim();
     if (!text && !_dCmtMediaFile && !_dCmtAudioBlob) return;
     const submitBtn = cForm.querySelector("button[type='submit']");
     submitBtn.disabled = true;
+    const commentData = {
+      text: text || "", authorUid: state.uid, createdAt: serverTimestamp(), likes: [],
+      ..._detailReplyTo ? { replyToUid: _detailReplyTo.uid, replyToName: _detailReplyTo.name, replyToUsername: _detailReplyTo.username } : {},
+    };
     try {
-      const commentData = {
-        text: text || "", authorUid: state.uid, createdAt: serverTimestamp(), likes: [],
-        ..._detailReplyTo ? { replyToUid: _detailReplyTo.uid, replyToName: _detailReplyTo.name, replyToUsername: _detailReplyTo.username } : {},
-      };
       if (_dCmtMediaFile) {
         const kind = _dCmtMediaFile.type.startsWith("video") ? "video" : "image";
         const up = await uploadToCloudinary(_dCmtMediaFile, kind);
@@ -2828,26 +2200,26 @@ const renderPostDetail = async (root, postId) => {
         const up = await uploadToCloudinary(audioFile, "video");
         commentData.audioUrl = up.url;
       }
-      input.value = ""; _detailReplyTo = null;
-      detailReplyBanner.classList.add("hidden"); input.placeholder = "Write a comment…";
-      clearDCmtAttach(); sfxComment();
-      await addDoc(collection(db, "posts", p.id, "comments"), commentData);
-      await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
-      const notifSnippet = commentData.text ? `"${commentData.text.slice(0, 60)}"` : commentData.mediaType ? "📷 sent a photo" : "🎙️ sent a voice note";
-      if (author?.uid && author.uid !== state.uid) {
-        writeNotif(author.uid, "comment", { postId: p.id, text: `${state.me?.name || "Someone"} commented: ${notifSnippet}` }).catch(() => {});
-        const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
-        import("./notifications.js").then(({ notifyUser }) =>
-          notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
-        ).catch(() => {});
-      }
-      if (commentData.replyToUid && commentData.replyToUid !== state.uid && commentData.replyToUid !== author?.uid) {
-        writeNotif(commentData.replyToUid, "commentReply", { postId: p.id, text: `${state.me?.name || "Someone"} replied to your comment: ${notifSnippet}` }).catch(() => {});
-        import("./notifications.js").then(({ notifyUser }) =>
-          notifyUser(commentData.replyToUid, state.me?.name || "Someone", "replied to your comment", "/#post/" + p.id, state.me?.photoURL || "")
-        ).catch(() => {});
-      }
-    } catch { toast("Failed to send comment"); } finally { submitBtn.disabled = false; }
+    } catch { toast("Media upload failed"); submitBtn.disabled = false; return; }
+    input.value = ""; _detailReplyTo = null;
+    detailReplyBanner.classList.add("hidden"); input.placeholder = "Write a comment…";
+    clearDCmtAttach(); sfxComment(); submitBtn.disabled = false;
+    await addDoc(collection(db, "posts", p.id, "comments"), commentData);
+    await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
+    const notifSnippet = commentData.text ? `"${commentData.text.slice(0, 60)}"` : commentData.mediaType ? "📷 sent a photo" : "🎙️ sent a voice note";
+    if (author?.uid && author.uid !== state.uid) {
+      writeNotif(author.uid, "comment", { postId: p.id, text: `${state.me?.name || "Someone"} commented: ${notifSnippet}` }).catch(() => {});
+      const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
+      import("./notifications.js").then(({ notifyUser }) =>
+        notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
+      ).catch(() => {});
+    }
+    if (commentData.replyToUid && commentData.replyToUid !== state.uid && commentData.replyToUid !== author?.uid) {
+      writeNotif(commentData.replyToUid, "commentReply", { postId: p.id, text: `${state.me?.name || "Someone"} replied to your comment: ${notifSnippet}` }).catch(() => {});
+      import("./notifications.js").then(({ notifyUser }) =>
+        notifyUser(commentData.replyToUid, state.me?.name || "Someone", "replied to your comment", "/#post/" + p.id, state.me?.photoURL || "")
+      ).catch(() => {});
+    }
   });
   cmtSection.appendChild(cForm);
 };
@@ -2916,254 +2288,138 @@ const renderGroups = (root) => {
 // 11. EXPLORE / SAVED
 // =========================================================================
 const renderExplore = (root, hashtagFilter = null) => {
+  const title = hashtagFilter ? `#${hashtagFilter}` : "Explore";
+  const head = el("div", { class: "section-head" },
+    hashtagFilter
+      ? el("button", { class: "icon-btn", style: "margin-right:8px;", onclick: () => history.back() },
+          el("i", { class: "ri-arrow-left-line" }))
+      : null,
+    el("h2", {}, title),
+  );
+  root.appendChild(head);
 
-  // ── Hashtag view ────────────────────────────────────────────────────────
-  if (hashtagFilter) {
-    root.appendChild(el("div", { class: "section-head" },
-      el("button", { class: "icon-btn", style: "margin-right:8px;", onclick: () => history.back() },
-        el("i", { class: "ri-arrow-left-line" })),
-      el("h2", {}, `#${hashtagFilter}`),
-    ));
-    const grid = el("div", { class: "grid-3" });
-    root.appendChild(grid);
-    onSnapshot(
-      query(collection(db, "posts"), where("hashtags", "array-contains", hashtagFilter.toLowerCase()), limit(60)),
-      (snap) => {
-        grid.innerHTML = "";
-        if (snap.empty) {
-          grid.appendChild(el("div", { class: "empty", style: "grid-column:1/-1;" },
-            el("i", { class: "ri-hashtag" }),
-            el("div", { class: "t" }, `No posts tagged #${hashtagFilter}`)));
-          return;
-        }
-        [...snap.docs]
-          .sort((a, b) => (b.data().createdAt?.seconds || 0) - (a.data().createdAt?.seconds || 0))
-          .forEach((d) => {
-            const p = { id: d.id, ...d.data() };
-            const cell = el("div", { class: "cell", onclick: () => location.hash = `#post/${p.id}` });
-            const mediaItems = Array.isArray(p.media) ? p.media : (p.media ? [p.media] : []);
-            if (mediaItems.length) {
-              const m = mediaItems[0];
-              if (m.type === "video") {
-                cell.appendChild(el("video", { src: m.url, muted: "", playsinline: "", preload: "metadata" }));
-                cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-play-fill" })));
-              } else {
-                cell.appendChild(el("img", { src: m.url, loading: "lazy" }));
-                if (mediaItems.length > 1) cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-image-2-line" })));
-              }
-            } else {
-              cell.appendChild(el("div", { class: "cell-text", text: (p.text || "").slice(0, 80) }));
-            }
-            if (p.text) cell.appendChild(el("div", { class: "cell-overlay", text: (p.text || "").slice(0, 55) }));
-            cell.appendChild(el("span", { class: "cell-views" }, el("i", { class: "ri-eye-line" }), " " + String(p.views || 0)));
-            grid.appendChild(cell);
-          });
-      }
-    );
-    return;
-  }
+  // ── Search bar ──────────────────────────────────────────────────────────
+  const searchWrap = el("div", { class: "explore-search-wrap" });
+  const searchInput = el("input", { type: "text", class: "explore-search-input", placeholder: "Search people, hashtags…" });
+  const searchResults = el("div", { class: "explore-search-results hidden" });
+  searchWrap.appendChild(el("div", { class: "explore-search-box" }, el("i", { class: "ri-search-line" }), searchInput));
+  searchWrap.appendChild(searchResults);
+  root.appendChild(searchWrap);
 
-  // ── Full Discover page ───────────────────────────────────────────────────
-
-  // Hero search bar
-  const searchHero = el("div", { class: "disc-search-hero" });
-  const searchInput = el("input", { type: "text", class: "disc-search-input", placeholder: "Search people, posts, hashtags…" });
-  const searchResults = el("div", { class: "disc-search-results hidden" });
-  searchHero.appendChild(el("div", { class: "disc-search-box" },
-    el("i", { class: "ri-search-2-line" }), searchInput, el("span", { class: "disc-search-kbd" }, "⌘K")
-  ));
-  searchHero.appendChild(searchResults);
-  root.appendChild(searchHero);
-
-  // Search logic (people + hashtags in one list)
-  let _debounce = null;
-  const _runSearch = async (raw) => {
-    const q1 = raw.trim().toLowerCase();
-    searchResults.innerHTML = "";
-    if (!q1) { searchResults.classList.add("hidden"); return; }
-    searchResults.classList.remove("hidden");
-
-    // Hashtag shortcut row
-    if (q1.startsWith("#") || /^[a-z]/.test(q1)) {
-      const tag = q1.startsWith("#") ? q1.slice(1) : q1;
-      searchResults.appendChild(el("div", { class: "dsr-item dsr-tag",
-          onclick: () => location.hash = `#explore/${tag}` },
-        el("div", { class: "dsr-tag-icon" }, el("i", { class: "ri-hashtag" })),
-        el("div", {}, el("div", { class: "dsr-primary" }, `#${tag}`), el("div", { class: "dsr-sub" }, "See all posts"))
-      ));
-    }
-
-    const snap = await getDocs(query(collection(db, "users"), orderBy("username"), limit(200))).catch(() => null);
-    if (!snap) return;
-    const matches = snap.docs.map(d => ({ uid: d.id, ...d.data() }))
-      .filter(u => u.uid !== state.uid &&
-        ((u.name || "").toLowerCase().includes(q1) || (u.username || "").toLowerCase().includes(q1)))
-      .slice(0, 8);
-    matches.forEach((u) => {
-      searchResults.appendChild(el("div", { class: "dsr-item", onclick: () => location.hash = `#profile/${u.uid}` },
-        el("img", { class: "dsr-avatar", src: avatarFor(u) }),
-        el("div", {},
-          el("div", { class: "dsr-primary" }, u.name || "User"),
-          el("div", { class: "dsr-sub" }, "@" + (u.username || "user"))
-        )
-      ));
-    });
-    if (!matches.length && !q1.startsWith("#")) {
-      searchResults.appendChild(el("div", { class: "dsr-empty" }, `No results for "${raw}"`));
-    }
-  };
+  let _searchDebounce = null;
   searchInput.addEventListener("input", () => {
-    clearTimeout(_debounce);
-    _debounce = setTimeout(() => _runSearch(searchInput.value), 220);
-  });
-  searchInput.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { searchResults.classList.add("hidden"); searchInput.blur(); }
+    clearTimeout(_searchDebounce);
+    const q1 = searchInput.value.trim().toLowerCase();
+    if (!q1) { searchResults.classList.add("hidden"); searchResults.innerHTML = ""; return; }
+    _searchDebounce = setTimeout(async () => {
+      searchResults.innerHTML = "";
+      searchResults.classList.remove("hidden");
+      if (q1.startsWith("#")) {
+        searchResults.appendChild(el("div", { class: "explore-search-item", onclick: () => location.hash = `#explore/${q1.slice(1)}` },
+          el("i", { class: "ri-hashtag" }), el("span", {}, q1)));
+        return;
+      }
+      const snap = await getDocs(query(collection(db, "users"), orderBy("username"), limit(200))).catch(() => null);
+      if (!snap) { searchResults.appendChild(el("div", { class: "explore-search-empty" }, "Search failed")); return; }
+      const matches = snap.docs
+        .map((d) => ({ uid: d.id, ...d.data() }))
+        .filter((u) => u.uid !== state.uid && ((u.name || "").toLowerCase().includes(q1) || (u.username || "").toLowerCase().includes(q1)))
+        .slice(0, 12);
+      if (!matches.length) { searchResults.appendChild(el("div", { class: "explore-search-empty" }, "No matches")); return; }
+      matches.forEach((u) => {
+        searchResults.appendChild(el("div", { class: "explore-search-item", onclick: () => location.hash = `#profile/${u.uid}` },
+          el("img", { class: "avatar xs", src: avatarFor(u) }),
+          el("div", {}, el("div", { class: "esi-name" }, u.name || "User"), el("div", { class: "esi-sub" }, "@" + (u.username || "user"))),
+        ));
+      });
+    }, 250);
   });
   document.addEventListener("click", (e) => {
-    if (!searchHero.contains(e.target)) searchResults.classList.add("hidden");
-  });
-  // Keyboard shortcut ⌘K / Ctrl+K
-  document.addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "k") { e.preventDefault(); searchInput.focus(); }
+    if (!searchWrap.contains(e.target)) { searchResults.classList.add("hidden"); }
   });
 
-  // Trending hashtag chips
-  const tagsSection = el("div", { class: "disc-tags-section" });
-  tagsSection.appendChild(el("div", { class: "disc-section-label" },
-    el("i", { class: "ri-hashtag" }), "Trending topics"
-  ));
-  const tagsRow = el("div", { class: "disc-tags-row" });
-  tagsSection.appendChild(tagsRow);
-  root.appendChild(tagsSection);
-
-  // Pull top hashtags from recent posts client-side
-  getDocs(query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(100))).then((snap) => {
-    const freq = {};
-    snap.docs.forEach(d => {
-      (d.data().hashtags || []).forEach(t => { freq[t] = (freq[t] || 0) + 1; });
-    });
-    const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 14);
-    if (!sorted.length) { tagsSection.classList.add("hidden"); return; }
-    sorted.forEach(([tag, count]) => {
-      tagsRow.appendChild(el("button", {
-        class: "disc-tag-chip",
-        onclick: () => location.hash = `#explore/${tag}`
-      }, `#${tag}`, el("span", { class: "disc-tag-count" }, String(count))));
-    });
-  }).catch(() => tagsSection.classList.add("hidden"));
-
-  // ── "Matches Your Vibe" compat grid — only shown when taste profile exists
-  if (state.me?.tasteAnswers && Object.keys(state.me.tasteAnswers).length) {
-    const mvWrap = el("div", { class: "disc-mv-wrap" });
-    mvWrap.appendChild(el("div", { class: "disc-section-label disc-mv-label" },
-      el("span", { class: "disc-mv-icon" }, "✦"), " Matches Your Vibe"
-    ));
-    const mvGrid = el("div", { class: "grid-3 disc-mv-grid" });
-    const mvEmpty = el("div", { class: "disc-mv-loading" },
-      el("i", { class: "ri-loader-4-line", style: "animation:spin 1s linear infinite" }),
-    );
-    mvGrid.appendChild(mvEmpty);
-    mvWrap.appendChild(mvGrid);
-    root.appendChild(mvWrap);
-
-    getDocs(query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(80))).then(async (snap) => {
-      const posts = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      const authorUids = [...new Set(posts.map(p => p.authorUid).filter(u => u && u !== state.uid))];
-      // Compute compat for up to 30 authors in parallel (session cache makes this cheap)
-      const compatMap = {};
-      await Promise.all(authorUids.slice(0, 30).map(async uid => {
-        compatMap[uid] = await getCompatibility(uid).catch(() => 0);
-      }));
-      const scored = posts
-        .filter(p => p.authorUid !== state.uid && (compatMap[p.authorUid] || 0) >= 30)
-        .map(p => ({ p, compat: compatMap[p.authorUid] || 0 }))
-        .sort((a, b) => b.compat - a.compat)
-        .slice(0, 18);
-
-      mvGrid.innerHTML = "";
-      if (!scored.length) { mvWrap.remove(); return; }
-
-      scored.forEach(({ p: post, compat }) => {
-        const cell = el("div", { class: "cell mv-cell", onclick: () => location.hash = `#post/${post.id}` });
-        const mediaItems = Array.isArray(post.media) ? post.media : (post.media ? [post.media] : []);
-        if (mediaItems.length) {
-          const m = mediaItems[0];
-          if (m.type === "video") {
-            cell.appendChild(el("video", { src: m.url, muted: "", playsinline: "", preload: "metadata" }));
-            cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-play-fill" })));
-          } else {
-            cell.appendChild(el("img", { src: m.url, loading: "lazy" }));
-            if (mediaItems.length > 1) cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-image-2-line" })));
-          }
-        } else {
-          cell.appendChild(el("div", { class: "cell-text", text: (post.text || "").slice(0, 80) }));
-        }
-        if (post.text) cell.appendChild(el("div", { class: "cell-overlay", text: (post.text || "").slice(0, 55) }));
-        cell.appendChild(el("span", { class: "cell-compat-badge" }, `✦ ${compat}%`));
-        mvGrid.appendChild(cell);
+  // ── Suggested profiles ──────────────────────────────────────────────────
+  if (!hashtagFilter) {
+    const suggSection = el("div", { class: "explore-suggested" });
+    suggSection.appendChild(el("div", { class: "explore-suggested-head" }, "Suggested for you"));
+    const suggScroller = el("div", { class: "explore-suggested-scroller" });
+    suggSection.appendChild(suggScroller);
+    root.appendChild(suggSection);
+    getDocs(query(collection(db, "users"), orderBy("createdAt", "desc"), limit(30))).then((snap) => {
+      const all = snap.docs.map((d) => ({ uid: d.id, ...d.data() }))
+        .filter((u) => u.uid !== state.uid && !(state.me?.following || []).includes(u.uid));
+      for (let i = all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [all[i], all[j]] = [all[j], all[i]]; }
+      if (!all.length) { suggSection.classList.add("hidden"); return; }
+      all.slice(0, 10).forEach((u) => {
+        let iFollow = (state.me?.following || []).includes(u.uid);
+        const followBtn = el("button", { class: `btn sm ${iFollow ? "ghost" : "primary"}` }, iFollow ? "Following" : "Follow");
+        followBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const meRef = doc(db, "users", state.uid);
+          const themRef = doc(db, "users", u.uid);
+          const batch = writeBatch(db);
+          if (iFollow) { batch.update(meRef, { following: arrayRemove(u.uid) }); batch.update(themRef, { followers: arrayRemove(state.uid) }); }
+          else { batch.update(meRef, { following: arrayUnion(u.uid) }); batch.update(themRef, { followers: arrayUnion(state.uid) }); }
+          await batch.commit().catch(() => {});
+          state.cache.users.delete(u.uid);
+          state.cache.users.delete(state.uid);
+          iFollow = !iFollow;
+          followBtn.className = `btn sm ${iFollow ? "ghost" : "primary"}`;
+          followBtn.textContent = iFollow ? "Following" : "Follow";
+          if (state.me.following) iFollow ? state.me.following.push(u.uid) : (state.me.following = state.me.following.filter((x) => x !== u.uid));
+        });
+        suggScroller.appendChild(el("div", { class: "explore-sugg-card", onclick: () => location.hash = `#profile/${u.uid}` },
+          el("img", { class: "avatar md", src: avatarFor(u) }),
+          el("div", { class: "esc-name" }, u.name || "User"),
+          el("div", { class: "esc-sub" }, "@" + (u.username || "user")),
+          followBtn,
+        ));
       });
-    }).catch(() => mvWrap.remove());
+    }).catch(() => {});
   }
 
-  // Section header: Trending posts
-  root.appendChild(el("div", { class: "disc-section-label disc-trending-label" },
-    el("i", { class: "ri-fire-fill" }), "Trending right now"
-  ));
-
-  // Post grid — sorted by engagement score (orbits + likes + views)
   const grid = el("div", { class: "grid-3" });
   root.appendChild(grid);
 
-  onSnapshot(
-    query(collection(db, "posts"), orderBy("orbitCount", "desc"), limit(60)),
-    (snap) => {
-      grid.innerHTML = "";
-      if (snap.empty) {
-        grid.appendChild(el("div", { class: "empty", style: "grid-column:1/-1;" },
-          el("i", { class: "ri-compass-3-line" }),
-          el("div", { class: "t" }, "Nothing trending yet"),
-          el("div", {}, "Be the first to post something amazing.")));
-        return;
-      }
-      // Composite score: orbits ×3 + likes ×2 + views ×0.1 + recency boost
-      const now = Date.now() / 1000;
-      const docs = [...snap.docs].sort((a, b) => {
-        const score = (d) => {
-          const data = d.data();
-          const age = now - (data.createdAt?.seconds || now);
-          const recency = Math.exp(-age / (60 * 60 * 48)); // 48h half-life
-          return (data.orbitCount || 0) * 3 + (data.likes?.length || 0) * 2 + (data.views || 0) * 0.1 + recency * 10;
-        };
-        return score(b) - score(a);
-      });
-      docs.forEach((d) => {
-        const p = { id: d.id, ...d.data() };
-        const cell = el("div", { class: "cell", onclick: () => location.hash = `#post/${p.id}` });
-        const mediaItems = Array.isArray(p.media) ? p.media : (p.media ? [p.media] : []);
-        if (mediaItems.length) {
-          const m = mediaItems[0];
-          if (m.type === "video") {
-            cell.appendChild(el("video", { src: m.url, muted: "", playsinline: "", preload: "metadata" }));
-            cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-play-fill" })));
-          } else {
-            cell.appendChild(el("img", { src: m.url, loading: "lazy" }));
-            if (mediaItems.length > 1) cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-image-2-line" })));
-          }
-        } else {
-          cell.appendChild(el("div", { class: "cell-text", text: (p.text || "").slice(0, 80) }));
-        }
-        if (p.text) cell.appendChild(el("div", { class: "cell-overlay", text: (p.text || "").slice(0, 55) }));
-        const eng = (p.orbitCount || 0) + (p.likes?.length || 0);
-        cell.appendChild(el("span", { class: "cell-views" },
-          eng > 0
-            ? [el("i", { class: "ri-fire-fill", style: "color:var(--grad-1)" }), ` ${eng}`]
-            : [el("i", { class: "ri-eye-line" }), ` ${p.views || 0}`]
-        ));
-        grid.appendChild(cell);
-      });
-    }
-  );
+  // No compound orderBy on hashtag queries — sort client-side to avoid composite index
+  const baseQ = hashtagFilter
+    ? query(collection(db, "posts"), where("hashtags", "array-contains", hashtagFilter.toLowerCase()), limit(60))
+    : query(collection(db, "posts"), orderBy("orbitCount", "desc"), limit(60));
 
+  onSnapshot(baseQ, (snap) => {
+    grid.innerHTML = "";
+    if (snap.empty) {
+      grid.appendChild(el("div", { class: "empty", style: "grid-column:1/-1;" },
+        el("i", { class: hashtagFilter ? "ri-hashtag" : "ri-compass-3-line" }),
+        el("div", { class: "t" }, hashtagFilter ? `No posts tagged #${hashtagFilter}` : "Nothing to explore yet")));
+      return;
+    }
+    // Client-side sort for hashtag queries (no compound index needed)
+    const docs = [...snap.docs].sort((a, b) => {
+      if (hashtagFilter) return (b.data().createdAt?.seconds || 0) - (a.data().createdAt?.seconds || 0);
+      return (b.data().orbitCount || 0) - (a.data().orbitCount || 0);
+    });
+    docs.forEach((d) => {
+      const p = { id: d.id, ...d.data() };
+      const cell = el("div", { class: "cell", onclick: () => location.hash = `#post/${p.id}` });
+      const mediaItems = Array.isArray(p.media) ? p.media : (p.media ? [p.media] : []);
+      if (mediaItems.length) {
+        const m = mediaItems[0];
+        if (m.type === "video") {
+          cell.appendChild(el("video", { src: m.url, muted: "", playsinline: "", preload: "metadata" }));
+          cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-play-fill" })));
+        } else {
+          cell.appendChild(el("img", { src: m.url, loading: "lazy" }));
+          if (mediaItems.length > 1) cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-image-2-line" })));
+        }
+      } else {
+        cell.appendChild(el("div", { class: "cell-text", text: (p.text || "").slice(0, 80) }));
+      }
+      if (p.text) cell.appendChild(el("div", { class: "cell-overlay", text: (p.text || "").slice(0, 55) }));
+      cell.appendChild(el("span", { class: "cell-views" }, el("i", { class: "ri-eye-line" }), " " + String(p.views || 0)));
+      grid.appendChild(cell);
+    });
+  });
 };
 
 const renderSaved = (root) => {
@@ -3184,69 +2440,12 @@ const renderSaved = (root) => {
     const posts = docs.filter((d) => d.exists()).map((d) => ({ id: d.id, ...d.data() }));
     const authors = await Promise.all([...new Set(posts.map((p) => p.authorUid))].map(fetchUser));
     const map = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
-    posts.forEach((p) => list.appendChild(renderPost(p, map[p.authorUid], { hideComments: true })));
+    posts.forEach((p) => list.appendChild(renderPost(p, map[p.authorUid])));
   });
 };
 
 // =========================================================================
 // 12. PROFILE
-// =========================================================================
-// Activity picker — current activity status on profile
-// =========================================================================
-const ACTIVITY_PRESETS = [
-  { emoji: "📖", label: "Reading" },
-  { emoji: "🎵", label: "Listening to music" },
-  { emoji: "☕", label: "Having coffee" },
-  { emoji: "💻", label: "Coding" },
-  { emoji: "🏋️", label: "Working out" },
-  { emoji: "🎮", label: "Gaming" },
-  { emoji: "🍳", label: "Cooking" },
-  { emoji: "✈️", label: "Travelling" },
-  { emoji: "🧘", label: "Meditating" },
-  { emoji: "🎨", label: "Creating" },
-  { emoji: "😴", label: "Resting" },
-  { emoji: "🌿", label: "In nature" },
-];
-
-const openActivityPicker = (u) => {
-  const overlay = el("div", { class: "modal activity-picker-modal", style: "z-index:1100;" });
-  const card = el("div", { class: "modal-card", style: "max-width:380px;" });
-  card.appendChild(el("div", { class: "modal-head" },
-    el("h3", {}, "What are you doing?"),
-    el("button", { class: "icon-btn", onclick: () => overlay.remove() }, el("i", { class: "ri-close-line" }))
-  ));
-  const grid = el("div", { style: "display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:16px;" });
-  ACTIVITY_PRESETS.forEach((act) => {
-    const btn = el("button", { class: `activity-option${(u.currentActivity?.label === act.label) ? " active" : ""}` });
-    btn.appendChild(el("span", { style: "font-size:22px;display:block;margin-bottom:4px;" }, act.emoji));
-    btn.appendChild(el("span", { style: "font-size:11px;font-weight:600;color:var(--text-dim);" }, act.label));
-    btn.addEventListener("click", async () => {
-      await updateDoc(doc(db, "users", state.uid), { currentActivity: act });
-      if (state.me) state.me.currentActivity = act;
-      toast("Activity updated!");
-      overlay.remove();
-      state.cache.users.delete(state.uid);
-      router();
-    });
-    grid.appendChild(btn);
-  });
-  const clearBtn = el("button", { class: "btn ghost block", style: "margin:0 16px 16px;" });
-  clearBtn.textContent = "Clear activity";
-  clearBtn.addEventListener("click", async () => {
-    await updateDoc(doc(db, "users", state.uid), { currentActivity: null });
-    if (state.me) state.me.currentActivity = null;
-    toast("Activity cleared");
-    overlay.remove();
-    state.cache.users.delete(state.uid);
-    router();
-  });
-  card.appendChild(grid);
-  card.appendChild(clearBtn);
-  overlay.appendChild(card);
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
-  document.body.appendChild(overlay);
-};
-
 // =========================================================================
 // Tracks the live listener for whichever profile tab (Posts / Media) is
 // currently rendered, so posting or switching tabs never leaves a stale
@@ -3321,15 +2520,9 @@ const renderProfile = async (root, uid) => {
     el("img", { class: "avatar xl", src: avatarFor(u) }),
     el("div", {},
       el("div", { class: "name-row" }, u.name,
-        u.verified ? el("span", { class: "verified lg", title: "Location verified", html: '<i class="ri-check-line"></i>' }) : null),
+        u.verified ? el("span", { class: "verified lg", title: "Location verified", html: '<i class="ri-check-line"></i>' }) : null,
+        u.isPro ? el("span", { class: "pro-name-badge" }, el("i", { class: "ri-vip-crown-fill" }), " Pro") : null),
       el("div", { class: "uname" }, "@" + u.username),
-      (u.streakCount && u.streakCount > 0) ? el("div", { class: "streak-badge" }, `🔥 ${u.streakCount} day${u.streakCount !== 1 ? "s" : ""} streak`) : null,
-      el("div", { class: `activity-chip${isMe ? " tappable" : ""}`,
-        onclick: isMe ? () => openActivityPicker(u) : undefined },
-        u.currentActivity
-          ? `${u.currentActivity.emoji} ${u.currentActivity.label}`
-          : (isMe ? "＋ Set activity" : null)
-      ),
       el("div", { class: "stats" },
         el("div", { class: "stat" }, followersCountEl, el("span", {}, "followers")),
         el("div", { class: "stat" }, el("strong", {}, String((u.following || []).length)), el("span", {}, "following")),
@@ -3347,11 +2540,19 @@ const renderProfile = async (root, uid) => {
     ),
   ));
 
-  // Academy badges — visible to all users who earned them
-  const academySection = el("div", { class: "profile-academy-section" });
-  root.appendChild(academySection);
+  // Feature: Pro section — rendered directly below header, always visible
+  const proSection = el("div", { class: "profile-pro-section" });
+  root.appendChild(proSection);
   import("./features.js").then((m) => {
-    m.renderLearnBadges(academySection, uid);
+    if (u.isPro) {
+      m.renderOrbitScoreBadge(proSection, uid);
+      m.renderTechStack(proSection, u, isMe);
+      m.renderSkillBadges(proSection, uid, isMe);
+    } else if (isMe) {
+      m.renderGoProBanner(proSection);
+    }
+    // Academy badges — visible to all users who earned them
+    m.renderLearnBadges(proSection, uid);
   }).catch(() => {});
 
   // Tabs: Posts | Media | About | Mutuals
@@ -3384,43 +2585,17 @@ const renderProfile = async (root, uid) => {
       _profileTabUnsub = onSnapshot(
         query(collection(db, "posts"), where("authorUid", "==", uid), limit(60)),
         (snap) => {
+          body.innerHTML = "";
           if (snap.empty) {
-            body.innerHTML = "";
             body.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-image-line" }), el("div", { class: "t" }, "No posts yet")));
             return;
           }
-
-          // Diff approach: only add new posts / remove deleted ones so that
-          // existing video elements (and their IntersectionObserver autoplay)
-          // survive Firestore updates like orbitCount / vibeCount changes.
-          let profFeed = body.querySelector(".profile-feed-list");
-          if (!profFeed) {
-            body.innerHTML = "";
-            profFeed = el("div", { class: "profile-feed-list" });
-            body.appendChild(profFeed);
-          }
-
           const posts = snap.docs
             .map((d) => ({ id: d.id, ...d.data() }))
             .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
 
-          // Remove cards for posts that were deleted
-          const incomingIds = new Set(posts.map((p) => p.id));
-          profFeed.querySelectorAll("[data-post-id]").forEach((node) => {
-            if (!incomingIds.has(node.dataset.postId)) node.remove();
-          });
-
-          // Append only genuinely new posts — skip any already in the DOM
-          const existingIds = new Set(
-            Array.from(profFeed.querySelectorAll("[data-post-id]")).map((node) => node.dataset.postId)
-          );
-          posts.forEach((p) => {
-            if (!existingIds.has(p.id)) {
-              const postEl = renderPost(p, u, { hideComments: true });
-              postEl.dataset.postId = p.id;
-              profFeed.appendChild(postEl);
-            }
-          });
+          const profFeed = el("div", { class: "profile-feed-list" }); body.appendChild(profFeed);
+          posts.forEach((p) => profFeed.appendChild(renderPost(p, u)));
         },
         () => {}
       );
@@ -3465,32 +2640,14 @@ const renderProfile = async (root, uid) => {
 
     } else if (which === "about") {
       body.innerHTML = "";
-      const aboutWrap = el("div", { class: "settings" },
+      body.appendChild(el("div", { class: "settings" },
         el("div", { class: "group" },
           el("h3", {}, "About"),
           el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Joined"), el("div", { class: "d" }, fmtTime(u.createdAt) || "—"))),
           u.location ? el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Verified location"), el("div", { class: "d" }, u.location.city || `${u.location.lat?.toFixed(2)}, ${u.location.lng?.toFixed(2)}`))) : null,
           el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Status"), el("div", { class: "d" }, u.online ? "Online now" : `Last seen ${fmtTime(u.lastSeen)}`))),
         ),
-      );
-      // ── Taste profile answers ─────────────────────────────────────────────
-      if (u.tasteAnswers && Object.keys(u.tasteAnswers).length) {
-        const tasteSection = el("div", { class: "taste-about-section" },
-          el("div", { class: "taste-about-title" }, el("i", { class: "ri-sparkling-2-fill" }), " Taste Profile"),
-        );
-        TASTE_QUESTIONS.forEach((q) => {
-          const answers = u.tasteAnswers[q.id];
-          if (!answers || !answers.length) return;
-          tasteSection.appendChild(el("div", { class: "taste-about-group" },
-            el("div", { class: "taste-about-label" }, q.q),
-            el("div", { class: "taste-about-chips" },
-              ...answers.map((a) => el("span", { class: "taste-about-chip" }, a))
-            ),
-          ));
-        });
-        aboutWrap.appendChild(tasteSection);
-      }
-      body.appendChild(aboutWrap);
+      ));
     } else if (which === "mutuals") {
       body.innerHTML = "";
       const mutualsWrap = el("div", { style: "padding: 0 0 16px;" });
@@ -3555,19 +2712,7 @@ const renderSettings = (root) => {
           el("div", { class: "t" }, state.me.verified ? "Verified ✓" : "Get verified by location"),
           el("div", { class: "d" }, state.me.verified
             ? `You're verified${state.me.location?.city ? " in " + state.me.location.city : ""}.`
-            : "Allow Vibe to read your location once. We only store an approximate area, never live tracking."),
-
-            // Taste quiz button in settings
-            el("div", { class: "settings-row" },
-              el("div", { class: "settings-row-label" },
-                el("i", { class: "ri-heart-3-line", style: "color:var(--grad-1);" }),
-                el("div", {},
-                  el("div", { class: "settings-row-title" }, "Taste Profile"),
-                  el("div", { class: "settings-row-sub" }, state.me?.tasteAnswers ? "Edit your taste matches" : "Set up compatibility matching"),
-                ),
-              ),
-              el("button", { class: "btn sm primary", onclick: () => openTasteProfileSheet() }, "Open"),
-            ),
+            : "Allow Orbit to read your location once. We only store an approximate area, never live tracking."),
         ),
         state.me.verified
           ? el("button", { class: "btn ghost", onclick: async () => {
@@ -3584,7 +2729,7 @@ const renderSettings = (root) => {
       el("div", { class: "row" },
         el("div", { class: "label" },
           el("div", { class: "t" }, "Browser notifications"),
-          el("div", { class: "d" }, "Get pings for new messages and Vibes.")),
+          el("div", { class: "d" }, "Get pings for new messages and Orbits.")),
         el("button", { class: "btn ghost", onclick: async () => {
           const p = await Notification.requestPermission();
           toast(p === "granted" ? "Notifications enabled" : "Notifications denied");
@@ -3607,6 +2752,29 @@ const renderSettings = (root) => {
       el("div", { class: "row" },
         el("div", { class: "label" }, el("div", { class: "t" }, "Sign out"), el("div", { class: "d" }, "End your session on this device.")),
         el("button", { class: "btn ghost", onclick: () => $("#signOutBtn").click() }, "Sign out"),
+      ),
+    ),
+
+    el("div", { class: "group" },
+      el("h3", {}, el("i", { class: "ri-vip-crown-line", style: "color:var(--grad-1);margin-right:6px;" }), "Orbit Pro"),
+      el("div", { class: "row" },
+        el("div", { class: "label" },
+          el("div", { class: "t" }, state.me.isPro ? "Pro activated ✦" : "Go Professional"),
+          el("div", { class: "d" }, state.me.isPro
+            ? "You have access to Orbit Score, Tech Stack, Skill Badges, Build in Public and Project Showcase."
+            : "Unlock developer features: Orbit Score, Tech Stack, Skill Badges, Build in Public & Project Showcase."),
+        ),
+        state.me.isPro
+          ? el("span", { class: "pro-active-badge" }, el("i", { class: "ri-vip-crown-fill" }), " Active")
+          : el("button", { class: "btn primary", onclick: async (e) => {
+              e.currentTarget.disabled = true;
+              e.currentTarget.textContent = "Activating…";
+              await updateDoc(doc(db, "users", state.uid), { isPro: true }).catch(() => {});
+              state.me.isPro = true;
+              state.cache.users.delete(state.uid);
+              toast("Welcome to Orbit Pro! ✦");
+              router();
+            }}, el("i", { class: "ri-vip-crown-line" }), " Activate Pro"),
       ),
     ),
 
@@ -3719,7 +2887,7 @@ $("#groupForm").addEventListener("submit", async (e) => {
 // Music search uses the Internet Archive's public catalog — no API key,
 // signup, or billing required (see crSearchMusic below).
 const CR_STICKERS = ["🔥","❤️","⭐","👍","🎉","😂","💯","✨","🙌","😍","👏","🥳","😎","💜","🎶","⚡"];
-const CR_TEXT_COLORS = ["#ffffff","#000000","#ff5c7a","#ffb04a","#3fdca0","#5cd3ff","#e63950","#ff5cae"];
+const CR_TEXT_COLORS = ["#ffffff","#000000","#ff5c7a","#ffb04a","#3fdca0","#5cd3ff","#8b6cff","#ff5cae"];
 
 let crState = null;
 const _crFreshState = () => ({
@@ -3730,21 +2898,16 @@ const _crFreshState = () => ({
   location: null,
   activeSlide: 0,
   selectedLayerId: null,
-  textOnly: false,        // true → skip media steps entirely
   camStream: null,
   camRecorder: null,
   camChunks: [],
   camTimer: null,
-  camFacing: "user",      // "user" | "environment"
-  camAudio: null,         // audio-only MediaStream kept separate from preview
-  isRecordedVideo: false, // true only when video was recorded inside the app
 });
 
 const crLayerId = () => "l" + Math.random().toString(36).slice(2, 9);
 
 function openCreatePost() {
   if (crState) return; // already open
-  _pauseAllMedia(); // don't let a background post's video/song keep playing under the studio
   crState = _crFreshState();
   const root = el("div", { class: "cr-root", id: "crRoot" });
   document.body.appendChild(root);
@@ -3755,10 +2918,6 @@ function openCreatePost() {
 function crClose() {
   if (!crState) return;
   crStopCamera();
-  crStopPreview();
-  // Editor previews (looping muted video slides) don't route through the
-  // feed's media registry, so stop them explicitly on close.
-  $("#crRoot")?.querySelectorAll("video, audio").forEach((m) => { try { m.pause(); } catch {} });
   crState.slides.forEach((s) => { try { URL.revokeObjectURL(s.url); } catch {} });
   crState = null;
   $("#crRoot")?.remove();
@@ -3778,12 +2937,7 @@ function crRenderShell(root) {
 }
 
 function crBack() {
-  // Music step only applies when a video was recorded in-app
-  const order = crState.textOnly
-    ? ["pick", "details"]
-    : crState.isRecordedVideo
-      ? ["pick", "editor", "music", "details"]
-      : ["pick", "editor", "details"];
+  const order = ["pick", "editor", "music", "details"];
   if (crState.step === "cam") { crStopCamera(); crGoto("pick"); return; }
   const idx = order.indexOf(crState.step);
   if (idx <= 0) { crClose(); return; }
@@ -3801,7 +2955,7 @@ function crGoto(step) {
   else if (step === "editor") {
     title.textContent = "Edit";
     stepsWrap.appendChild(crBuildEditorStep());
-    nextBtn.style.display = ""; nextBtn.textContent = "Next"; nextBtn.onclick = () => crState.isRecordedVideo ? crGoto("music") : crGoto("details");
+    nextBtn.style.display = ""; nextBtn.textContent = "Next"; nextBtn.onclick = () => crGoto("music");
   } else if (step === "music") {
     title.textContent = "Add music";
     stepsWrap.appendChild(crBuildMusicStep());
@@ -3819,9 +2973,6 @@ function crBuildPickStep() {
   fileInput.addEventListener("change", (e) => {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
-    // Uploaded media is never "recorded in-app" — always reset the flag so
-    // the music step is correctly skipped for gallery picks and image sets.
-    crState.isRecordedVideo = false;
     const hasVideo = files.some((f) => f.type.startsWith("video/"));
     if (hasVideo) {
       const f = files.find((f) => f.type.startsWith("video/"));
@@ -3835,14 +2986,12 @@ function crBuildPickStep() {
   const step = el("div", { class: "cr-step active" },
     el("div", { class: "cr-pick" },
       el("div", { class: "cr-pick-title" }, "Create a post"),
-      el("div", { class: "cr-pick-sub" }, "Share a photo, video, or just your thoughts — no media required."),
+      el("div", { class: "cr-pick-sub" }, "Photos, a video, or a carousel — add text, stickers and a song next."),
       el("div", { class: "cr-pick-grid" },
         el("button", { class: "cr-pick-opt", onclick: () => fileInput.click() },
           el("i", { class: "ri-image-add-line" }), el("span", {}, "Photos / video")),
         el("button", { class: "cr-pick-opt", onclick: () => crGoto("cam") },
           el("i", { class: "ri-camera-line" }), el("span", {}, "Record video")),
-        el("button", { class: "cr-pick-opt", onclick: () => { crState.textOnly = true; crState.slides = []; crGoto("details"); } },
-          el("i", { class: "ri-text" }), el("span", {}, "Text only")),
       ),
       el("div", { class: "cr-pick-hint" }, "Pick multiple photos to make a swipeable carousel."),
       fileInput,
@@ -3856,100 +3005,23 @@ function crStopCamera() {
   if (crState?.camTimer) { clearInterval(crState.camTimer); crState.camTimer = null; }
   if (crState?.camRecorder && crState.camRecorder.state !== "inactive") { try { crState.camRecorder.stop(); } catch {} }
   if (crState?.camStream) { crState.camStream.getTracks().forEach((t) => t.stop()); crState.camStream = null; }
-  // Stop the separate audio stream too — it holds the mic open otherwise
-  if (crState?.camAudio) { crState.camAudio.getTracks().forEach((t) => t.stop()); crState.camAudio = null; }
 }
 
 function crBuildCamStep() {
-  const video = el("video", { autoplay: true, playsinline: true });
-  // The preview element must NEVER carry audio tracks.
-  // Setting srcObject to a video-only stream (see startStream below) is the
-  // only reliable way to prevent mic → speaker → mic feedback on mobile.
-  // Setting these properties is a belt-and-suspenders backup.
-  video.muted  = true;
-  video.volume = 0;
-
-  const timer   = el("div", { class: "cr-cam-timer" }, el("span", { class: "dot" }), el("span", { class: "t" }, "0:00"));
-  const recBtn  = el("button", { class: "cr-rec-btn" });
-  const flipBtn = el("button", { class: "cr-cam-flip", title: "Switch camera" }, el("i", { class: "ri-camera-switch-line" }));
+  const video = el("video", { autoplay: true, muted: true, playsinline: true });
+  const timer = el("div", { class: "cr-cam-timer" }, el("span", { class: "dot" }), el("span", { class: "t" }, "0:00"));
+  const recBtn = el("button", { class: "cr-rec-btn" });
   const cam = el("div", { class: "cr-cam" },
     video, timer,
     el("button", { class: "cr-cam-close", onclick: () => { crStopCamera(); crGoto("pick"); } }, el("i", { class: "ri-close-line" })),
-    flipBtn,
     el("div", { class: "cr-cam-bar" }, recBtn),
   );
   const step = el("div", { class: "cr-step active" }, cam);
 
-  // crState.camStream  → video-only stream shown in the preview element
-  // crState.camAudio   → audio-only stream (mic) kept separate
-  // MediaRecorder combines both — the preview element never has audio tracks,
-  // which is the root cause of the screeching feedback loop.
-
-  const startStream = (facing, { isFlip = false } = {}) => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      toast("Camera not available on this device");
-      if (!isFlip) crGoto("pick");
-      return;
-    }
-    // Request video and audio as separate streams so the preview element
-    // only ever receives video tracks (zero chance of audio feedback).
-    //
-    // For flips we use { exact: facing } so the browser is FORCED to return
-    // the other physical camera.  Without "exact", facingMode is treated as a
-    // preference hint and many mobile browsers simply return the already-open
-    // front camera, making the flip button appear to do nothing.
-    // If the device only has one camera, the { exact } request will reject;
-    // we then fall back to a non-exact request so at least the stream stays live.
-    const videoConstraint = isFlip
-      ? { facingMode: { exact: facing } }
-      : { facingMode: facing };
-
-    const getVideoStream = () =>
-      navigator.mediaDevices.getUserMedia({ video: videoConstraint })
-        .catch((err) => {
-          if (isFlip && (err.name === "OverconstrainedError" || err.name === "NotFoundError")) {
-            // Device likely has only one camera — try without exact
-            return navigator.mediaDevices.getUserMedia({ video: { facingMode: facing } });
-          }
-          return Promise.reject(err);
-        });
-
-    Promise.all([
-      getVideoStream(),
-      // Reuse the existing audio stream when just flipping the camera so the
-      // user doesn't get a second microphone permission prompt.
-      crState.camAudio
-        ? Promise.resolve(crState.camAudio)
-        : navigator.mediaDevices.getUserMedia({ audio: true }),
-    ]).then(([videoStream, audioStream]) => {
-      // Safe to stop the old video stream now that the new one is ready
-      if (crState.camStream) crState.camStream.getTracks().forEach((t) => t.stop());
-      crState.camStream = videoStream;
-      crState.camAudio  = audioStream;
-
-      // Preview element gets video-only — no audio track ever touches it
-      video.srcObject = videoStream;
-      video.muted     = true;
-      video.volume    = 0;
-    }).catch(() => {
-      if (isFlip) {
-        crState.camFacing = crState.camFacing === "user" ? "environment" : "user";
-        toast("Couldn't switch camera — your device may only have one");
-      } else {
-        toast("Camera or microphone access denied");
-        crGoto("pick");
-      }
-    });
-  };
-
-  startStream(crState.camFacing || "user");
-
-  // Flip between front and back — blocked while recording is active
-  flipBtn.addEventListener("click", () => {
-    if (crState.camRecorder?.state === "recording") { toast("Stop recording before switching camera"); return; }
-    crState.camFacing = crState.camFacing === "user" ? "environment" : "user";
-    startStream(crState.camFacing, { isFlip: true });
-  });
+  navigator.mediaDevices?.getUserMedia({ video: { facingMode: "user" }, audio: true }).then((stream) => {
+    crState.camStream = stream;
+    video.srcObject = stream;
+  }).catch(() => { toast("Camera access denied or unavailable"); crGoto("pick"); });
 
   let seconds = 0;
   recBtn.addEventListener("click", () => {
@@ -3957,20 +3029,13 @@ function crBuildCamStep() {
     if (!crState.camRecorder || crState.camRecorder.state === "inactive") {
       crState.camChunks = [];
       const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus") ? "video/webm;codecs=vp9,opus" : "video/webm";
-      // Combine the video-only preview stream with the separate audio stream
-      // so the recording has both tracks but the preview element stays silent.
-      const recTracks = [
-        ...crState.camStream.getVideoTracks(),
-        ...(crState.camAudio ? crState.camAudio.getAudioTracks() : []),
-      ];
-      const rec = new MediaRecorder(new MediaStream(recTracks), { mimeType: mime });
+      const rec = new MediaRecorder(crState.camStream, { mimeType: mime });
       rec.ondataavailable = (ev) => { if (ev.data.size) crState.camChunks.push(ev.data); };
       rec.onstop = () => {
         const blob = new Blob(crState.camChunks, { type: "video/webm" });
         const file = new File([blob], `orbit-recording-${Date.now()}.webm`, { type: "video/webm" });
         crState.slides = [{ type: "video", file, url: URL.createObjectURL(file), overlays: [] }];
         crState.activeSlide = 0;
-        crState.isRecordedVideo = true; // mark as recorded — enables music step
         crStopCamera();
         crGoto("editor");
       };
@@ -4087,41 +3152,32 @@ function crBuildEditorStep() {
       );
       layer.style.fontSize = crFontPx(ov, rect().width || 320) + "px";
 
-      // Track drag vs tap: a movement < 6px in either axis is treated as a tap
-      let dragging = false, moved = false, sx = 0, sy = 0, ox = 0, oy = 0;
+      let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
       layer.addEventListener("pointerdown", (e) => {
         crState.selectedLayerId = ov.id;
         paintLayerControls();
         $$(".cr-layer", overlayLayer).forEach((l) => l.classList.remove("selected"));
         layer.classList.add("selected");
-        dragging = true; moved = false;
-        sx = e.clientX; sy = e.clientY; ox = ov.x; oy = ov.y;
+        dragging = true; sx = e.clientX; sy = e.clientY; ox = ov.x; oy = ov.y;
         layer.setPointerCapture(e.pointerId);
       });
       layer.addEventListener("pointermove", (e) => {
         if (!dragging) return;
-        if (Math.abs(e.clientX - sx) > 6 || Math.abs(e.clientY - sy) > 6) moved = true;
-        if (!moved) return; // ignore sub-threshold micro-jitter
         const r = rect();
         ov.x = Math.min(96, Math.max(4, ox + ((e.clientX - sx) / r.width) * 100));
         ov.y = Math.min(96, Math.max(4, oy + ((e.clientY - sy) / r.height) * 100));
         layer.style.left = ov.x + "%"; layer.style.top = ov.y + "%";
       });
-      layer.addEventListener("pointerup", () => {
-        // Single tap (no real movement) on a text layer → open inline editor
-        if (!moved && ov.type === "text") {
+      layer.addEventListener("pointerup", () => { dragging = false; });
+      if (ov.type === "text") {
+        layer.addEventListener("dblclick", () => {
           const span = layer.querySelector("span");
           span.contentEditable = "true";
           span.focus();
-          try { const sel = getSelection(); sel.selectAllChildren(span); } catch {}
-          span.addEventListener("blur", () => {
-            ov.text = span.textContent.trim() || "Tap to edit";
-            span.contentEditable = "false";
-            span.textContent = ov.text;
-          }, { once: true });
-        }
-        dragging = false;
-      });
+          const sel = getSelection(); sel.selectAllChildren(span);
+          span.addEventListener("blur", () => { ov.text = span.textContent.trim() || "Tap to edit"; span.contentEditable = "false"; span.textContent = ov.text; }, { once: true });
+        });
+      }
       overlayLayer.appendChild(layer);
     });
     paintDots(); paintThumbs(); paintLayerControls();
@@ -4188,20 +3244,21 @@ function crBuildMusicStep() {
 }
 function crStopPreview() { if (_crPreviewAudio) { _crPreviewAudio.pause(); _crPreviewAudio = null; } }
 
-// iTunes Search API needs no API key/signup, is CORS-enabled for direct
-// browser calls, and covers real current commercial catalog (Asake, Ariana
-// Grande, Burna Boy, etc.) — each result gives a real 30s preview clip
-// (previewUrl) we can play/attach, which is what TikTok/Reels-style song
-// pickers use under the hood too.
-const ITUNES_DEFAULT_TERMS = ["afrobeats", "hip hop", "pop hits", "top 40"];
+// Internet Archive's public catalog needs no API key/signup at all — its
+// search + metadata endpoints are open and CORS-enabled. We search the
+// "audio" mediatype for Creative-Commons-friendly netlabel/free-music
+// collections, then resolve a playable mp3 URL per result via /metadata.
+const ARCHIVE_AUDIO_COLLECTIONS = "(collection:netlabels OR collection:opensource_audio OR collection:free_music_archive)";
 async function crSearchMusic(qText, results) {
   results.innerHTML = `<div class="cr-music-empty"><i class="ri-loader-4-line"></i> Loading…</div>`;
   try {
-    const term = qText || ITUNES_DEFAULT_TERMS[Math.floor(Math.random() * ITUNES_DEFAULT_TERMS.length)];
-    const url = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&entity=song&limit=25`;
-    const r = await fetch(url);
+    const q = qText
+      ? `${ARCHIVE_AUDIO_COLLECTIONS} AND mediatype:audio AND (${qText})`
+      : `${ARCHIVE_AUDIO_COLLECTIONS} AND mediatype:audio`;
+    const searchUrl = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(q)}&fl[]=identifier&fl[]=title&fl[]=creator&rows=20&output=json`;
+    const r = await fetch(searchUrl);
     const j = await r.json();
-    const docs = (j.results || []).filter((t) => t.previewUrl);
+    const docs = j.response?.docs || [];
     results.innerHTML = "";
     if (!docs.length) { results.appendChild(el("div", { class: "cr-music-empty" }, "No tracks found — try a different search")); return; }
     docs.forEach((doc) => results.appendChild(crTrackRow(doc, results)));
@@ -4210,38 +3267,51 @@ async function crSearchMusic(qText, results) {
     results.appendChild(el("div", { class: "cr-music-empty" }, "Couldn't load music right now"));
   }
 }
+// Each search result is an Archive.org "item" that can contain several
+// files; resolve the first playable mp3/ogg file lazily (only once the
+// user actually previews or picks the track, to avoid 20 metadata calls
+// per search).
+async function crResolveTrackUrl(identifier) {
+  const r = await fetch(`https://archive.org/metadata/${identifier}`);
+  const j = await r.json();
+  const file = (j.files || []).find((f) => /\.(mp3|ogg)$/i.test(f.name) && f.source === "derivative")
+    || (j.files || []).find((f) => /\.(mp3|ogg)$/i.test(f.name));
+  if (!file) return null;
+  return `https://archive.org/download/${identifier}/${encodeURIComponent(file.name)}`;
+}
 function crTrackRow(doc, results) {
-  const id = String(doc.trackId);
-  const isActive = crState.song?.id === id;
-  const title = doc.trackName || "Untitled";
-  const creator = doc.artistName || "Unknown artist";
-  const url = doc.previewUrl;
+  const isActive = crState.song?.id === doc.identifier;
+  const title = doc.title || doc.identifier;
+  const creator = Array.isArray(doc.creator) ? doc.creator[0] : (doc.creator || "Unknown artist");
   const playIcon = el("i", { class: "ri-play-fill" });
   const playBtn = el("button", { class: "cr-track-play" }, playIcon);
   const pickBtn = el("button", { class: "cr-track-pick" }, isActive ? "Selected" : "Use");
-  const artImg = doc.artworkUrl60
-    ? el("img", { src: doc.artworkUrl60, alt: "" })
-    : el("i", { class: "ri-music-2-fill" });
   const row = el("div", { class: "cr-track" + (isActive ? " active" : "") },
-    el("div", { class: "cr-track-art" }, artImg),
+    el("div", { class: "cr-track-art" }, el("i", { class: "ri-music-2-fill" })),
     el("div", { class: "cr-track-info" }, el("div", { class: "n" }, title), el("div", { class: "a" }, creator)),
     playBtn,
     pickBtn,
   );
-  playBtn.addEventListener("click", (e) => {
+  playBtn.addEventListener("click", async (e) => {
     e.stopPropagation();
-    if (_crPreviewAudio && _crPreviewAudio._identifier === id && !_crPreviewAudio.paused) {
+    if (_crPreviewAudio && _crPreviewAudio._identifier === doc.identifier && !_crPreviewAudio.paused) {
       crStopPreview(); playIcon.className = "ri-play-fill"; return;
     }
     crStopPreview();
+    playIcon.className = "ri-loader-4-line";
+    const url = await crResolveTrackUrl(doc.identifier).catch(() => null);
+    if (!url) { playIcon.className = "ri-play-fill"; toast("Couldn't load that track"); return; }
     _crPreviewAudio = new Audio(url);
-    _crPreviewAudio._identifier = id;
-    _crPreviewAudio.play().catch(() => { toast("Couldn't play that track"); });
+    _crPreviewAudio._identifier = doc.identifier;
+    _crPreviewAudio.play().catch(() => {});
     playIcon.className = "ri-pause-fill";
     _crPreviewAudio.addEventListener("ended", () => { playIcon.className = "ri-play-fill"; });
   });
-  pickBtn.addEventListener("click", () => {
-    crState.song = { id, name: title, artist: creator, url };
+  pickBtn.addEventListener("click", async () => {
+    pickBtn.textContent = "…";
+    const url = _crPreviewAudio?._identifier === doc.identifier ? _crPreviewAudio.src : await crResolveTrackUrl(doc.identifier).catch(() => null);
+    if (!url) { toast("Couldn't load that track"); pickBtn.textContent = "Use"; return; }
+    crState.song = { id: doc.identifier, name: title, artist: creator, url };
     crStopPreview();
     crBuildMusicStepPaint(results);
   });
@@ -4253,7 +3323,7 @@ function crBuildMusicStepPaint(results) {
 
 // ---------------- Step 4: details + publish ----------------
 function crBuildDetailsStep() {
-  const thumbSlide = crState.slides[0] || null;
+  const thumbSlide = crState.slides[0];
   const caption = el("textarea", { placeholder: "Write a caption… use #hashtags and @mentions" });
   caption.value = crState.caption;
   caption.addEventListener("input", () => { crState.caption = caption.value; });
@@ -4263,113 +3333,36 @@ function crBuildDetailsStep() {
     el("div", { class: "v" }, crState.location?.city || "Not tagged"),
   );
   locRow.addEventListener("click", () => {
-    if (!("geolocation" in navigator)) { toast("Location not available on this device/browser"); return; }
-    // Geolocation only works in a secure context (https, or localhost) —
-    // fail fast with a clear message instead of silently hanging forever.
-    if (!window.isSecureContext) {
-      toast("Location requires HTTPS — this page is loaded over an insecure connection");
-      return;
-    }
-    const valueEl = locRow.querySelector(".v");
-    valueEl.textContent = "Locating…";
+    if (!("geolocation" in navigator)) { toast("Location not available"); return; }
+    locRow.querySelector(".v").textContent = "Locating…";
     navigator.geolocation.getCurrentPosition(async (pos) => {
-      const { latitude: lat, longitude: lng } = pos.coords;
-      let city = null;
-      // Helper: fetch with a hard timeout so a stalled reverse-geocode
-      // never leaves the UI stuck on "Locating…" indefinitely.
-      const fetchWithTimeout = (url, opts = {}, ms = 6000) => {
-        const ctrl = new AbortController();
-        const tid  = setTimeout(() => ctrl.abort(), ms);
-        return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(tid));
-      };
-      // 1st attempt: BigDataCloud (free, no API key, CORS-safe)
+      const { latitude: lat, longitude: lng } = pos.coords; let city = null;
       try {
-        const r = await fetchWithTimeout(
-          `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lng}&localityLanguage=en`
-        );
-        if (r.ok) { const j = await r.json(); city = j.city || j.locality || j.principalSubdivision || null; }
+        const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=10`);
+        const j = await r.json();
+        city = j.address?.city || j.address?.town || j.address?.state || (j.display_name || "").split(",")[0] || null;
       } catch {}
-      // 2nd attempt: Nominatim fallback if BigDataCloud returned nothing
-      if (!city) {
-        try {
-          const r2 = await fetchWithTimeout(
-            `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=10`,
-            { headers: { "Accept-Language": "en" } }
-          );
-          if (r2.ok) {
-            const j2 = await r2.json();
-            city = j2.address?.city || j2.address?.town || j2.address?.village || j2.address?.state || null;
-          }
-        } catch {}
-      }
       crState.location = { lat: Math.round(lat * 100) / 100, lng: Math.round(lng * 100) / 100, city };
-      valueEl.textContent = city || `${lat.toFixed(3)}, ${lng.toFixed(3)}`;
-      toast("📍 Location tagged" + (city ? `: ${city}` : ""));
-    }, (err) => {
-      const msg = err.code === 1 ? "Location access denied — enable it in your browser/site settings"
-        : err.code === 2 ? "Couldn't determine your location — check your connection and try again"
-        : "Location timed out — move to a clearer area and try again";
-      toast(msg);
-      valueEl.textContent = crState.location?.city || "Not tagged";
-    }, { enableHighAccuracy: false, timeout: 12000, maximumAge: 0 });
+      locRow.querySelector(".v").textContent = city || "My location";
+    }, () => { toast("Location access denied"); locRow.querySelector(".v").textContent = crState.location?.city || "Not tagged"; }, { timeout: 8000 });
   });
 
-  // Music is only available for videos recorded in-app (not uploads or images)
-  const musicRow = crState.isRecordedVideo
-    ? el("div", { class: "cr-details-row" },
-        el("div", { class: "l" }, el("i", { class: "ri-music-2-line" }), "Music"),
-        el("div", { class: "v" }, crState.song ? `${crState.song.name} — ${crState.song.artist}` : "None"),
-      )
-    : null;
-  if (musicRow) musicRow.addEventListener("click", () => crGoto("music"));
-
-  // ── Hashtag prompt — quick-select mood/interest tags ─────────────────────
-  const QUICK_TAGS = ["#music","#art","#film","#food","#fashion","#tech","#gaming","#travel","#books","#fitness","#mood","#photography","#design","#nature","#comedy"];
-  const tagChipsRow = el("div", { class: "cr-tag-chips" });
-  QUICK_TAGS.forEach(tag => {
-    const chip = el("button", { type: "button", class: "cr-tag-chip" }, tag);
-    // Pre-highlight if caption already contains this tag
-    if (crState.caption.includes(tag)) chip.classList.add("active");
-    chip.addEventListener("click", () => {
-      const isActive = chip.classList.toggle("active");
-      if (isActive) {
-        if (!crState.caption.includes(tag)) {
-          crState.caption = (crState.caption.trim() + " " + tag).trim();
-          caption.value = crState.caption;
-        }
-      } else {
-        crState.caption = crState.caption.replace(new RegExp(tag.replace("#","\\#") + "\\b", "g"), "").replace(/\s{2,}/g, " ").trim();
-        caption.value = crState.caption;
-      }
-    });
-    tagChipsRow.appendChild(chip);
-  });
-
-  const tagPrompt = el("div", { class: "cr-tag-prompt" },
-    el("div", { class: "cr-tag-prompt-label" },
-      el("i", { class: "ri-hashtag" }), " Vibe tags"),
-    tagChipsRow,
-    el("div", { class: "cr-tag-hint" }, "Tags help us match your post to people who'll love it."),
+  const musicRow = el("div", { class: "cr-details-row" },
+    el("div", { class: "l" }, el("i", { class: "ri-music-2-line" }), "Music"),
+    el("div", { class: "v" }, crState.song ? `${crState.song.name} — ${crState.song.artist}` : "None"),
   );
+  musicRow.addEventListener("click", () => crGoto("music"));
 
-  const previewEl = thumbSlide
-    ? el("div", { class: "cr-details-preview" },
+  return el("div", { class: "cr-step active" },
+    el("div", { class: "cr-details" },
+      el("div", { class: "cr-details-preview" },
         thumbSlide.type === "video"
           ? el("video", { src: thumbSlide.url, class: "cr-details-thumb", muted: true })
           : el("img", { src: thumbSlide.url, class: "cr-details-thumb" }),
         el("div", { style: "flex:1;color:var(--text-mute);font-size:13px;" },
           crState.slides.length > 1 ? `${crState.slides.length} photos in this post` : (thumbSlide.type === "video" ? "1 video" : "1 photo")),
-      )
-    : el("div", { class: "cr-details-preview cr-details-preview--text" },
-        el("i", { class: "ri-text", style: "font-size:28px;color:var(--text-mute);" }),
-        el("div", { style: "flex:1;color:var(--text-mute);font-size:13px;" }, "Text post"),
-      );
-
-  return el("div", { class: "cr-step active" },
-    el("div", { class: "cr-details" },
-      previewEl,
+      ),
       caption,
-      tagPrompt,
       locRow,
       musicRow,
     ),
@@ -4413,34 +3406,31 @@ function crFlattenImageSlide(slide) {
 }
 
 async function crSubmitPost(btn) {
-  const text = crState.caption.trim();
-  if (!crState.slides.length && !text) { toast("Write something or pick a photo / video"); return; }
+  if (!crState.slides.length) { toast("Pick a photo or video first"); return; }
   btn.disabled = true; btn.textContent = "Posting…";
   try {
+    toast("Uploading…");
     let media;
-    if (crState.slides.length) {
-      toast("Uploading…");
-      if (crState.slides[0].type === "video") {
-        const slide = crState.slides[0];
-        const uploaded = await uploadToCloudinary(slide.file, "video");
-        if (slide.overlays.length) uploaded.overlays = slide.overlays;
-        media = uploaded;
-      } else if (crState.slides.length === 1) {
-        const flat = await crFlattenImageSlide(crState.slides[0]);
-        media = await uploadToCloudinary(flat, "image");
-      } else {
-        const flats = await Promise.all(crState.slides.map(crFlattenImageSlide));
-        media = await Promise.all(flats.map((f) => uploadToCloudinary(f, "image")));
-      }
+    if (crState.slides[0].type === "video") {
+      const slide = crState.slides[0];
+      const uploaded = await uploadToCloudinary(slide.file, "video");
+      if (slide.overlays.length) uploaded.overlays = slide.overlays;
+      media = uploaded;
+    } else if (crState.slides.length === 1) {
+      const flat = await crFlattenImageSlide(crState.slides[0]);
+      media = await uploadToCloudinary(flat, "image");
+    } else {
+      const flats = await Promise.all(crState.slides.map(crFlattenImageSlide));
+      media = await Promise.all(flats.map((f) => uploadToCloudinary(f, "image")));
     }
+    const text = crState.caption.trim();
     const hashtags = extractHashtags(text);
     const postData = {
-      authorUid: state.uid, text, hashtags,
-      ...(media !== undefined ? { media } : {}),
+      authorUid: state.uid, text, media, hashtags,
       orbits: [], orbitCount: 0, commentCount: 0, createdAt: serverTimestamp(),
     };
     if (crState.location) postData.location = crState.location;
-    if (crState.song && crState.isRecordedVideo) postData.song = crState.song; // only recorded videos carry music
+    if (crState.song) postData.song = crState.song;
     const newPostRef = await addDoc(collection(db, "posts"), postData);
     sfxPost();
     toast("Posted!");
@@ -4620,7 +3610,7 @@ const showOnboardingModal = () => {
   // Header
   modal.appendChild(el("div", { class: "onboard-header" },
     el("div", { class: "onboard-logo" }, el("i", { class: "ri-planet-fill" })),
-    el("h2", {}, `Welcome to Vibe, ${(state.me?.name || "there").split(" ")[0]}! 🚀`),
+    el("h2", {}, `Welcome to Orbit, ${(state.me?.name || "there").split(" ")[0]}! 🚀`),
     el("p", {}, "Follow people, join groups, and discover spaces to get started.")
   ));
 
@@ -5018,16 +4008,16 @@ const _injectAIChatEntry = () => {
     const toneInfo = AI_TONES[state.aiTone] || AI_TONES.friendly;
     return el("div", {
       class: "orbit-ai-entry chat-row",
-      style: "display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer;border-bottom:1px solid var(--border,rgba(255,255,255,0.07));background:linear-gradient(90deg,rgba(230,57,80,0.10) 0%,transparent 100%);flex-shrink:0;",
+      style: "display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer;border-bottom:1px solid var(--border,rgba(255,255,255,0.07));background:linear-gradient(90deg,rgba(108,99,255,0.10) 0%,transparent 100%);flex-shrink:0;",
       onclick: () => location.hash = "#chats/ai",
     },
       el("div", { class: "av", style: "position:relative;" },
-        el("div", { style: "width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#e63950,#ff6b6b);display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0;" }, state.aiAvatar),
+        el("div", { style: "width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#6c63ff,#ff6b9d);display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0;" }, state.aiAvatar),
         el("span", { style: "position:absolute;bottom:1px;right:1px;width:10px;height:10px;border-radius:50%;background:#22c55e;border:2px solid var(--bg2,#1a1a2e);" }),
       ),
       el("div", { class: "meta", style: "min-width:0;flex:1;" },
         el("div", { class: "name", style: "font-weight:700;font-size:15px;" }, state.aiName,
-          el("span", { style: "font-size:10px;font-weight:700;color:#e63950;margin-left:6px;background:rgba(230,57,80,.15);padding:1px 6px;border-radius:20px;" }, "AI"),
+          el("span", { style: "font-size:10px;font-weight:700;color:#6c63ff;margin-left:6px;background:rgba(108,99,255,.15);padding:1px 6px;border-radius:20px;" }, "AI"),
         ),
         el("div", { class: "preview", style: "font-size:12px;color:var(--text3);margin-top:2px;" }, `${toneInfo.emoji} ${toneInfo.label} · Always here for you`),
       ),
@@ -5070,9 +4060,9 @@ const _aiBubbleEl = (m) => {
   const isAI = m.role === "ai";
   const wrap = el("div", { class: `chat-bubble-wrap ${isAI ? "ai" : "user"}`, style: `display:flex;align-items:flex-end;gap:8px;margin:6px 14px;${isAI ? "" : "flex-direction:row-reverse;"}` });
   if (isAI) {
-    wrap.appendChild(el("div", { style: "width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--grad-1,#e63950),var(--grad-2,#ff6b6b));display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;" }, state.aiAvatar));
+    wrap.appendChild(el("div", { style: "width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--grad-1,#6c63ff),var(--grad-2,#ff6b9d));display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;" }, state.aiAvatar));
   }
-  const bubble = el("div", { style: `max-width:75%;padding:10px 14px;border-radius:${isAI ? "4px 18px 18px 18px" : "18px 4px 18px 18px"};background:${isAI ? "var(--bg3,#2a2a3a)" : "var(--primary,#e63950)"};color:${isAI ? "var(--text)" : "#fff"};font-size:14px;line-height:1.5;word-break:break-word;` });
+  const bubble = el("div", { style: `max-width:75%;padding:10px 14px;border-radius:${isAI ? "4px 18px 18px 18px" : "18px 4px 18px 18px"};background:${isAI ? "var(--bg3,#2a2a3a)" : "var(--primary,#6c63ff)"};color:${isAI ? "var(--text)" : "#fff"};font-size:14px;line-height:1.5;word-break:break-word;` });
   bubble.textContent = m.text;
   wrap.appendChild(bubble);
   return wrap;
@@ -5090,7 +4080,7 @@ const _aiRenderMessages = () => {
   _aiMessages.forEach((m) => box.appendChild(_aiBubbleEl(m)));
   if (_aiTyping) {
     const typingWrap = el("div", { style: "display:flex;align-items:flex-end;gap:8px;margin:6px 14px;" });
-    typingWrap.appendChild(el("div", { style: "width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--grad-1,#e63950),var(--grad-2,#ff6b6b));display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;" }, state.aiAvatar));
+    typingWrap.appendChild(el("div", { style: "width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--grad-1,#6c63ff),var(--grad-2,#ff6b9d));display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;" }, state.aiAvatar));
     const dots = el("div", { style: "padding:12px 16px;border-radius:4px 18px 18px 18px;background:var(--bg3,#2a2a3a);" });
     dots.innerHTML = `<span style="display:inline-flex;gap:4px;align-items:center;height:14px;"><span style="width:6px;height:6px;border-radius:50%;background:var(--text3);animation:aiDot 1.2s infinite 0s;"></span><span style="width:6px;height:6px;border-radius:50%;background:var(--text3);animation:aiDot 1.2s infinite .2s;"></span><span style="width:6px;height:6px;border-radius:50%;background:var(--text3);animation:aiDot 1.2s infinite .4s;"></span></span>`;
     typingWrap.appendChild(dots);
@@ -5113,18 +4103,18 @@ const _aiInjectStyles = () => {
     .ai-chat-bottom { flex-shrink:0;border-top:1px solid var(--border,rgba(255,255,255,0.07));padding:10px 14px;display:flex;flex-direction:column;gap:8px;background:var(--bg2,#1a1a2e); }
     .ai-chat-input-row { display:flex;align-items:center;gap:8px; }
     .ai-chat-textarea { flex:1;resize:none;border:1px solid var(--border,rgba(255,255,255,0.12));border-radius:22px;padding:10px 16px;background:var(--bg3,#2a2a3a);color:var(--text);font-size:14px;outline:none;max-height:120px;line-height:1.4; }
-    .ai-chat-textarea:focus { border-color:var(--primary,#e63950); }
-    .ai-chat-send-btn { width:40px;height:40px;border-radius:50%;background:var(--primary,#e63950);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#fff; }
+    .ai-chat-textarea:focus { border-color:var(--primary,#6c63ff); }
+    .ai-chat-send-btn { width:40px;height:40px;border-radius:50%;background:var(--primary,#6c63ff);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#fff; }
     .ai-chat-send-btn:hover { opacity:.85; }
     .ai-settings-sheet { display:flex;flex-direction:column;gap:10px;max-height:80dvh;overflow-y:auto; }
     .ai-settings-section { font-size:11px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--text3);margin-top:8px; }
     .ai-name-input { width:100%;padding:10px 14px;border:1px solid var(--border,rgba(255,255,255,0.12));border-radius:12px;background:var(--bg3);color:var(--text);font-size:14px;outline:none;box-sizing:border-box; }
     .ai-avatar-grid { display:flex;flex-wrap:wrap;gap:8px;margin-top:4px; }
     .ai-avatar-opt { width:42px;height:42px;border-radius:50%;border:2px solid transparent;display:flex;align-items:center;justify-content:center;font-size:22px;cursor:pointer;background:var(--bg3);transition:border-color .15s; }
-    .ai-avatar-opt.sel { border-color:var(--primary,#e63950); }
+    .ai-avatar-opt.sel { border-color:var(--primary,#6c63ff); }
     .ai-tone-list { display:flex;flex-direction:column;gap:6px;margin-top:4px; }
     .ai-tone-opt { display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:12px;border:1px solid transparent;cursor:pointer;background:var(--bg3);transition:border-color .15s; }
-    .ai-tone-opt.sel { border-color:var(--primary,#e63950);background:rgba(230,57,80,.1); }
+    .ai-tone-opt.sel { border-color:var(--primary,#6c63ff);background:rgba(108,99,255,.1); }
     .ai-tone-emoji { font-size:18px; }
     .ai-tone-label { font-size:14px;color:var(--text); }
   `;
@@ -5242,9 +4232,9 @@ window._aiOpenSettings = function() {
     state.aiName   = name;
     state.aiAvatar = _pendingAvatar;
     state.aiTone   = _pendingTone;
-    localStorage.setItem("vibe:ai_name",   state.aiName);
-    localStorage.setItem("vibe:ai_avatar", state.aiAvatar);
-    localStorage.setItem("vibe:ai_tone",   state.aiTone);
+    localStorage.setItem("orbit:ai_name",   state.aiName);
+    localStorage.setItem("orbit:ai_avatar", state.aiAvatar);
+    localStorage.setItem("orbit:ai_tone",   state.aiTone);
     overlay.remove();
     toast(`${state.aiAvatar} ${state.aiName} is ready!`);
     // Re-render AI chat if open
@@ -5268,7 +4258,7 @@ const renderAIChat = async (root) => {
   // Header
   const header = el("div", { class: "ai-chat-header" },
     el("button", { class: "icon-btn", onclick: () => history.back() }, el("i", { class: "ri-arrow-left-line" })),
-    el("div", { style: "width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,var(--grad-1,#e63950),var(--grad-2,#ff6b6b));display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;" }, state.aiAvatar),
+    el("div", { style: "width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,var(--grad-1,#6c63ff),var(--grad-2,#ff6b9d));display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;" }, state.aiAvatar),
     el("div", { style: "flex:1;min-width:0;" },
       el("div", { style: "font-weight:700;font-size:15px;" }, state.aiName),
       el("div", { style: "font-size:12px;color:var(--text3);" }, `${toneInfo.emoji} ${toneInfo.label}`),
