@@ -835,6 +835,70 @@ export const fetchUser = async (uid) => {
     render();
     };
 
+    // ── Day-one "Your Vibe So Far" summary card ──────────────────────────
+    const showVibeSummary = async () => {
+      const snap = await getDocs(query(collection(db, "users"), limit(60))).catch(() => null);
+      if (!snap) return;
+      const others = snap.docs.map(d => ({ uid: d.id, ...d.data() })).filter(u => u.uid !== state.uid && u.name);
+      const scored = others
+        .map(u => ({ u, score: computeCompatibility(state.me, u) }))
+        .filter(x => x.score >= 25)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 3);
+
+      const overlay = el("div", { class: "vbs-overlay" });
+      const card = el("div", { class: "vbs-card" },
+        el("div", { class: "vbs-icon" }, "✦"),
+        el("div", { class: "vbs-title" }, "Your Vibe Is Set"),
+        el("div", { class: "vbs-sub" }, scored.length
+          ? "Here's who already matches your taste:"
+          : "Post something and we'll start finding your people."),
+      );
+
+      if (scored.length) {
+        const people = el("div", { class: "vbs-people" });
+        scored.forEach(({ u, score }) => {
+          let _following = (state.me?.following || []).includes(u.uid);
+          const followBtn = el("button", { class: `btn sm${_following ? "" : " primary"}` },
+            _following ? "Following" : "Follow");
+          followBtn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            _following = !_following;
+            followBtn.textContent = _following ? "Following" : "Follow";
+            followBtn.className = `btn sm${_following ? "" : " primary"}`;
+            await updateDoc(doc(db, "users", state.uid), {
+              following: _following ? arrayUnion(u.uid) : arrayRemove(u.uid),
+            }).catch(() => {});
+            await updateDoc(doc(db, "users", u.uid), {
+              followers: _following ? arrayUnion(state.uid) : arrayRemove(state.uid),
+            }).catch(() => {});
+            if (state.me) state.me.following = _following
+              ? [...(state.me.following || []), u.uid]
+              : (state.me.following || []).filter(x => x !== u.uid);
+          });
+          people.appendChild(el("div", { class: "vbs-person", onclick: () => { overlay.remove(); location.hash = `#profile/${u.uid}`; }},
+            el("img", { class: "vbs-avatar", src: avatarFor(u) }),
+            el("div", { class: "vbs-person-info" },
+              el("div", { class: "vbs-person-name" }, u.name || "User"),
+              el("div", { class: "vbs-person-score" },
+                el("i", { class: "ri-fire-fill", style: "color:var(--grad-1)" }),
+                ` ${score}% match`),
+            ),
+            followBtn,
+          ));
+        });
+        card.appendChild(people);
+      }
+
+      card.appendChild(el("button", {
+        class: "btn primary vbs-done",
+        onclick: () => { overlay.remove(); location.hash = "#discover"; }
+      }, "Explore Vibe →"));
+      overlay.appendChild(card);
+      overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+      document.body.appendChild(overlay);
+    };
+
     async function _saveTasteProfile(answers, overlay, onComplete) {
     overlay?.remove();
     if (!state.uid || !Object.keys(answers).length) {
@@ -854,6 +918,8 @@ export const fetchUser = async (uid) => {
       state.cache.users.delete(state.uid);
       toast("✨ Taste profile saved! We'll use this to find your people.");
       if (typeof onComplete === "function") onComplete(answers);
+      // Show day-one summary after a brief delay so toast is visible first
+      setTimeout(() => showVibeSummary().catch(() => {}), 800);
     } catch (err) {
       console.warn("saveTasteProfile:", err);
       toast("Couldn't save taste profile — try again");
@@ -2405,16 +2471,21 @@ const renderPostDetail = async (root, postId) => {
   );
   cmtSection.appendChild(detailReplyBanner);
 
-  const renderDetailComment = (c, a) => {
+  // ── Twitter / X style comment renderer ──────────────────────────────────
+  // Layout: avatar column (with optional thread line) + body column
+  // Header: Name · @username · time on one line
+  // Actions: Reply | Like (count) | Share — spread horizontally
+  const renderDetailComment = (c, a, compatPct = 0) => {
     const isLiked = (c.likes || []).includes(state.uid);
-    const likeCountEl = el("span", { text: String((c.likes || []).length || "") });
-    const likeIconEl = el("i", { class: isLiked ? "ri-heart-fill" : "ri-heart-line", style: isLiked ? "color:var(--danger);" : "" });
     let _liked = isLiked;
-    const likeBtn = el("button", { class: "cmt-like-btn", onclick: async (ev) => {
+    const likeCountEl = el("span", { class: "tw-act-count", text: (c.likes?.length || 0) > 0 ? String(c.likes.length) : "" });
+    const likeIconEl  = el("i",    { class: isLiked ? "ri-heart-fill" : "ri-heart-line" });
+
+    const likeBtn = el("button", { class: `tw-act-btn${isLiked ? " tw-liked" : ""}`, onclick: async (ev) => {
       ev.stopPropagation();
       _liked = !_liked;
       likeIconEl.className = _liked ? "ri-heart-fill" : "ri-heart-line";
-      likeIconEl.style.color = _liked ? "var(--danger)" : "";
+      likeBtn.classList.toggle("tw-liked", _liked);
       const newCount = (c.likes?.length || 0) + (_liked ? 1 : -1);
       likeCountEl.textContent = newCount > 0 ? String(newCount) : "";
       await updateDoc(doc(db, "posts", p.id, "comments", c.id), {
@@ -2428,37 +2499,83 @@ const renderPostDetail = async (root, postId) => {
       }
     }}, likeIconEl, likeCountEl);
 
-    const replyBtn = el("button", { class: "cmt-reply-btn", onclick: () => {
+    const replyCountEl = el("span", { class: "tw-act-count" });
+    const replyBtn = el("button", { class: "tw-act-btn", onclick: () => {
       _detailReplyTo = { uid: a?.uid, name: a?.name || "user", username: a?.username || "" };
       detailReplyBanner.querySelector(".reply-banner-text").textContent = `Replying to @${a?.username || a?.name || "user"}`;
       detailReplyBanner.classList.remove("hidden");
       const inp = cmtSection.querySelector("input");
       inp.placeholder = `Reply to @${a?.username || a?.name || "user"}…`;
       inp.focus();
-    }}, "Reply");
+    }}, el("i", { class: "ri-chat-1-line" }), replyCountEl);
 
-    return el("div", { class: "comment detail-cmt" },
-      el("img", { class: "avatar xs", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
-      el("div", { class: "body" },
-        el("div", { class: "name" }, a?.name || "User",
+    const shareBtn = el("button", { class: "tw-act-btn", onclick: async () => {
+      const url = `${location.origin}${location.pathname}#post/${p.id}`;
+      try { await navigator.share?.({ title: "Vibe", text: c.text || "", url }); }
+      catch { await navigator.clipboard.writeText(url); toast("Link copied"); }
+    }}, el("i", { class: "ri-share-forward-line" }));
+
+    // Avatar column — with thread line connecting to next reply if present
+    const avatarCol = el("div", { class: "tw-av-col" },
+      el("img", {
+        class: "tw-av",
+        src: avatarFor(a),
+        onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${a?.uid}`; }
+      }),
+    );
+
+    // Compatibility badge (only for well-matched commenters)
+    const compatBadge = compatPct >= 50
+      ? el("span", { class: "tw-compat-badge" }, `✦ ${compatPct}%`)
+      : null;
+
+    // Reply-to label
+    const replyLabel = (c.replyToUsername || c.replyToName)
+      ? el("div", { class: "tw-reply-label" },
+          el("span", { class: "tw-reply-at" }, `Replying to @${c.replyToUsername || c.replyToName}`)
+        )
+      : null;
+
+    // Media block
+    let mediaEl = null;
+    if (c.mediaUrl) {
+      mediaEl = el("div", { class: "tw-cmt-media", onclick: (ev) => {
+        ev.stopPropagation();
+        c.mediaType === "video" ? openVideoViewer([{ type: "video", url: c.mediaUrl }], 0) : openImageZoom(c.mediaUrl);
+      }},
+        c.mediaType === "video"
+          ? el("div", { class: "cmt-media-video-wrap" },
+              el("video", { src: c.mediaUrl, muted: "", preload: "metadata" }),
+              el("div", { class: "cmt-media-video-play", html: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>` }),
+            )
+          : el("img", { src: c.mediaUrl, loading: "lazy" }),
+      );
+    } else if (c.audioUrl) {
+      mediaEl = el("div", { class: "cmt-voice-note" },
+        el("span", { html: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>` }),
+        el("audio", { src: c.audioUrl, controls: true, style: "height:28px;max-width:180px;" }),
+      );
+    }
+
+    return el("div", { class: "tw-comment" },
+      avatarCol,
+      el("div", { class: "tw-body" },
+        el("div", { class: "tw-header" },
+          el("span", { class: "tw-name" }, a?.name || "User"),
           a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
-          el("span", { class: "cmt-time" }, fmtTime(c.createdAt)),
+          el("span", { class: "tw-username" }, `@${a?.username || "user"}`),
+          el("span", { class: "tw-dot" }, "·"),
+          el("span", { class: "tw-time" }, fmtTime(c.createdAt)),
+          compatBadge,
         ),
-        (c.replyToUsername || c.replyToName) ? el("div", { class: "reply-to-label" }, el("i", { class: "ri-corner-down-right-line" }), el("a", { class: "mention", href: `#profile-u/${c.replyToUsername || c.replyToName}` }, `@${c.replyToUsername || c.replyToName}`)) : null,
-        c.text ? el("div", { class: "text", text: c.text }) : null,
-        c.mediaUrl ? el("div", { class: "cmt-media", onclick: (ev) => { ev.stopPropagation(); c.mediaType === "video" ? openVideoViewer([{ type: "video", url: c.mediaUrl }], 0) : openImageZoom(c.mediaUrl); }},
-          c.mediaType === "video"
-            ? el("div", { class: "cmt-media-video-wrap" },
-                el("video", { src: c.mediaUrl, muted: "", preload: "metadata", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;" }),
-                el("div", { class: "cmt-media-video-play", html: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>` }),
-              )
-            : el("img", { src: c.mediaUrl, loading: "lazy", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;" }),
-        ) : null,
-        c.audioUrl ? el("div", { class: "cmt-voice-note" },
-          el("span", { html: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>` }),
-          el("audio", { src: c.audioUrl, controls: true, style: "height:28px;max-width:150px;" }),
-        ) : null,
-        el("div", { class: "cmt-meta-row" }, replyBtn, likeBtn),
+        replyLabel,
+        c.text ? el("div", { class: "tw-text" }, c.text) : null,
+        mediaEl,
+        el("div", { class: "tw-actions" },
+          replyBtn,
+          likeBtn,
+          shareBtn,
+        ),
       ),
     );
   };
@@ -2474,15 +2591,36 @@ const renderPostDetail = async (root, postId) => {
     _detailCmtSnap = onSnapshot(q, async (snap) => {
       cList.innerHTML = "";
       if (snap.empty) {
-        cList.appendChild(el("div", { class: "reel-cmt-empty" }, "No comments yet. Be the first!"));
+        cList.appendChild(el("div", { class: "tw-cmt-empty" },
+          el("i", { class: "ri-chat-3-line" }),
+          el("div", {}, "No comments yet — be the first to reply!")
+        ));
         return;
       }
       const comments = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       const auths = await Promise.all([...new Set(comments.map((c) => c.authorUid))].map(fetchUser));
       const map = Object.fromEntries(auths.filter(Boolean).map((u) => [u.uid, u]));
-      comments.forEach((c) => cList.appendChild(renderDetailComment(c, map[c.authorUid])));
 
-      // Show "Load more" button only if we might have more and haven't loaded all yet
+      // ── Rank comments by compatibility with viewer ────────────────────────
+      // Taste-compatible commenters surface first; fall back to chronological.
+      const uniqueCommenters = [...new Set(comments.map(c => c.authorUid).filter(u => u && u !== state.uid))];
+      const cmtCompatMap = {};
+      await Promise.all(uniqueCommenters.map(async uid => {
+        cmtCompatMap[uid] = await getCompatibility(uid).catch(() => 0);
+      }));
+      const ranked = [...comments].sort((a, b) => {
+        const ca = cmtCompatMap[a.authorUid] || 0;
+        const cb = cmtCompatMap[b.authorUid] || 0;
+        if (Math.abs(ca - cb) > 10) return cb - ca;          // compat-first
+        return (a.createdAt?.toMillis?.() || 0) - (b.createdAt?.toMillis?.() || 0); // then chrono
+      });
+
+      ranked.forEach((c) => {
+        const compat = cmtCompatMap[c.authorUid] || 0;
+        cList.appendChild(renderDetailComment(c, map[c.authorUid], compat));
+      });
+
+      // "Load more" button
       if (!showAll && snap.docs.length >= DETAIL_CMT_PAGE) {
         const total = p.commentCount || 0;
         const remaining = total - snap.docs.length;
@@ -2828,6 +2966,59 @@ const renderExplore = (root, hashtagFilter = null) => {
       }, `#${tag}`, el("span", { class: "disc-tag-count" }, String(count))));
     });
   }).catch(() => tagsSection.classList.add("hidden"));
+
+  // ── "Matches Your Vibe" compat grid — only shown when taste profile exists
+  if (state.me?.tasteAnswers && Object.keys(state.me.tasteAnswers).length) {
+    const mvWrap = el("div", { class: "disc-mv-wrap" });
+    mvWrap.appendChild(el("div", { class: "disc-section-label disc-mv-label" },
+      el("span", { class: "disc-mv-icon" }, "✦"), " Matches Your Vibe"
+    ));
+    const mvGrid = el("div", { class: "grid-3 disc-mv-grid" });
+    const mvEmpty = el("div", { class: "disc-mv-loading" },
+      el("i", { class: "ri-loader-4-line", style: "animation:spin 1s linear infinite" }),
+    );
+    mvGrid.appendChild(mvEmpty);
+    mvWrap.appendChild(mvGrid);
+    root.appendChild(mvWrap);
+
+    getDocs(query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(80))).then(async (snap) => {
+      const posts = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const authorUids = [...new Set(posts.map(p => p.authorUid).filter(u => u && u !== state.uid))];
+      // Compute compat for up to 30 authors in parallel (session cache makes this cheap)
+      const compatMap = {};
+      await Promise.all(authorUids.slice(0, 30).map(async uid => {
+        compatMap[uid] = await getCompatibility(uid).catch(() => 0);
+      }));
+      const scored = posts
+        .filter(p => p.authorUid !== state.uid && (compatMap[p.authorUid] || 0) >= 30)
+        .map(p => ({ p, compat: compatMap[p.authorUid] || 0 }))
+        .sort((a, b) => b.compat - a.compat)
+        .slice(0, 18);
+
+      mvGrid.innerHTML = "";
+      if (!scored.length) { mvWrap.remove(); return; }
+
+      scored.forEach(({ p: post, compat }) => {
+        const cell = el("div", { class: "cell mv-cell", onclick: () => location.hash = `#post/${post.id}` });
+        const mediaItems = Array.isArray(post.media) ? post.media : (post.media ? [post.media] : []);
+        if (mediaItems.length) {
+          const m = mediaItems[0];
+          if (m.type === "video") {
+            cell.appendChild(el("video", { src: m.url, muted: "", playsinline: "", preload: "metadata" }));
+            cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-play-fill" })));
+          } else {
+            cell.appendChild(el("img", { src: m.url, loading: "lazy" }));
+            if (mediaItems.length > 1) cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-image-2-line" })));
+          }
+        } else {
+          cell.appendChild(el("div", { class: "cell-text", text: (post.text || "").slice(0, 80) }));
+        }
+        if (post.text) cell.appendChild(el("div", { class: "cell-overlay", text: (post.text || "").slice(0, 55) }));
+        cell.appendChild(el("span", { class: "cell-compat-badge" }, `✦ ${compat}%`));
+        mvGrid.appendChild(cell);
+      });
+    }).catch(() => mvWrap.remove());
+  }
 
   // Section header: Trending posts
   root.appendChild(el("div", { class: "disc-section-label disc-trending-label" },
@@ -3966,6 +4157,35 @@ function crBuildDetailsStep() {
     : null;
   if (musicRow) musicRow.addEventListener("click", () => crGoto("music"));
 
+  // ── Hashtag prompt — quick-select mood/interest tags ─────────────────────
+  const QUICK_TAGS = ["#music","#art","#film","#food","#fashion","#tech","#gaming","#travel","#books","#fitness","#mood","#photography","#design","#nature","#comedy"];
+  const tagChipsRow = el("div", { class: "cr-tag-chips" });
+  QUICK_TAGS.forEach(tag => {
+    const chip = el("button", { type: "button", class: "cr-tag-chip" }, tag);
+    // Pre-highlight if caption already contains this tag
+    if (crState.caption.includes(tag)) chip.classList.add("active");
+    chip.addEventListener("click", () => {
+      const isActive = chip.classList.toggle("active");
+      if (isActive) {
+        if (!crState.caption.includes(tag)) {
+          crState.caption = (crState.caption.trim() + " " + tag).trim();
+          caption.value = crState.caption;
+        }
+      } else {
+        crState.caption = crState.caption.replace(new RegExp(tag.replace("#","\\#") + "\\b", "g"), "").replace(/\s{2,}/g, " ").trim();
+        caption.value = crState.caption;
+      }
+    });
+    tagChipsRow.appendChild(chip);
+  });
+
+  const tagPrompt = el("div", { class: "cr-tag-prompt" },
+    el("div", { class: "cr-tag-prompt-label" },
+      el("i", { class: "ri-hashtag" }), " Vibe tags"),
+    tagChipsRow,
+    el("div", { class: "cr-tag-hint" }, "Tags help us match your post to people who'll love it."),
+  );
+
   return el("div", { class: "cr-step active" },
     el("div", { class: "cr-details" },
       el("div", { class: "cr-details-preview" },
@@ -3976,6 +4196,7 @@ function crBuildDetailsStep() {
           crState.slides.length > 1 ? `${crState.slides.length} photos in this post` : (thumbSlide.type === "video" ? "1 video" : "1 photo")),
       ),
       caption,
+      tagPrompt,
       locRow,
       musicRow,
     ),

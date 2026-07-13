@@ -3347,3 +3347,364 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
     .fmc-why { font-size: 12px; color: var(--text-mute); }
     .fmc-score { font-size: 22px; font-weight: 800; color: var(--primary); font-family: var(--font-display); flex-shrink: 0; }
     
+/* =============================================================
+   TWITTER / X STYLE COMMENTS — detail view
+   ============================================================= */
+
+/* Override old detail-cmt-list gap so border-bottom separators carry the rhythm */
+.detail-cmt-list { gap: 0 !important; padding: 0 !important; }
+
+.tw-comment {
+  display: flex;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  transition: background var(--speed);
+}
+.tw-comment:hover { background: var(--hover); }
+.tw-comment:last-child { border-bottom: none; }
+
+/* Avatar column */
+.tw-av-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+  width: 40px;
+}
+.tw-av {
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity var(--speed);
+}
+.tw-av:hover { opacity: .85; }
+
+/* Body */
+.tw-body { flex: 1; min-width: 0; }
+
+/* Header row: Name · @user · time */
+.tw-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 14px;
+  line-height: 1.3;
+}
+.tw-name {
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+.tw-username {
+  color: var(--text-mute);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
+.tw-dot { color: var(--text-mute); font-size: 12px; }
+.tw-time { color: var(--text-mute); font-size: 13px; white-space: nowrap; }
+
+/* Compat badge on comment */
+.tw-compat-badge {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border-radius: 20px;
+  padding: 1px 7px;
+  white-space: nowrap;
+  margin-left: 2px;
+}
+
+/* Reply-to label */
+.tw-reply-label { margin-top: 2px; }
+.tw-reply-at { color: var(--primary); font-size: 13px; }
+
+/* Comment text */
+.tw-text {
+  font-size: 15px;
+  color: var(--text);
+  line-height: 1.55;
+  margin-top: 4px;
+  word-break: break-word;
+}
+
+/* Media inside comment */
+.tw-cmt-media {
+  margin-top: 8px;
+  border-radius: 12px;
+  overflow: hidden;
+  max-width: 260px;
+  cursor: pointer;
+}
+.tw-cmt-media img,
+.tw-cmt-media video {
+  width: 100%;
+  max-height: 200px;
+  object-fit: cover;
+  display: block;
+}
+
+/* Action bar */
+.tw-actions {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-top: 10px;
+}
+.tw-act-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-mute);
+  font-size: 13px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color var(--speed);
+}
+.tw-act-btn i { font-size: 17px; }
+.tw-act-btn:hover { color: var(--primary); }
+.tw-act-btn.tw-liked { color: var(--danger); }
+.tw-act-btn.tw-liked i { animation: heartPop .25s ease; }
+.tw-act-count {
+  font-size: 13px;
+  min-width: 12px;
+  text-align: left;
+}
+
+/* Empty state */
+.tw-cmt-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 32px 16px;
+  color: var(--text-mute);
+  font-size: 14px;
+  text-align: center;
+}
+.tw-cmt-empty i { font-size: 28px; }
+
+@keyframes heartPop {
+  0%   { transform: scale(1); }
+  50%  { transform: scale(1.35); }
+  100% { transform: scale(1); }
+}
+
+/* =============================================================
+   DISCOVER — "Matches Your Vibe" compat grid section
+   ============================================================= */
+
+.disc-mv-wrap { margin-bottom: 4px; }
+
+.disc-mv-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 16px 8px;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text);
+}
+.disc-mv-icon {
+  font-size: 15px;
+  background: var(--grad-full);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Compat % badge overlaid on discover grid cells */
+.cell-compat-badge {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  background: linear-gradient(135deg, var(--grad-1), var(--grad-2));
+  color: #fff;
+  border-radius: 20px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  pointer-events: none;
+  letter-spacing: .02em;
+}
+
+.disc-mv-loading {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: center;
+  padding: 24px;
+  color: var(--text-mute);
+  font-size: 20px;
+}
+
+/* =============================================================
+   COMPOSER — hashtag vibe tag prompt
+   ============================================================= */
+
+.cr-tag-prompt {
+  padding: 12px 0 8px;
+  border-top: 1px solid var(--line);
+  margin-top: 8px;
+}
+.cr-tag-prompt-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-mute);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  margin-bottom: 8px;
+}
+.cr-tag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.cr-tag-chip {
+  font-size: 13px;
+  padding: 5px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: var(--bg-elev-2);
+  color: var(--text-mute);
+  cursor: pointer;
+  transition: all var(--speed);
+  font-weight: 500;
+}
+.cr-tag-chip:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+.cr-tag-chip.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  font-weight: 700;
+}
+.cr-tag-hint {
+  font-size: 11px;
+  color: var(--text-mute);
+  margin-top: 8px;
+  line-height: 1.4;
+}
+
+/* =============================================================
+   DAY-ONE "Your Vibe So Far" summary overlay
+   ============================================================= */
+
+.vbs-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 20px;
+  backdrop-filter: blur(6px);
+  animation: fadeIn .25s ease;
+}
+.vbs-card {
+  background: var(--bg-elev);
+  border-radius: 20px;
+  padding: 28px 24px 24px;
+  max-width: 380px;
+  width: 100%;
+  text-align: center;
+  box-shadow: 0 24px 60px rgba(0,0,0,.35);
+  animation: slideUp .3s cubic-bezier(.34,1.56,.64,1);
+}
+.vbs-icon {
+  font-size: 36px;
+  background: var(--grad-full);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 8px;
+  line-height: 1;
+}
+.vbs-title {
+  font-size: 22px;
+  font-weight: 800;
+  font-family: var(--font-display);
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.vbs-sub {
+  font-size: 14px;
+  color: var(--text-mute);
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+
+/* People match list */
+.vbs-people {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+  text-align: left;
+}
+.vbs-person {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: var(--bg-elev-2);
+  cursor: pointer;
+  transition: background var(--speed);
+}
+.vbs-person:hover { background: var(--hover); }
+.vbs-avatar {
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.vbs-person-info { flex: 1; min-width: 0; }
+.vbs-person-name {
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vbs-person-score {
+  font-size: 13px;
+  color: var(--text-mute);
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 2px;
+}
+
+.vbs-done {
+  width: 100%;
+  padding: 14px !important;
+  font-size: 16px !important;
+  font-weight: 700 !important;
+  border-radius: 14px !important;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(30px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
