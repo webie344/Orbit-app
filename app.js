@@ -1076,7 +1076,18 @@ const ensureUserDoc = async (user, extras = {}) => {
   }
   // mark online + lastSeen
   await updateDoc(ref, { online: true, lastSeen: serverTimestamp() });
-  return { uid: user.uid, ...snap.data(), online: true };
+  // ── Streak tracking ─────────────────────────────────────────────────────
+  const _today = new Date().toISOString().slice(0, 10);
+  const _sd = snap.data();
+  const _lastStreakDate = _sd.lastStreakDate || null;
+  const _streakCount = _sd.streakCount || 0;
+  let _newStreak = _streakCount;
+  if (_lastStreakDate !== _today) {
+    const _yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    _newStreak = _lastStreakDate === _yesterday ? _streakCount + 1 : 1;
+    await updateDoc(ref, { streakCount: _newStreak, lastStreakDate: _today });
+  }
+  return { uid: user.uid, ...snap.data(), online: true, streakCount: _newStreak };
 };
 
 onAuthStateChanged(auth, async (user) => {
@@ -1681,34 +1692,16 @@ const renderFeed = (root) => {
   );
   wrap.appendChild(stub);
 
-  // ── Feed filter tabs (For You | Mutuals) ───────────────────────────
-  const feedFilterTabs = el("div", { class: "feed-filter-tabs" },
-    el("button", { class: "feed-filter-tab active", "data-ftab": "foryou" }, "For You"),
-    el("button", { class: "feed-filter-tab", "data-ftab": "mutuals" },
-      el("i", { class: "ri-team-line" }), " Mutuals"),
+  // ── Doing Now button row ────────────────────────────────────────────────
+  const doingNowRow = el("div", { class: "doing-now-row" },
+    el("button", { class: "doing-now-btn", onclick: () => openDoingNowModal() },
+      el("i", { class: "ri-camera-line" }), " What are you doing now?")
   );
-  wrap.appendChild(feedFilterTabs);
+  wrap.appendChild(doingNowRow);
 
-  // Mutuals panel — shown when Mutuals tab is active
-  const mutualsPanel = el("div", { class: "mutuals-feed-panel hidden" });
-  wrap.appendChild(mutualsPanel);
-
-  // Feed main content wrapper — toggled by tab
+  // Feed main content wrapper
   const feedMainContent = el("div", { class: "feed-main-content" });
   wrap.appendChild(feedMainContent);
-
-  feedFilterTabs.querySelectorAll(".feed-filter-tab").forEach((tab) => {
-    tab.addEventListener("click", () => {
-      feedFilterTabs.querySelectorAll(".feed-filter-tab").forEach((t) => t.classList.toggle("active", t === tab));
-      const isMutuals = tab.dataset.ftab === "mutuals";
-      mutualsPanel.classList.toggle("hidden", !isMutuals);
-      feedMainContent.classList.toggle("hidden", isMutuals);
-      if (isMutuals && !mutualsPanel._loaded) {
-        mutualsPanel._loaded = true;
-        renderMutuals(mutualsPanel, true);
-      }
-    });
-  });
 
   // Posts container
   const list = el("div", { class: "feed-list" });
@@ -2000,6 +1993,82 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
   return wrap;
 };
 
+// =========================================================================
+// openDoingNowModal — "What are you doing now?" composer (kind: doingNow)
+// =========================================================================
+const openDoingNowModal = () => {
+  let _doingNowFile = null;
+
+  const overlay = el("div", { class: "modal doing-now-modal", style: "z-index:1050;" });
+  const card = el("div", { class: "modal-card" });
+
+  card.appendChild(el("div", { class: "modal-head" },
+    el("h3", {}, "What are you doing now?"),
+    el("button", { class: "icon-btn", onclick: () => overlay.remove() }, el("i", { class: "ri-close-line" }))
+  ));
+
+  const body = el("div", { class: "compose-pane", style: "gap:14px;" });
+
+  // Photo preview / picker
+  const photoPreview = el("div", { class: "dn-photo-preview",
+    style: "width:100%;aspect-ratio:1;background:var(--bg-elev-2);border-radius:14px;border:1.5px dashed var(--line);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;position:relative;" });
+  photoPreview.appendChild(el("div", { style: "display:flex;flex-direction:column;align-items:center;gap:8px;color:var(--text-mute);" },
+    el("i", { class: "ri-image-add-line", style: "font-size:32px;" }),
+    el("span", { style: "font-size:13px;font-weight:600;" }, "Tap to add photo")
+  ));
+  const photoInput = el("input", { type: "file", accept: "image/*" });
+  photoInput.style.display = "none";
+  photoInput.addEventListener("change", (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    _doingNowFile = file;
+    const previewUrl = URL.createObjectURL(file);
+    photoPreview.innerHTML = "";
+    photoPreview.appendChild(el("img", { src: previewUrl, style: "width:100%;height:100%;object-fit:cover;" }));
+    const changeBtn = el("button", { style: "position:absolute;bottom:8px;right:8px;background:rgba(0,0,0,.55);color:#fff;border-radius:999px;padding:4px 10px;font-size:12px;font-weight:600;" }, "Change");
+    changeBtn.addEventListener("click", (ev) => { ev.stopPropagation(); photoInput.click(); });
+    photoPreview.appendChild(changeBtn);
+  });
+  photoPreview.addEventListener("click", () => photoInput.click());
+  body.appendChild(photoPreview);
+  body.appendChild(photoInput);
+
+  // Status text
+  const statusInput = el("input", { type: "text", placeholder: "Add a short status… (e.g. 'Making coffee ☕')", maxlength: 80 });
+  body.appendChild(statusInput);
+
+  const submitBtn = el("button", { class: "btn primary block" }, el("i", { class: "ri-send-plane-line" }), " Share moment");
+  submitBtn.addEventListener("click", async () => {
+    const text = statusInput.value.trim();
+    if (!_doingNowFile && !text) { toast("Add a photo or status text"); return; }
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Sharing…";
+    try {
+      const postData = {
+        kind: "doingNow",
+        text: text || "",
+        authorUid: state.uid,
+        createdAt: serverTimestamp(),
+        orbits: [], orbitCount: 0, commentCount: 0, views: 0,
+      };
+      if (_doingNowFile) {
+        const up = await uploadToCloudinary(_doingNowFile, "image");
+        postData.media = [{ type: "image", url: up.url }];
+        postData.doingNowPhoto = up.url;
+      }
+      await addDoc(collection(db, "posts"), postData);
+      sfxPost();
+      toast("Moment shared! 📸");
+      overlay.remove();
+    } catch { toast("Failed to share moment"); submitBtn.disabled = false; submitBtn.textContent = "Share moment"; }
+  });
+  body.appendChild(submitBtn);
+  card.appendChild(body);
+  overlay.appendChild(card);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+};
+
 const renderPost = (p, author, opts = {}) => {
   const iOrbited = (p.orbits || []).includes(state.uid);
   const isMine = p.authorUid === state.uid;
@@ -2016,6 +2085,23 @@ const renderPost = (p, author, opts = {}) => {
   }
 
   const post = el("article", { class: `post${trending ? " is-trending" : ""}` });
+
+  // ── "Doing Now" posts render as a circular moment card ──────────────────
+  if (p.kind === "doingNow") {
+    const _photo = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
+    const nowCard = el("article", { class: "post post-now-card", onclick: () => location.hash = `#post/${p.id}` });
+    if (_photo) nowCard.appendChild(el("img", { class: "now-card-photo", src: _photo, loading: "lazy" }));
+    const _overlay = el("div", { class: "now-card-overlay" },
+      el("div", { class: "now-card-author" },
+        el("img", { class: "avatar xs", src: avatarFor(author) }),
+        el("span", {}, author?.name || "User"),
+      ),
+    );
+    if (p.text) _overlay.appendChild(el("div", { class: "now-card-text" }, p.text));
+    nowCard.appendChild(_overlay);
+    nowCard.appendChild(el("div", { style: "padding:6px 12px 4px;font-size:11px;color:var(--text-mute);" }, fmtTime(p.createdAt)));
+    return nowCard;
+  }
 
   const head = el("div", { class: "post-head" },
     el("img", { class: "avatar md", src: avatarFor(author), onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${author?.uid}`; } }),
@@ -2302,11 +2388,11 @@ const renderPost = (p, author, opts = {}) => {
       if (!text && !_cmtMediaFile && !_cmtAudioBlob) return;
       const submitBtn = cForm.querySelector("button[type='submit']");
       submitBtn.disabled = true;
-      const commentData = {
-        text: text || "", authorUid: state.uid, createdAt: serverTimestamp(), likes: [],
-        ..._replyTo ? { replyToUid: _replyTo.uid, replyToName: _replyTo.name, replyToUsername: _replyTo.username } : {},
-      };
       try {
+        const commentData = {
+          text: text || "", authorUid: state.uid, createdAt: serverTimestamp(), likes: [],
+          ..._replyTo ? { replyToUid: _replyTo.uid, replyToName: _replyTo.name, replyToUsername: _replyTo.username } : {},
+        };
         if (_cmtMediaFile) {
           const kind = _cmtMediaFile.type.startsWith("video") ? "video" : "image";
           const up = await uploadToCloudinary(_cmtMediaFile, kind);
@@ -2316,37 +2402,36 @@ const renderPost = (p, author, opts = {}) => {
           const up = await uploadToCloudinary(audioFile, "video");
           commentData.audioUrl = up.url;
         }
-      } catch { toast("Media upload failed"); submitBtn.disabled = false; return; }
-      input.value = ""; _replyTo = null;
-      replyBanner.classList.add("hidden"); input.placeholder = "Write a comment…";
-      clearCmtAttach();
-      // Optimistic UI
-      cBox.classList.remove("hidden");
-      cBox.appendChild(el("div", { class: "comment" },
-        el("img", { class: "avatar xs", src: avatarFor(state.me), onclick: () => location.hash = `#profile/${state.uid}` }),
-        el("div", { class: "body" },
-          el("div", { class: "name" }, state.me?.name || "User"),
-          commentData.text ? el("div", { class: "text", text: commentData.text }) : null,
-        ),
-      ));
-      sfxComment();
-      submitBtn.disabled = false;
-      await addDoc(collection(db, "posts", p.id, "comments"), commentData);
-      await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
-      const notifSnippet = commentData.text ? `"${commentData.text.slice(0, 60)}"` : commentData.mediaType ? "📷 sent a photo" : "🎙️ sent a voice note";
-      if (author?.uid && author.uid !== state.uid) {
-        writeNotif(author.uid, "comment", { postId: p.id, text: `${state.me?.name || "Someone"} commented: ${notifSnippet}` }).catch(() => {});
-        const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
-        import("./notifications.js").then(({ notifyUser }) =>
-          notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
-        ).catch(() => {});
-      }
-      if (commentData.replyToUid && commentData.replyToUid !== state.uid && commentData.replyToUid !== author?.uid) {
-        writeNotif(commentData.replyToUid, "commentReply", { postId: p.id, text: `${state.me?.name || "Someone"} replied to your comment: ${notifSnippet}` }).catch(() => {});
-        import("./notifications.js").then(({ notifyUser }) =>
-          notifyUser(commentData.replyToUid, state.me?.name || "Someone", "replied to your comment", "/#post/" + p.id, state.me?.photoURL || "")
-        ).catch(() => {});
-      }
+        input.value = ""; _replyTo = null;
+        replyBanner.classList.add("hidden"); input.placeholder = "Write a comment…";
+        clearCmtAttach();
+        // Optimistic UI
+        cBox.classList.remove("hidden");
+        cBox.appendChild(el("div", { class: "comment" },
+          el("img", { class: "avatar xs", src: avatarFor(state.me), onclick: () => location.hash = `#profile/${state.uid}` }),
+          el("div", { class: "body" },
+            el("div", { class: "name" }, state.me?.name || "User"),
+            commentData.text ? el("div", { class: "text", text: commentData.text }) : null,
+          ),
+        ));
+        sfxComment();
+        await addDoc(collection(db, "posts", p.id, "comments"), commentData);
+        await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
+        const notifSnippet = commentData.text ? `"${commentData.text.slice(0, 60)}"` : commentData.mediaType ? "📷 sent a photo" : "🎙️ sent a voice note";
+        if (author?.uid && author.uid !== state.uid) {
+          writeNotif(author.uid, "comment", { postId: p.id, text: `${state.me?.name || "Someone"} commented: ${notifSnippet}` }).catch(() => {});
+          const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
+          import("./notifications.js").then(({ notifyUser }) =>
+            notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
+          ).catch(() => {});
+        }
+        if (commentData.replyToUid && commentData.replyToUid !== state.uid && commentData.replyToUid !== author?.uid) {
+          writeNotif(commentData.replyToUid, "commentReply", { postId: p.id, text: `${state.me?.name || "Someone"} replied to your comment: ${notifSnippet}` }).catch(() => {});
+          import("./notifications.js").then(({ notifyUser }) =>
+            notifyUser(commentData.replyToUid, state.me?.name || "Someone", "replied to your comment", "/#post/" + p.id, state.me?.photoURL || "")
+          ).catch(() => {});
+        }
+      } catch { toast("Failed to send comment"); } finally { submitBtn.disabled = false; }
     });
     post.appendChild(cForm);
 
@@ -2729,11 +2814,11 @@ const renderPostDetail = async (root, postId) => {
     if (!text && !_dCmtMediaFile && !_dCmtAudioBlob) return;
     const submitBtn = cForm.querySelector("button[type='submit']");
     submitBtn.disabled = true;
-    const commentData = {
-      text: text || "", authorUid: state.uid, createdAt: serverTimestamp(), likes: [],
-      ..._detailReplyTo ? { replyToUid: _detailReplyTo.uid, replyToName: _detailReplyTo.name, replyToUsername: _detailReplyTo.username } : {},
-    };
     try {
+      const commentData = {
+        text: text || "", authorUid: state.uid, createdAt: serverTimestamp(), likes: [],
+        ..._detailReplyTo ? { replyToUid: _detailReplyTo.uid, replyToName: _detailReplyTo.name, replyToUsername: _detailReplyTo.username } : {},
+      };
       if (_dCmtMediaFile) {
         const kind = _dCmtMediaFile.type.startsWith("video") ? "video" : "image";
         const up = await uploadToCloudinary(_dCmtMediaFile, kind);
@@ -2743,26 +2828,26 @@ const renderPostDetail = async (root, postId) => {
         const up = await uploadToCloudinary(audioFile, "video");
         commentData.audioUrl = up.url;
       }
-    } catch { toast("Media upload failed"); submitBtn.disabled = false; return; }
-    input.value = ""; _detailReplyTo = null;
-    detailReplyBanner.classList.add("hidden"); input.placeholder = "Write a comment…";
-    clearDCmtAttach(); sfxComment(); submitBtn.disabled = false;
-    await addDoc(collection(db, "posts", p.id, "comments"), commentData);
-    await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
-    const notifSnippet = commentData.text ? `"${commentData.text.slice(0, 60)}"` : commentData.mediaType ? "📷 sent a photo" : "🎙️ sent a voice note";
-    if (author?.uid && author.uid !== state.uid) {
-      writeNotif(author.uid, "comment", { postId: p.id, text: `${state.me?.name || "Someone"} commented: ${notifSnippet}` }).catch(() => {});
-      const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
-      import("./notifications.js").then(({ notifyUser }) =>
-        notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
-      ).catch(() => {});
-    }
-    if (commentData.replyToUid && commentData.replyToUid !== state.uid && commentData.replyToUid !== author?.uid) {
-      writeNotif(commentData.replyToUid, "commentReply", { postId: p.id, text: `${state.me?.name || "Someone"} replied to your comment: ${notifSnippet}` }).catch(() => {});
-      import("./notifications.js").then(({ notifyUser }) =>
-        notifyUser(commentData.replyToUid, state.me?.name || "Someone", "replied to your comment", "/#post/" + p.id, state.me?.photoURL || "")
-      ).catch(() => {});
-    }
+      input.value = ""; _detailReplyTo = null;
+      detailReplyBanner.classList.add("hidden"); input.placeholder = "Write a comment…";
+      clearDCmtAttach(); sfxComment();
+      await addDoc(collection(db, "posts", p.id, "comments"), commentData);
+      await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
+      const notifSnippet = commentData.text ? `"${commentData.text.slice(0, 60)}"` : commentData.mediaType ? "📷 sent a photo" : "🎙️ sent a voice note";
+      if (author?.uid && author.uid !== state.uid) {
+        writeNotif(author.uid, "comment", { postId: p.id, text: `${state.me?.name || "Someone"} commented: ${notifSnippet}` }).catch(() => {});
+        const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
+        import("./notifications.js").then(({ notifyUser }) =>
+          notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
+        ).catch(() => {});
+      }
+      if (commentData.replyToUid && commentData.replyToUid !== state.uid && commentData.replyToUid !== author?.uid) {
+        writeNotif(commentData.replyToUid, "commentReply", { postId: p.id, text: `${state.me?.name || "Someone"} replied to your comment: ${notifSnippet}` }).catch(() => {});
+        import("./notifications.js").then(({ notifyUser }) =>
+          notifyUser(commentData.replyToUid, state.me?.name || "Someone", "replied to your comment", "/#post/" + p.id, state.me?.photoURL || "")
+        ).catch(() => {});
+      }
+    } catch { toast("Failed to send comment"); } finally { submitBtn.disabled = false; }
   });
   cmtSection.appendChild(cForm);
 };
@@ -3106,6 +3191,63 @@ const renderSaved = (root) => {
 // =========================================================================
 // 12. PROFILE
 // =========================================================================
+// Activity picker — current activity status on profile
+// =========================================================================
+const ACTIVITY_PRESETS = [
+  { emoji: "📖", label: "Reading" },
+  { emoji: "🎵", label: "Listening to music" },
+  { emoji: "☕", label: "Having coffee" },
+  { emoji: "💻", label: "Coding" },
+  { emoji: "🏋️", label: "Working out" },
+  { emoji: "🎮", label: "Gaming" },
+  { emoji: "🍳", label: "Cooking" },
+  { emoji: "✈️", label: "Travelling" },
+  { emoji: "🧘", label: "Meditating" },
+  { emoji: "🎨", label: "Creating" },
+  { emoji: "😴", label: "Resting" },
+  { emoji: "🌿", label: "In nature" },
+];
+
+const openActivityPicker = (u) => {
+  const overlay = el("div", { class: "modal activity-picker-modal", style: "z-index:1100;" });
+  const card = el("div", { class: "modal-card", style: "max-width:380px;" });
+  card.appendChild(el("div", { class: "modal-head" },
+    el("h3", {}, "What are you doing?"),
+    el("button", { class: "icon-btn", onclick: () => overlay.remove() }, el("i", { class: "ri-close-line" }))
+  ));
+  const grid = el("div", { style: "display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:16px;" });
+  ACTIVITY_PRESETS.forEach((act) => {
+    const btn = el("button", { class: `activity-option${(u.currentActivity?.label === act.label) ? " active" : ""}` });
+    btn.appendChild(el("span", { style: "font-size:22px;display:block;margin-bottom:4px;" }, act.emoji));
+    btn.appendChild(el("span", { style: "font-size:11px;font-weight:600;color:var(--text-dim);" }, act.label));
+    btn.addEventListener("click", async () => {
+      await updateDoc(doc(db, "users", state.uid), { currentActivity: act });
+      if (state.me) state.me.currentActivity = act;
+      toast("Activity updated!");
+      overlay.remove();
+      state.cache.users.delete(state.uid);
+      router();
+    });
+    grid.appendChild(btn);
+  });
+  const clearBtn = el("button", { class: "btn ghost block", style: "margin:0 16px 16px;" });
+  clearBtn.textContent = "Clear activity";
+  clearBtn.addEventListener("click", async () => {
+    await updateDoc(doc(db, "users", state.uid), { currentActivity: null });
+    if (state.me) state.me.currentActivity = null;
+    toast("Activity cleared");
+    overlay.remove();
+    state.cache.users.delete(state.uid);
+    router();
+  });
+  card.appendChild(grid);
+  card.appendChild(clearBtn);
+  overlay.appendChild(card);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+};
+
+// =========================================================================
 // Tracks the live listener for whichever profile tab (Posts / Media) is
 // currently rendered, so posting or switching tabs never leaves a stale
 // listener running and the visible tab always reflects Firestore live.
@@ -3179,9 +3321,15 @@ const renderProfile = async (root, uid) => {
     el("img", { class: "avatar xl", src: avatarFor(u) }),
     el("div", {},
       el("div", { class: "name-row" }, u.name,
-        u.verified ? el("span", { class: "verified lg", title: "Location verified", html: '<i class="ri-check-line"></i>' }) : null,
-        u.isPro ? el("span", { class: "pro-name-badge" }, el("i", { class: "ri-vip-crown-fill" }), " Pro") : null),
+        u.verified ? el("span", { class: "verified lg", title: "Location verified", html: '<i class="ri-check-line"></i>' }) : null),
       el("div", { class: "uname" }, "@" + u.username),
+      (u.streakCount && u.streakCount > 0) ? el("div", { class: "streak-badge" }, `🔥 ${u.streakCount} day${u.streakCount !== 1 ? "s" : ""} streak`) : null,
+      el("div", { class: `activity-chip${isMe ? " tappable" : ""}`,
+        onclick: isMe ? () => openActivityPicker(u) : undefined },
+        u.currentActivity
+          ? `${u.currentActivity.emoji} ${u.currentActivity.label}`
+          : (isMe ? "＋ Set activity" : null)
+      ),
       el("div", { class: "stats" },
         el("div", { class: "stat" }, followersCountEl, el("span", {}, "followers")),
         el("div", { class: "stat" }, el("strong", {}, String((u.following || []).length)), el("span", {}, "following")),
@@ -3199,19 +3347,11 @@ const renderProfile = async (root, uid) => {
     ),
   ));
 
-  // Feature: Pro section — rendered directly below header, always visible
-  const proSection = el("div", { class: "profile-pro-section" });
-  root.appendChild(proSection);
+  // Academy badges — visible to all users who earned them
+  const academySection = el("div", { class: "profile-academy-section" });
+  root.appendChild(academySection);
   import("./features.js").then((m) => {
-    if (u.isPro) {
-      m.renderOrbitScoreBadge(proSection, uid);
-      m.renderTechStack(proSection, u, isMe);
-      m.renderSkillBadges(proSection, uid, isMe);
-    } else if (isMe) {
-      m.renderGoProBanner(proSection);
-    }
-    // Academy badges — visible to all users who earned them
-    m.renderLearnBadges(proSection, uid);
+    m.renderLearnBadges(academySection, uid);
   }).catch(() => {});
 
   // Tabs: Posts | Media | About | Mutuals
@@ -3299,14 +3439,32 @@ const renderProfile = async (root, uid) => {
 
     } else if (which === "about") {
       body.innerHTML = "";
-      body.appendChild(el("div", { class: "settings" },
+      const aboutWrap = el("div", { class: "settings" },
         el("div", { class: "group" },
           el("h3", {}, "About"),
           el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Joined"), el("div", { class: "d" }, fmtTime(u.createdAt) || "—"))),
           u.location ? el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Verified location"), el("div", { class: "d" }, u.location.city || `${u.location.lat?.toFixed(2)}, ${u.location.lng?.toFixed(2)}`))) : null,
           el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Status"), el("div", { class: "d" }, u.online ? "Online now" : `Last seen ${fmtTime(u.lastSeen)}`))),
         ),
-      ));
+      );
+      // ── Taste profile answers ─────────────────────────────────────────────
+      if (u.tasteAnswers && Object.keys(u.tasteAnswers).length) {
+        const tasteSection = el("div", { class: "taste-about-section" },
+          el("div", { class: "taste-about-title" }, el("i", { class: "ri-sparkling-2-fill" }), " Taste Profile"),
+        );
+        TASTE_QUESTIONS.forEach((q) => {
+          const answers = u.tasteAnswers[q.id];
+          if (!answers || !answers.length) return;
+          tasteSection.appendChild(el("div", { class: "taste-about-group" },
+            el("div", { class: "taste-about-label" }, q.q),
+            el("div", { class: "taste-about-chips" },
+              ...answers.map((a) => el("span", { class: "taste-about-chip" }, a))
+            ),
+          ));
+        });
+        aboutWrap.appendChild(tasteSection);
+      }
+      body.appendChild(aboutWrap);
     } else if (which === "mutuals") {
       body.innerHTML = "";
       const mutualsWrap = el("div", { style: "padding: 0 0 16px;" });
@@ -3423,29 +3581,6 @@ const renderSettings = (root) => {
       el("div", { class: "row" },
         el("div", { class: "label" }, el("div", { class: "t" }, "Sign out"), el("div", { class: "d" }, "End your session on this device.")),
         el("button", { class: "btn ghost", onclick: () => $("#signOutBtn").click() }, "Sign out"),
-      ),
-    ),
-
-    el("div", { class: "group" },
-      el("h3", {}, el("i", { class: "ri-vip-crown-line", style: "color:var(--grad-1);margin-right:6px;" }), "Vibe Pro"),
-      el("div", { class: "row" },
-        el("div", { class: "label" },
-          el("div", { class: "t" }, state.me.isPro ? "Pro activated ✦" : "Go Professional"),
-          el("div", { class: "d" }, state.me.isPro
-            ? "You have access to Vibe Score, Tech Stack, Skill Badges, Build in Public and Project Showcase."
-            : "Unlock developer features: Vibe Score, Tech Stack, Skill Badges, Build in Public & Project Showcase."),
-        ),
-        state.me.isPro
-          ? el("span", { class: "pro-active-badge" }, el("i", { class: "ri-vip-crown-fill" }), " Active")
-          : el("button", { class: "btn primary", onclick: async (e) => {
-              e.currentTarget.disabled = true;
-              e.currentTarget.textContent = "Activating…";
-              await updateDoc(doc(db, "users", state.uid), { isPro: true }).catch(() => {});
-              state.me.isPro = true;
-              state.cache.users.delete(state.uid);
-              toast("Welcome to Vibe Pro! ✦");
-              router();
-            }}, el("i", { class: "ri-vip-crown-line" }), " Activate Pro"),
       ),
     ),
 
