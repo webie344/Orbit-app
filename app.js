@@ -155,24 +155,22 @@ function _renderFeedOverlays(wrap, overlays) {
 }
 
 // Attaches an attached song to a post: plays/pauses in sync with visibility
-// (image/carousel posts) or with the video's own play state (video posts),
-// starting muted like Facebook/TikTok — tap the speaker to hear it.
+// (image/carousel posts) or with the video's own play state (video posts).
+// Plays automatically at a low background volume — no floating controls on
+// the media itself (the video's own volume button already covers the
+// clip's own audio; the song is a separate, quiet background layer). A
+// small "now playing" badge is rendered in the post header instead — see
+// _songHeaderBadge, used by renderPost.
+//
+// Note: browsers block unmuted autoplay until the user has interacted with
+// the page at least once (tap/click/scroll anywhere counts) — same
+// limitation TikTok/Instagram have. After that first interaction the song
+// plays automatically as posts scroll into view.
+const SONG_BG_VOLUME = 0.25;
 function _wireSongPlayback(wrap, song, videoEl) {
   if (!song?.url) return;
   const audio = new Audio(song.url);
-  audio.loop = true; audio.muted = true; audio.preload = "none";
-  const soundBtn = el("button", { class: "post-sound-toggle" }, el("i", { class: "ri-volume-mute-line" }));
-  const songBar = el("div", { class: "post-song-bar" }, el("i", { class: "ri-music-2-fill" }),
-    el("span", {}, el("span", { class: "marquee" }, `${song.name} — ${song.artist}`)));
-  wrap.appendChild(songBar);
-  wrap.appendChild(soundBtn);
-  soundBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    audio.muted = !audio.muted;
-    if (videoEl) videoEl.muted = true; // song replaces the clip's own audio
-    soundBtn.querySelector("i").className = audio.muted ? "ri-volume-mute-line" : "ri-volume-up-line";
-    if (!audio.muted) audio.play().catch(() => {});
-  });
+  audio.loop = true; audio.muted = false; audio.volume = SONG_BG_VOLUME; audio.preload = "none";
   if (videoEl) {
     videoEl.muted = true; // song is the only audio source for posts with music
     videoEl.addEventListener("play", () => { audio.currentTime = videoEl.currentTime % (audio.duration || 1e9); audio.play().catch(() => {}); });
@@ -185,6 +183,20 @@ function _wireSongPlayback(wrap, song, videoEl) {
     }, { threshold: 0.6 });
     io.observe(wrap);
   }
+}
+
+// Small "now playing" pill for the post header — icon + truncated song
+// info, no controls. Rendered next to the follow/more button by renderPost.
+function _songHeaderBadge(song) {
+  if (!song?.name) return null;
+  return el("div", {
+    class: "post-song-badge",
+    title: `${song.name} — ${song.artist}`,
+    style: "display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--text-mute);max-width:120px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;margin-right:6px;flex-shrink:0;",
+  },
+    el("i", { class: "ri-music-2-fill" }),
+    el("span", { style: "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" }, `${song.name} — ${song.artist}`),
+  );
 }
 
 const buildVideoPlayer = (url, opts = {}) => {
@@ -1632,6 +1644,7 @@ const renderPost = (p, author, opts = {}) => {
         fmtTime(p.createdAt),
       )
     ),
+    _songHeaderBadge(p.song),
     !isMine ? (() => {
       let _isFollowing = (state.me?.following || []).includes(author?.uid);
       const fbtn = el("button", { class: `follow-btn${_isFollowing ? " following" : ""}` },
@@ -3116,7 +3129,8 @@ const CR_TEXT_COLORS = ["#ffffff","#000000","#ff5c7a","#ffb04a","#3fdca0","#5cd3
 let crState = null;
 const _crFreshState = () => ({
   step: "pick",           // pick | cam | editor | music | details
-  slides: [],             // [{ type:'image'|'video', file, url, overlays:[] }]
+  slides: [],             // [{ type:'image'|'video', file, url, overlays:[], recordedInApp? }]
+  textOnly: false,        // true when publishing a text-only post (no media)
   song: null,             // { id, name, artist, url, duration }
   caption: "",
   location: null,
@@ -3127,6 +3141,12 @@ const _crFreshState = () => ({
   camChunks: [],
   camTimer: null,
 });
+
+// Music can only be attached to a single video that was recorded in-app —
+// never to images, carousels, or videos picked from the device library.
+// Keeps licensing/rights simple and matches how the feature was designed.
+const crCanAddMusic = () =>
+  crState.slides.length === 1 && crState.slides[0].type === "video" && crState.slides[0].recordedInApp === true;
 
 const crLayerId = () => "l" + Math.random().toString(36).slice(2, 9);
 
@@ -3161,14 +3181,17 @@ function crRenderShell(root) {
 }
 
 function crBack() {
-  const order = ["pick", "editor", "music", "details"];
   if (crState.step === "cam") { crStopCamera(); crGoto("pick"); return; }
+  const order = crState.textOnly
+    ? ["pick", "details"]
+    : (crCanAddMusic() ? ["pick", "editor", "music", "details"] : ["pick", "editor", "details"]);
   const idx = order.indexOf(crState.step);
   if (idx <= 0) { crClose(); return; }
   crGoto(order[idx - 1]);
 }
 
 function crGoto(step) {
+  if (step === "music" && !crCanAddMusic()) step = "details"; // music is video-only + recorded-in-app only
   crState.step = step;
   const { stepsWrap, backBtn, nextBtn, title } = _crShellRefs;
   stepsWrap.innerHTML = "";
@@ -3179,7 +3202,7 @@ function crGoto(step) {
   else if (step === "editor") {
     title.textContent = "Edit";
     stepsWrap.appendChild(crBuildEditorStep());
-    nextBtn.style.display = ""; nextBtn.textContent = "Next"; nextBtn.onclick = () => crGoto("music");
+    nextBtn.style.display = ""; nextBtn.textContent = "Next"; nextBtn.onclick = () => crGoto(crCanAddMusic() ? "music" : "details");
   } else if (step === "music") {
     title.textContent = "Add music";
     stepsWrap.appendChild(crBuildMusicStep());
@@ -3193,6 +3216,7 @@ function crGoto(step) {
 
 // ---------------- Step 1: pick media ----------------
 function crBuildPickStep() {
+  crState.textOnly = false;
   const fileInput = el("input", { type: "file", accept: "image/*,video/*", multiple: true, hidden: true });
   fileInput.addEventListener("change", (e) => {
     const files = Array.from(e.target.files || []);
@@ -3200,7 +3224,8 @@ function crBuildPickStep() {
     const hasVideo = files.some((f) => f.type.startsWith("video/"));
     if (hasVideo) {
       const f = files.find((f) => f.type.startsWith("video/"));
-      crState.slides = [{ type: "video", file: f, url: URL.createObjectURL(f), overlays: [] }];
+      // recordedInApp:false — uploaded videos can't have music attached, only ones recorded with the in-app camera.
+      crState.slides = [{ type: "video", file: f, url: URL.createObjectURL(f), overlays: [], recordedInApp: false }];
     } else {
       crState.slides = files.slice(0, 10).map((f) => ({ type: "image", file: f, url: URL.createObjectURL(f), overlays: [] }));
     }
@@ -3210,14 +3235,16 @@ function crBuildPickStep() {
   const step = el("div", { class: "cr-step active" },
     el("div", { class: "cr-pick" },
       el("div", { class: "cr-pick-title" }, "Create a post"),
-      el("div", { class: "cr-pick-sub" }, "Photos, a video, or a carousel — add text, stickers and a song next."),
+      el("div", { class: "cr-pick-sub" }, "Photos, a video, a carousel, or just words."),
       el("div", { class: "cr-pick-grid" },
         el("button", { class: "cr-pick-opt", onclick: () => fileInput.click() },
           el("i", { class: "ri-image-add-line" }), el("span", {}, "Photos / video")),
         el("button", { class: "cr-pick-opt", onclick: () => crGoto("cam") },
           el("i", { class: "ri-camera-line" }), el("span", {}, "Record video")),
+        el("button", { class: "cr-pick-opt", onclick: () => { crState.textOnly = true; crState.slides = []; crGoto("details"); } },
+          el("i", { class: "ri-text" }), el("span", {}, "Text post")),
       ),
-      el("div", { class: "cr-pick-hint" }, "Pick multiple photos to make a swipeable carousel."),
+      el("div", { class: "cr-pick-hint" }, "Pick multiple photos to make a swipeable carousel. Music can be added to videos you record in-app."),
       fileInput,
     ),
   );
@@ -3258,7 +3285,7 @@ function crBuildCamStep() {
       rec.onstop = () => {
         const blob = new Blob(crState.camChunks, { type: "video/webm" });
         const file = new File([blob], `orbit-recording-${Date.now()}.webm`, { type: "video/webm" });
-        crState.slides = [{ type: "video", file, url: URL.createObjectURL(file), overlays: [] }];
+        crState.slides = [{ type: "video", file, url: URL.createObjectURL(file), overlays: [], recordedInApp: true }];
         crState.activeSlide = 0;
         crStopCamera();
         crGoto("editor");
@@ -3376,31 +3403,37 @@ function crBuildEditorStep() {
       );
       layer.style.fontSize = crFontPx(ov, rect().width || 320) + "px";
 
-      let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+      // Tap-to-edit: a tap (pointerdown+up with negligible movement) on a
+      // layer that was ALREADY selected enters edit mode immediately — this
+      // is far more reliable on touch than waiting for a true dblclick,
+      // which conflicts with the pointer-capture drag logic below. The
+      // first tap on an unselected layer just selects it (shows handles);
+      // the very next tap edits it. Desktop dblclick still works too.
+      let dragging = false, moved = false, sx = 0, sy = 0, ox = 0, oy = 0, wasSelectedBeforeTap = false;
       layer.addEventListener("pointerdown", (e) => {
+        wasSelectedBeforeTap = crState.selectedLayerId === ov.id;
         crState.selectedLayerId = ov.id;
         paintLayerControls();
-        $$(".cr-layer", overlayLayer).forEach((l) => l.classList.remove("selected"));
+        $(".cr-layer", overlayLayer).forEach((l) => l.classList.remove("selected"));
         layer.classList.add("selected");
-        dragging = true; sx = e.clientX; sy = e.clientY; ox = ov.x; oy = ov.y;
+        dragging = true; moved = false; sx = e.clientX; sy = e.clientY; ox = ov.x; oy = ov.y;
         layer.setPointerCapture(e.pointerId);
       });
       layer.addEventListener("pointermove", (e) => {
         if (!dragging) return;
+        const dx = e.clientX - sx, dy = e.clientY - sy;
+        if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
         const r = rect();
-        ov.x = Math.min(96, Math.max(4, ox + ((e.clientX - sx) / r.width) * 100));
-        ov.y = Math.min(96, Math.max(4, oy + ((e.clientY - sy) / r.height) * 100));
+        ov.x = Math.min(96, Math.max(4, ox + (dx / r.width) * 100));
+        ov.y = Math.min(96, Math.max(4, oy + (dy / r.height) * 100));
         layer.style.left = ov.x + "%"; layer.style.top = ov.y + "%";
       });
-      layer.addEventListener("pointerup", () => { dragging = false; });
+      layer.addEventListener("pointerup", () => {
+        dragging = false;
+        if (!moved && ov.type === "text" && wasSelectedBeforeTap) crEnterTextEdit(layer, ov);
+      });
       if (ov.type === "text") {
-        layer.addEventListener("dblclick", () => {
-          const span = layer.querySelector("span");
-          span.contentEditable = "true";
-          span.focus();
-          const sel = getSelection(); sel.selectAllChildren(span);
-          span.addEventListener("blur", () => { ov.text = span.textContent.trim() || "Tap to edit"; span.contentEditable = "false"; span.textContent = ov.text; }, { once: true });
-        });
+        layer.addEventListener("dblclick", () => crEnterTextEdit(layer, ov));
       }
       overlayLayer.appendChild(layer);
     });
@@ -3427,6 +3460,14 @@ function crBuildEditorStep() {
 // step's local paintStage closure); declared once at module scope so the
 // toolbar/thumbstrip buttons above can reference it before it's built.
 let crAddMoreImages = () => {};
+
+function crEnterTextEdit(layer, ov) {
+  const span = layer.querySelector("span");
+  span.contentEditable = "true";
+  span.focus();
+  const sel = getSelection(); sel.selectAllChildren(span);
+  span.addEventListener("blur", () => { ov.text = span.textContent.trim() || "Tap to edit"; span.contentEditable = "false"; span.textContent = ov.text; }, { once: true });
+}
 
 function crAddTextLayer(stage) {
   const slide = crState.slides[crState.activeSlide];
@@ -3548,7 +3589,7 @@ function crBuildMusicStepPaint(results) {
 // ---------------- Step 4: details + publish ----------------
 function crBuildDetailsStep() {
   const thumbSlide = crState.slides[0];
-  const caption = el("textarea", { placeholder: "Write a caption… use #hashtags and @mentions" });
+  const caption = el("textarea", { placeholder: crState.textOnly ? "What's on your mind?" : "Write a caption… use #hashtags and @mentions" });
   caption.value = crState.caption;
   caption.addEventListener("input", () => { crState.caption = caption.value; });
 
@@ -3571,15 +3612,15 @@ function crBuildDetailsStep() {
     }, () => { toast("Location access denied"); locRow.querySelector(".v").textContent = crState.location?.city || "Not tagged"; }, { timeout: 8000 });
   });
 
-  const musicRow = el("div", { class: "cr-details-row" },
+  const musicRow = crCanAddMusic() ? el("div", { class: "cr-details-row" },
     el("div", { class: "l" }, el("i", { class: "ri-music-2-line" }), "Music"),
     el("div", { class: "v" }, crState.song ? `${crState.song.name} — ${crState.song.artist}` : "None"),
-  );
-  musicRow.addEventListener("click", () => crGoto("music"));
+  ) : null;
+  musicRow?.addEventListener("click", () => crGoto("music"));
 
   return el("div", { class: "cr-step active" },
     el("div", { class: "cr-details" },
-      el("div", { class: "cr-details-preview" },
+      crState.textOnly ? null : el("div", { class: "cr-details-preview" },
         thumbSlide.type === "video"
           ? el("video", { src: thumbSlide.url, class: "cr-details-thumb", muted: true })
           : el("img", { src: thumbSlide.url, class: "cr-details-thumb" }),
@@ -3630,29 +3671,33 @@ function crFlattenImageSlide(slide) {
 }
 
 async function crSubmitPost(btn) {
-  if (!crState.slides.length) { toast("Pick a photo or video first"); return; }
+  if (!crState.textOnly && !crState.slides.length) { toast("Pick a photo or video first"); return; }
+  if (crState.textOnly && !crState.caption.trim()) { toast("Write something first"); return; }
   btn.disabled = true; btn.textContent = "Posting…";
   try {
-    toast("Uploading…");
     let media;
-    if (crState.slides[0].type === "video") {
-      const slide = crState.slides[0];
-      const uploaded = await uploadToCloudinary(slide.file, "video");
-      if (slide.overlays.length) uploaded.overlays = slide.overlays;
-      media = uploaded;
-    } else if (crState.slides.length === 1) {
-      const flat = await crFlattenImageSlide(crState.slides[0]);
-      media = await uploadToCloudinary(flat, "image");
-    } else {
-      const flats = await Promise.all(crState.slides.map(crFlattenImageSlide));
-      media = await Promise.all(flats.map((f) => uploadToCloudinary(f, "image")));
+    if (!crState.textOnly) {
+      toast("Uploading…");
+      if (crState.slides[0].type === "video") {
+        const slide = crState.slides[0];
+        const uploaded = await uploadToCloudinary(slide.file, "video");
+        if (slide.overlays.length) uploaded.overlays = slide.overlays;
+        media = uploaded;
+      } else if (crState.slides.length === 1) {
+        const flat = await crFlattenImageSlide(crState.slides[0]);
+        media = await uploadToCloudinary(flat, "image");
+      } else {
+        const flats = await Promise.all(crState.slides.map(crFlattenImageSlide));
+        media = await Promise.all(flats.map((f) => uploadToCloudinary(f, "image")));
+      }
     }
     const text = crState.caption.trim();
     const hashtags = extractHashtags(text);
     const postData = {
-      authorUid: state.uid, text, media, hashtags,
+      authorUid: state.uid, text, hashtags,
       orbits: [], orbitCount: 0, commentCount: 0, createdAt: serverTimestamp(),
     };
+    if (media) postData.media = media;
     if (crState.location) postData.location = crState.location;
     if (crState.song) postData.song = crState.song;
     const newPostRef = await addDoc(collection(db, "posts"), postData);
