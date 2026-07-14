@@ -2769,23 +2769,57 @@ const renderProfile = async (root, uid) => {
       el("div", { class: "t" }, "Loading…")));
 
     if (which === "posts") {
-      // Live listener — any post created, edited, or deleted by this user
-      // reflects on their profile immediately, without needing to leave
-      // and re-enter the page.
+      // Live listener — any post created or deleted by this user reflects
+      // on their profile immediately.  We use docChanges() so that a simple
+      // orbit/like write (type:"modified") does NOT wipe and re-render the
+      // feed — which would interrupt any playing video back to the start.
+      // The orbitBtn already updates its icon/count optimistically, so we
+      // can safely skip re-rendering on "modified".
+      let _profFeed = null;
+      const _postEls = new Map(); // postId → article element
+
       _profileTabUnsub = onSnapshot(
         query(collection(db, "posts"), where("authorUid", "==", uid), limit(60)),
         (snap) => {
-          body.innerHTML = "";
-          if (snap.empty) {
-            body.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-image-line" }), el("div", { class: "t" }, "No posts yet")));
+          const changes = snap.docChanges();
+
+          // ── First paint: all changes arrive as "added" ──────────────────
+          if (!_profFeed) {
+            body.innerHTML = "";
+            if (snap.empty) {
+              body.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-image-line" }), el("div", { class: "t" }, "No posts yet")));
+              return;
+            }
+            const posts = snap.docs
+              .map((d) => ({ id: d.id, ...d.data() }))
+              .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+            _profFeed = el("div", { class: "profile-feed-list" }); body.appendChild(_profFeed);
+            posts.forEach((p) => {
+              const card = renderPost(p, u, { hideComments: true });
+              _postEls.set(p.id, card);
+              _profFeed.appendChild(card);
+            });
             return;
           }
-          const posts = snap.docs
-            .map((d) => ({ id: d.id, ...d.data() }))
-            .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
 
-          const profFeed = el("div", { class: "profile-feed-list" }); body.appendChild(profFeed);
-          posts.forEach((p) => profFeed.appendChild(renderPost(p, u, { hideComments: true })));
+          // ── Incremental updates ──────────────────────────────────────────
+          for (const change of changes) {
+            if (change.type === "removed") {
+              const card = _postEls.get(change.doc.id);
+              if (card) { card.remove(); _postEls.delete(change.doc.id); }
+              if (_postEls.size === 0) {
+                _profFeed.remove(); _profFeed = null;
+                body.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-image-line" }), el("div", { class: "t" }, "No posts yet")));
+              }
+            } else if (change.type === "added") {
+              const p = { id: change.doc.id, ...change.doc.data() };
+              const card = renderPost(p, u, { hideComments: true });
+              _postEls.set(p.id, card);
+              _profFeed.prepend(card);
+            }
+            // "modified" (e.g. orbit/like write) — intentionally ignored:
+            // the orbitBtn already updated its own UI optimistically.
+          }
         },
         () => {}
       );
