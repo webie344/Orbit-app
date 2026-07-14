@@ -709,6 +709,68 @@ const toggleTheme = () =>
   applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark");
 
 // =========================================================================
+// ORBIT LOADER — branded spinner shown during async auth operations
+// =========================================================================
+const _injectOrbitLoaderStyles = (() => {
+  let done = false;
+  return () => {
+    if (done) return; done = true;
+    const s = document.createElement("style");
+    s.textContent = `
+      .orbit-loader-overlay {
+        position: fixed; inset: 0; z-index: 9999;
+        background: var(--bg, #0e0e1a);
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+        gap: 20px;
+        animation: orbitLoaderFadeIn .18s ease;
+      }
+      @keyframes orbitLoaderFadeIn { from { opacity: 0; } to { opacity: 1; } }
+      .orbit-loader-ring {
+        width: 56px; height: 56px;
+        border-radius: 50%;
+        border: 3px solid transparent;
+        border-top-color: #6c63ff;
+        border-right-color: #ff6b9d;
+        animation: orbitSpin .85s linear infinite;
+        position: relative;
+      }
+      .orbit-loader-ring::before {
+        content: '';
+        position: absolute; inset: 5px;
+        border-radius: 50%;
+        border: 2px solid transparent;
+        border-top-color: rgba(108,99,255,.35);
+        border-right-color: rgba(255,107,157,.35);
+        animation: orbitSpin 1.4s linear infinite reverse;
+      }
+      @keyframes orbitSpin { to { transform: rotate(360deg); } }
+      .orbit-loader-text {
+        font-size: 13px; font-weight: 600; letter-spacing: .5px;
+        background: linear-gradient(90deg, #6c63ff, #ff6b9d);
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        background-clip: text;
+      }
+    `;
+    document.head.appendChild(s);
+  };
+})();
+
+let _orbitLoaderEl = null;
+const showOrbitLoader = (label = "Signing in…") => {
+  _injectOrbitLoaderStyles();
+  if (_orbitLoaderEl) return;
+  _orbitLoaderEl = el("div", { class: "orbit-loader-overlay" },
+    el("div", { class: "orbit-loader-ring" }),
+    el("div", { class: "orbit-loader-text" }, label),
+  );
+  document.body.appendChild(_orbitLoaderEl);
+};
+const hideOrbitLoader = () => {
+  if (_orbitLoaderEl) { _orbitLoaderEl.remove(); _orbitLoaderEl = null; }
+};
+
+// =========================================================================
 // 6. AUTH FLOW
 // =========================================================================
 const showOnboarding = () => {
@@ -758,8 +820,8 @@ const finishOnboarding = () => {
   showAuth();
 };
 
-const showAuth = () => { $("#auth").classList.remove("hidden"); $("#app").classList.add("hidden"); $("#boot").classList.add("hidden"); $("#onboarding").classList.add("hidden"); };
-const showApp  = () => { $("#auth").classList.add("hidden"); $("#app").classList.remove("hidden"); $("#boot").classList.add("hidden"); };
+const showAuth = () => { hideOrbitLoader(); $("#auth").classList.remove("hidden"); $("#app").classList.add("hidden"); $("#boot").classList.add("hidden"); $("#onboarding").classList.add("hidden"); };
+const showApp  = () => { hideOrbitLoader(); $("#auth").classList.add("hidden"); $("#app").classList.remove("hidden"); $("#boot").classList.add("hidden"); };
 
 const ensureUserDoc = async (user, extras = {}) => {
   const ref = doc(db, "users", user.uid);
@@ -869,25 +931,32 @@ document.getElementById("onboardGetStarted")?.addEventListener("click", () => {
 $("#signinForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
+  showOrbitLoader("Signing in…");
   try {
     await signInWithEmailAndPassword(auth, fd.get("email"), fd.get("password"));
-  } catch (err) { toast(err.message.replace("Firebase: ", "")); }
+    // loader dismissed by showApp() → hideOrbitLoader() is called there
+  } catch (err) {
+    hideOrbitLoader();
+    toast(err.message.replace("Firebase: ", ""));
+  }
 });
 
 $("#signupForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
   const name = fd.get("name"), username = fd.get("username");
+  showOrbitLoader("Creating your account…");
   try {
     const cred = await createUserWithEmailAndPassword(auth, fd.get("email"), fd.get("password"));
     await updateProfile(cred.user, { displayName: name });
     await ensureUserDoc(cred.user, { name, username });
-  } catch (err) { toast(err.message.replace("Firebase: ", "")); }
+  } catch (err) { hideOrbitLoader(); toast(err.message.replace("Firebase: ", "")); }
 });
 
 $("#googleBtn").addEventListener("click", async () => {
+  showOrbitLoader("Connecting with Google…");
   try { await signInWithPopup(auth, new GoogleAuthProvider()); }
-  catch (err) { toast(err.message.replace("Firebase: ", "")); }
+  catch (err) { hideOrbitLoader(); toast(err.message.replace("Firebase: ", "")); }
 });
 
 $("#signOutBtn").addEventListener("click", async () => {
@@ -1320,7 +1389,7 @@ const renderFeed = (root) => {
     const _suggTypes = ["people", "groups", "spaces"];
     let _suggShown = 0;
     _scored.forEach(({ p }, idx) => {
-      list.appendChild(renderPost(p, byUid[p.authorUid]));
+      list.appendChild(renderPost(p, byUid[p.authorUid], { hideComments: true }));
       // Suggestion card at post 4, then every 7 after that
       if (idx === 4 || (idx > 4 && (idx - 4) % 7 === 0)) {
         const type = _suggTypes[_suggShown % 3];
@@ -1953,7 +2022,56 @@ const renderPost = (p, author, opts = {}) => {
 // =========================================================================
 // 8b. POST DETAIL — full single post with all comments + back button
 // =========================================================================
+// Inject Twitter-comment styles once
+const _injectTwCmtStyles = (() => {
+  let done = false;
+  return () => {
+    if (done) return; done = true;
+    const s = document.createElement("style");
+    s.textContent = `
+      /* Twitter-style comments */
+      .tw-comment {
+        display: flex;
+        gap: 12px;
+        padding: 12px 16px;
+        border-top: 1px solid var(--border, rgba(255,255,255,0.08));
+      }
+      .tw-comment:first-child { border-top: none; }
+      .tw-cmt-avatar { flex-shrink: 0; cursor: pointer; }
+      .tw-cmt-body { flex: 1; min-width: 0; }
+      .tw-cmt-header {
+        display: flex; align-items: center; gap: 5px;
+        flex-wrap: wrap; margin-bottom: 3px;
+      }
+      .tw-cmt-name { font-weight: 700; font-size: 14px; }
+      .tw-cmt-username { font-size: 13px; color: var(--text3); }
+      .tw-cmt-dot { font-size: 12px; color: var(--text3); }
+      .tw-cmt-time { font-size: 13px; color: var(--text3); }
+      .tw-cmt-text { font-size: 14px; line-height: 1.5; color: var(--text); word-break: break-word; }
+      .tw-cmt-actions {
+        display: flex; align-items: center; gap: 20px;
+        margin-top: 10px;
+      }
+      .tw-cmt-act-btn {
+        display: flex; align-items: center; gap: 5px;
+        background: none; border: none; cursor: pointer;
+        color: var(--text3); font-size: 13px;
+        padding: 4px; border-radius: 999px;
+        transition: color .15s, background .15s;
+      }
+      .tw-cmt-act-btn i { font-size: 17px; }
+      .tw-cmt-act-btn:hover { color: var(--primary); background: rgba(108,99,255,.1); }
+      .tw-cmt-act-btn.liked { color: var(--danger, #e0245e); }
+      .tw-cmt-act-btn.liked:hover { background: rgba(224,36,94,.1); }
+      .tw-cmt-act-count { font-size: 13px; }
+      .detail-cmt-list { border-radius: 12px; overflow: hidden; }
+    `;
+    document.head.appendChild(s);
+  };
+})();
+
 const renderPostDetail = async (root, postId) => {
+  _injectTwCmtStyles();
   if (!postId) { location.hash = "#feed"; return; }
 
   const back = el("div", { class: "detail-topbar" },
@@ -2002,58 +2120,83 @@ const renderPostDetail = async (root, postId) => {
 
   const renderDetailComment = (c, a) => {
     const isLiked = (c.likes || []).includes(state.uid);
-    const likeCountEl = el("span", { text: String((c.likes || []).length || "") });
-    const likeIconEl = el("i", { class: isLiked ? "ri-heart-fill" : "ri-heart-line", style: isLiked ? "color:var(--danger);" : "" });
+    const likeCount = (c.likes || []).length;
+    const likeCountEl = el("span", { class: "tw-cmt-act-count", text: likeCount > 0 ? String(likeCount) : "" });
+    const likeIconEl  = el("i", { class: isLiked ? "ri-heart-fill" : "ri-heart-line" });
     let _liked = isLiked;
-    const likeBtn = el("button", { class: "cmt-like-btn", onclick: async (ev) => {
-      ev.stopPropagation();
-      _liked = !_liked;
-      likeIconEl.className = _liked ? "ri-heart-fill" : "ri-heart-line";
-      likeIconEl.style.color = _liked ? "var(--danger)" : "";
-      const newCount = (c.likes?.length || 0) + (_liked ? 1 : -1);
-      likeCountEl.textContent = newCount > 0 ? String(newCount) : "";
-      await updateDoc(doc(db, "posts", p.id, "comments", c.id), {
-        likes: _liked ? arrayUnion(state.uid) : arrayRemove(state.uid),
-      }).catch(() => {});
-      if (_liked && a?.uid && a.uid !== state.uid) {
-        writeNotif(a.uid, "commentLike", { postId: p.id, text: `${state.me?.name || "Someone"} liked your comment` }).catch(() => {});
-        import("./notifications.js").then(({ notifyUser }) =>
-          notifyUser(a.uid, state.me?.name || "Someone", "liked your comment", "/#post/" + p.id, state.me?.photoURL || "")
-        ).catch(() => {});
-      }
-    }}, likeIconEl, likeCountEl);
 
-    const replyBtn = el("button", { class: "cmt-reply-btn", onclick: () => {
-      _detailReplyTo = { uid: a?.uid, name: a?.name || "user", username: a?.username || "" };
-      detailReplyBanner.querySelector(".reply-banner-text").textContent = `Replying to @${a?.username || a?.name || "user"}`;
-      detailReplyBanner.classList.remove("hidden");
-      const inp = cmtSection.querySelector("input");
-      inp.placeholder = `Reply to @${a?.username || a?.name || "user"}…`;
-      inp.focus();
-    }}, "Reply");
+    const likeBtn = el("button", {
+      class: `tw-cmt-act-btn${_liked ? " liked" : ""}`,
+      onclick: async (ev) => {
+        ev.stopPropagation();
+        _liked = !_liked;
+        likeIconEl.className = _liked ? "ri-heart-fill" : "ri-heart-line";
+        likeBtn.classList.toggle("liked", _liked);
+        const newCount = (c.likes?.length || 0) + (_liked ? 1 : -1);
+        likeCountEl.textContent = newCount > 0 ? String(newCount) : "";
+        await updateDoc(doc(db, "posts", p.id, "comments", c.id), {
+          likes: _liked ? arrayUnion(state.uid) : arrayRemove(state.uid),
+        }).catch(() => {});
+        if (_liked && a?.uid && a.uid !== state.uid) {
+          writeNotif(a.uid, "commentLike", { postId: p.id, text: `${state.me?.name || "Someone"} liked your comment` }).catch(() => {});
+          import("./notifications.js").then(({ notifyUser }) =>
+            notifyUser(a.uid, state.me?.name || "Someone", "liked your comment", "/#post/" + p.id, state.me?.photoURL || "")
+          ).catch(() => {});
+        }
+      },
+    }, likeIconEl, likeCountEl);
 
-    return el("div", { class: "comment detail-cmt" },
-      el("img", { class: "avatar xs", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
-      el("div", { class: "body" },
-        el("div", { class: "name" }, a?.name || "User",
-          a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
-          el("span", { class: "cmt-time" }, fmtTime(c.createdAt)),
+    const replyBtn = el("button", {
+      class: "tw-cmt-act-btn",
+      onclick: () => {
+        _detailReplyTo = { uid: a?.uid, name: a?.name || "user", username: a?.username || "" };
+        detailReplyBanner.querySelector(".reply-banner-text").textContent = `Replying to @${a?.username || a?.name || "user"}`;
+        detailReplyBanner.classList.remove("hidden");
+        const inp = cmtSection.querySelector("input");
+        inp.placeholder = `Reply to @${a?.username || a?.name || "user"}…`;
+        inp.focus();
+      },
+    }, el("i", { class: "ri-chat-1-line" }));
+
+    const shareBtn = el("button", {
+      class: "tw-cmt-act-btn",
+      onclick: async (ev) => {
+        ev.stopPropagation();
+        const url = `${location.origin}${location.pathname}#post/${p.id}`;
+        try { await navigator.share?.({ title: "Orbit", text: c.text || "", url }); }
+        catch { await navigator.clipboard.writeText(url); toast("Link copied"); }
+      },
+    }, el("i", { class: "ri-share-forward-line" }));
+
+    return el("div", { class: "tw-comment" },
+      el("img", { class: "avatar xs tw-cmt-avatar", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
+      el("div", { class: "tw-cmt-body" },
+        el("div", { class: "tw-cmt-header" },
+          el("span", { class: "tw-cmt-name" }, a?.name || "User",
+            a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
+          ),
+          el("span", { class: "tw-cmt-username" }, `@${a?.username || "user"}`),
+          el("span", { class: "tw-cmt-dot" }, "·"),
+          el("span", { class: "tw-cmt-time" }, fmtTime(c.createdAt)),
         ),
-        (c.replyToUsername || c.replyToName) ? el("div", { class: "reply-to-label" }, el("i", { class: "ri-corner-down-right-line" }), el("a", { class: "mention", href: `#profile-u/${c.replyToUsername || c.replyToName}` }, `@${c.replyToUsername || c.replyToName}`)) : null,
-        c.text ? el("div", { class: "text", text: c.text }) : null,
+        (c.replyToUsername || c.replyToName) ? el("div", { class: "reply-to-label" },
+          el("i", { class: "ri-corner-down-right-line" }),
+          el("a", { class: "mention", href: `#profile-u/${c.replyToUsername || c.replyToName}` }, `@${c.replyToUsername || c.replyToName}`)
+        ) : null,
+        c.text ? el("div", { class: "tw-cmt-text" }, c.text) : null,
         c.mediaUrl ? el("div", { class: "cmt-media", onclick: (ev) => { ev.stopPropagation(); c.mediaType === "video" ? openVideoViewer([{ type: "video", url: c.mediaUrl }], 0) : openImageZoom(c.mediaUrl); }},
           c.mediaType === "video"
             ? el("div", { class: "cmt-media-video-wrap" },
-                el("video", { src: c.mediaUrl, muted: "", preload: "metadata", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;" }),
+                el("video", { src: c.mediaUrl, muted: "", preload: "metadata", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;border-radius:10px;" }),
                 el("div", { class: "cmt-media-video-play", html: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>` }),
               )
-            : el("img", { src: c.mediaUrl, loading: "lazy", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;" }),
+            : el("img", { src: c.mediaUrl, loading: "lazy", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;border-radius:10px;margin-top:8px;" }),
         ) : null,
         c.audioUrl ? el("div", { class: "cmt-voice-note" },
           el("span", { html: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>` }),
           el("audio", { src: c.audioUrl, controls: true, style: "height:28px;max-width:150px;" }),
         ) : null,
-        el("div", { class: "cmt-meta-row" }, replyBtn, likeBtn),
+        el("div", { class: "tw-cmt-actions" }, replyBtn, shareBtn, likeBtn),
       ),
     );
   };
@@ -2440,7 +2583,7 @@ const renderSaved = (root) => {
     const posts = docs.filter((d) => d.exists()).map((d) => ({ id: d.id, ...d.data() }));
     const authors = await Promise.all([...new Set(posts.map((p) => p.authorUid))].map(fetchUser));
     const map = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
-    posts.forEach((p) => list.appendChild(renderPost(p, map[p.authorUid])));
+    posts.forEach((p) => list.appendChild(renderPost(p, map[p.authorUid], { hideComments: true })));
   });
 };
 
@@ -2595,7 +2738,7 @@ const renderProfile = async (root, uid) => {
             .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
 
           const profFeed = el("div", { class: "profile-feed-list" }); body.appendChild(profFeed);
-          posts.forEach((p) => profFeed.appendChild(renderPost(p, u)));
+          posts.forEach((p) => profFeed.appendChild(renderPost(p, u, { hideComments: true })));
         },
         () => {}
       );
@@ -4310,5 +4453,5 @@ window.renderAIChat = renderAIChat;
 // 17. INIT
 // =========================================================================
 initTheme();
-// Hide boot once auth state resolved (handled in onAuthStateChanged)
-setTimeout(() => $("#boot").classList.add("hidden"), 1200);
+// Boot screen is hidden by onAuthStateChanged — do NOT hide it on a timer,
+// or there will be a blank-page flash while Firebase resolves auth state.
