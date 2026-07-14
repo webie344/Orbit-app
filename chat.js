@@ -247,7 +247,7 @@ const EMOJIS = "😀 😅 😂 🤣 😊 😍 🥰 😘 😎 🤩 🤔 😴 🤤
 // =========================================================================
 // 2. ENTRY — open the chats route
 // =========================================================================
-document.addEventListener("vibe:open-chats", (e) => openChats(e.detail?.peerUid || null));
+document.addEventListener("orbit:open-chats", (e) => openChats(e.detail?.peerUid || null));
 
 // =========================================================================
 // 3. SHELL
@@ -567,7 +567,7 @@ const renderChatView = ({ isGroup, chatId, peer, group }) => {
         updateDoc(doc(db, "chats", chatId), { [`typing.${state.uid}`]: deleteField() }).catch(() => {});
       }, 2200);
     }
-    localStorage.setItem(`vibe:draft:${chatId}`, composerField.innerText);
+    localStorage.setItem(`orbit:draft:${chatId}`, composerField.innerText);
   });
   composerField.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); return; }
@@ -629,7 +629,7 @@ const renderChatView = ({ isGroup, chatId, peer, group }) => {
   }
 
   // Restore draft
-  const draft = localStorage.getItem(`vibe:draft:${chatId}`);
+  const draft = localStorage.getItem(`orbit:draft:${chatId}`);
   if (draft) {
     composerField.innerText = draft;
     bottomBar.querySelector("#sendBtn").disabled = false;
@@ -674,7 +674,7 @@ const renderChatView = ({ isGroup, chatId, peer, group }) => {
     if (msgsRoot) { msgsRoot.appendChild(optEl); msgsRoot.scrollTop = msgsRoot.scrollHeight; }
 
     field.innerText = "";
-    localStorage.removeItem(`vibe:draft:${chatId}`);
+    localStorage.removeItem(`orbit:draft:${chatId}`);
     clearReply();
 
     try {
