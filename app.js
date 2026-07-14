@@ -2065,6 +2065,46 @@ const _injectTwCmtStyles = (() => {
       .tw-cmt-act-btn.liked:hover { background: rgba(224,36,94,.1); }
       .tw-cmt-act-count { font-size: 13px; }
       .detail-cmt-list { border-radius: 12px; overflow: hidden; }
+
+      /* Ensure mention colour isn't overridden inside comment body */
+      .tw-cmt-body a.mention {
+        color: var(--primary, #6c63ff);
+        text-decoration: none;
+        font-weight: 500;
+      }
+      .tw-cmt-body a.mention:hover { text-decoration: underline; }
+
+      /* Twitter-style reply banner */
+      .detail-reply-banner {
+        display: flex; align-items: center; justify-content: space-between;
+        margin: 0 16px 6px;
+        padding: 8px 12px 8px 14px;
+        border-radius: 10px;
+        background: rgba(108,99,255,.08);
+        border-left: 3px solid var(--primary, #6c63ff);
+        animation: replyBannerIn .15s ease;
+      }
+      .detail-reply-banner.hidden { display: none; }
+      @keyframes replyBannerIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+      .detail-reply-banner-inner {
+        display: flex; align-items: center; gap: 6px;
+        font-size: 13px; color: var(--text3);
+      }
+      .detail-reply-banner-icon { font-size: 14px; color: var(--primary, #6c63ff); }
+      .detail-reply-banner-label { color: var(--text3); }
+      .detail-reply-banner-user {
+        color: var(--primary, #6c63ff);
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .detail-reply-banner-close {
+        background: none; border: none; cursor: pointer;
+        color: var(--text3); padding: 2px 4px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        transition: color .15s, background .15s;
+        font-size: 15px; line-height: 1;
+      }
+      .detail-reply-banner-close:hover { color: var(--text); background: rgba(255,255,255,.08); }
     `;
     document.head.appendChild(s);
   };
@@ -2107,15 +2147,22 @@ const renderPostDetail = async (root, postId) => {
 
   // Track reply state for detail view
   let _detailReplyTo = null;
-  const detailReplyBanner = el("div", { class: "reply-banner hidden" },
-    el("span", { class: "reply-banner-text" }, ""),
-    el("button", { class: "reply-cancel-btn", onclick: () => {
-      _detailReplyTo = null;
-      detailReplyBanner.classList.add("hidden");
-      cmtSection.querySelector("input").placeholder = "Write a comment…";
-      cmtSection.querySelector("input").value = "";
-    }}, el("i", { class: "ri-close-line" })),
+  const detailReplyBanner = el("div", { class: "detail-reply-banner hidden" });
+  const _replyBannerUsername = el("span", { class: "detail-reply-banner-user" }, "");
+  detailReplyBanner.appendChild(
+    el("div", { class: "detail-reply-banner-inner" },
+      el("i", { class: "ri-corner-down-right-line detail-reply-banner-icon" }),
+      el("span", { class: "detail-reply-banner-label" }, "Replying to "),
+      _replyBannerUsername,
+    ),
   );
+  const _replyBannerClose = el("button", { class: "detail-reply-banner-close", type: "button", onclick: () => {
+    _detailReplyTo = null;
+    detailReplyBanner.classList.add("hidden");
+    const inp = cmtSection.querySelector("input[type='text']");
+    if (inp) { inp.placeholder = "Write a comment…"; inp.value = ""; }
+  }}, el("i", { class: "ri-close-line" }));
+  detailReplyBanner.appendChild(_replyBannerClose);
   cmtSection.appendChild(detailReplyBanner);
 
   const renderDetailComment = (c, a) => {
@@ -2149,12 +2196,12 @@ const renderPostDetail = async (root, postId) => {
     const replyBtn = el("button", {
       class: "tw-cmt-act-btn",
       onclick: () => {
+        const handle = a?.username || a?.name || "user";
         _detailReplyTo = { uid: a?.uid, name: a?.name || "user", username: a?.username || "" };
-        detailReplyBanner.querySelector(".reply-banner-text").textContent = `Replying to @${a?.username || a?.name || "user"}`;
+        _replyBannerUsername.textContent = `@${handle}`;
         detailReplyBanner.classList.remove("hidden");
-        const inp = cmtSection.querySelector("input");
-        inp.placeholder = `Reply to @${a?.username || a?.name || "user"}…`;
-        inp.focus();
+        const inp = cmtSection.querySelector("input[type='text']");
+        if (inp) { inp.placeholder = `Reply to @${handle}…`; inp.focus(); }
       },
     }, el("i", { class: "ri-chat-1-line" }));
 
@@ -2324,7 +2371,7 @@ const renderPostDetail = async (root, postId) => {
 
   cForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const input = cForm.querySelector("input");
+    const input = cForm.querySelector("input[type='text']");
     const text = input.value.trim();
     if (!text && !_dCmtMediaFile && !_dCmtAudioBlob) return;
     const submitBtn = cForm.querySelector("button[type='submit']");
