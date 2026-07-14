@@ -173,9 +173,26 @@ function _wireSongPlayback(wrap, song, videoEl) {
   audio.loop = true; audio.muted = false; audio.volume = SONG_BG_VOLUME; audio.preload = "none";
   if (videoEl) {
     videoEl.muted = true; // song is the only audio source for posts with music
-    videoEl.addEventListener("play", () => { audio.currentTime = videoEl.currentTime % (audio.duration || 1e9); audio.play().catch(() => {}); });
+    const DRIFT_TOLERANCE = 0.25; // seconds — resync once audio/video clocks drift past this
+    const syncTime = () => { audio.currentTime = videoEl.currentTime % (audio.duration || 1e9); };
+    // "play"/"pause" alone aren't enough: while the video stalls to buffer it
+    // fires "waiting" (not "pause"), so the song kept advancing silently
+    // ahead of the picture during any rebuffer. Pausing on "waiting" and
+    // resyncing+resuming on "playing" keeps the song locked to what's
+    // actually on screen, not just to whether playback was ever paused.
+    videoEl.addEventListener("play", () => { syncTime(); audio.play().catch(() => {}); });
+    videoEl.addEventListener("playing", () => { syncTime(); audio.play().catch(() => {}); });
+    videoEl.addEventListener("waiting", () => audio.pause());
     videoEl.addEventListener("pause", () => audio.pause());
-    videoEl.addEventListener("seeked", () => { audio.currentTime = videoEl.currentTime % (audio.duration || 1e9); });
+    videoEl.addEventListener("seeking", () => audio.pause());
+    videoEl.addEventListener("seeked", () => { syncTime(); if (!videoEl.paused) audio.play().catch(() => {}); });
+    // Independent clocks drift apart over long continuous playback even
+    // without any stall — nudge back in sync whenever it exceeds tolerance.
+    videoEl.addEventListener("timeupdate", () => {
+      if (videoEl.paused || videoEl.seeking || !audio.duration) return;
+      const drift = Math.abs(audio.currentTime - videoEl.currentTime);
+      if (drift > DRIFT_TOLERANCE) syncTime();
+    });
   } else {
     const io = new IntersectionObserver((entries) => {
       if (!document.body.contains(wrap)) { audio.pause(); io.disconnect(); return; }
@@ -282,12 +299,33 @@ const buildVideoPlayer = (url, opts = {}) => {
 
   // ── Play on scroll into view / pause on scroll out ────────────────────────
   // Uses IntersectionObserver: starts playing when ≥50% visible, pauses when less.
-  const _io = new IntersectionObserver((entries) => {
-    if (entries[0].isIntersecting) {
-      video.play().catch(() => {});
-    } else {
+  //
+  // This is the actual source of the audio-runs-ahead-of-picture bug (not
+  // just for posts with a song — any video). A fast scroll fires several
+  // intersection changes in quick succession, so play() and pause() were
+  // being called back-to-back on the SAME <video> element before the
+  // previous play() had actually started producing frames. The browser's
+  // audio track picks up and starts ticking near-instantly on play(), but
+  // the video decoder needs a moment to spin up (especially after a recent
+  // pause/seek); calling pause() then play() again mid-spin-up repeatedly
+  // lets the audio clock get a head start each time while the decoder keeps
+  // resetting, so the gap compounds the more you scroll past it. Debouncing
+  // the visibility signal and never issuing an overlapping play()/pause()
+  // pair on the same element fixes this at the source.
+  let _pendingPlay = null, _wantPlaying = false, _ioDebounce = null;
+  const _applyIntent = () => {
+    if (_wantPlaying) {
+      if (video.paused && !_pendingPlay) {
+        _pendingPlay = video.play().catch(() => {}).finally(() => { _pendingPlay = null; if (!_wantPlaying) video.pause(); });
+      }
+    } else if (!_pendingPlay) {
       video.pause();
-    }
+    } // if a play() is still in flight, its .finally() above will pause once it settles
+  };
+  const _io = new IntersectionObserver((entries) => {
+    _wantPlaying = entries[0].isIntersecting;
+    clearTimeout(_ioDebounce);
+    _ioDebounce = setTimeout(_applyIntent, 120);
   }, { threshold: 0.5 });
   _io.observe(wrap);
   // Clean up observer if the player is ever removed from DOM
