@@ -220,7 +220,7 @@ const buildVideoPlayer = (url, opts = {}) => {
   const { song, overlays } = opts;
   const poster = _cloudPoster(url);
   // muted enables browser auto-play-on-scroll; user can unmute via the button
-  const video = el("video", { src: url, poster, preload: "metadata", playsinline: "", muted: "", style: "width:100%;display:block;" });
+  const video = el("video", { src: url, poster, preload: "none", playsinline: "", muted: "", style: "width:100%;display:block;" });
   const playIcon  = el("i", { class: "ri-play-fill" });
   const overlay   = el("div", { class: "vp-overlay" }, el("button", { class: "vp-big-play" }, playIcon));
   const playSmI   = el("i", { class: "ri-play-fill" });
@@ -234,7 +234,7 @@ const buildVideoPlayer = (url, opts = {}) => {
   const fullBtn   = el("button", { class: "vp-btn" }, el("i", { class: "ri-fullscreen-line" }));
   const bar       = el("div", { class: "vp-bar" }, playSmBtn, seek, timeEl, muteBtn, fullBtn);
   // inline style overrides chat.css max-width:320px for post-context players
-  const wrap      = el("div", { class: "vid-player", style: "width:100%;max-width:none;" }, video, overlay, bar);
+  const wrap      = el("div", { class: "vid-player", style: "width:100%;max-width:none;overflow:hidden;border-radius:14px;" }, video, overlay, bar);
 
   // ── Controls auto-hide ────────────────────────────────────────────────────
   // Shows bar on any interaction; hides 4 s later while playing.
@@ -333,8 +333,17 @@ const buildVideoPlayer = (url, opts = {}) => {
       if (video.readyState >= HAVE_FUTURE_DATA) {
         _startPlayback();
       } else {
-        // Buffer first, THEN play — this is what keeps audio from starting
-        // before there's actually a frame ready to show alongside it.
+        // With preload="none" the browser hasn't fetched anything yet.
+        // Call video.load() first — this kicks off a simultaneous audio+video
+        // fetch from byte 0, so both codecs start together and stay in sync.
+        // Without this the audio codec (lighter work) can finish buffering and
+        // start playing while the video decoder is still seeking to the first
+        // keyframe, producing the "sound plays, frozen frame" symptom.
+        if (video.networkState === 0 /* NETWORK_EMPTY */ || video.networkState === 3 /* NETWORK_NO_SOURCE */) {
+          video.load(); // initialise the media engine from scratch
+        } else if (video.currentTime !== 0) {
+          video.currentTime = 0; // ensure we start at a keyframe boundary
+        }
         _readyListener = () => {
           video.removeEventListener("canplay", _readyListener);
           _readyListener = null;
@@ -344,14 +353,21 @@ const buildVideoPlayer = (url, opts = {}) => {
       }
     } else {
       if (_readyListener) { video.removeEventListener("canplay", _readyListener); _readyListener = null; }
-      if (!_pendingPlay) { video.pause(); video.currentTime = 0; } // always leave it parked at a keyframe (frame 0)
-    } // if a play() is still in flight, its .finally() above will pause+rewind once it settles
+      if (!_pendingPlay) {
+        video.pause();
+        video.currentTime = 0;
+        // With preload="none", unloading after scrolling away lets the browser
+        // free the decode buffer entirely — next play() always starts cold from
+        // frame 0 so audio/video are guaranteed to begin decoding together.
+        video.load();
+      }
+    }
   };
   const _io = new IntersectionObserver((entries) => {
     _wantPlaying = entries[0].isIntersecting;
     clearTimeout(_ioDebounce);
-    _ioDebounce = setTimeout(_applyIntent, 120);
-  }, { threshold: 0.5 });
+    _ioDebounce = setTimeout(_applyIntent, 200);
+  }, { threshold: 0.6 });
   _io.observe(wrap);
 
   // Mid-playback drift correction: even starting clean from 0, a slow
@@ -1575,12 +1591,12 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
       if (m.type === "video") {
         sawVideo = true;
         const player = buildVideoPlayer(m.url, { song, overlays: m.overlays });
-        player.style.borderRadius = "0";
+        player.style.borderRadius = "14px";
         stack.appendChild(player);
       } else {
         const img = el("img", {
           src: m.url, loading: "lazy",
-          style: "width:100%;display:block;max-height:85vh;object-fit:contain;background:#000;cursor:zoom-in;",
+          style: "width:100%;display:block;max-height:520px;object-fit:cover;cursor:zoom-in;border-radius:0;",
         });
         img.addEventListener("click", () => openImageZoom(m.url));
         stack.appendChild(img);
@@ -1596,14 +1612,15 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
     if (m.type === "video") {
       // Full-width, no side border-radius so it stretches edge-to-edge
       const player = buildVideoPlayer(m.url, { song, overlays: m.overlays });
-      player.style.borderRadius = "0";
-      const wrap = el("div", { class: "post-media", style: "border-radius:0;overflow:hidden;" });
+      player.style.borderRadius = "14px";
+      const wrap = el("div", { class: "post-media", style: "border-radius:14px;overflow:hidden;margin:8px 0;" });
       wrap.appendChild(player);
       return wrap;
     }
-    const singleImg = el("img", { src: m.url, loading: "lazy", style: detailView ? "cursor:zoom-in;" : "" });
+    const _imgStyle = "width:100%;display:block;max-height:520px;object-fit:cover;" + (detailView ? "cursor:zoom-in;" : "");
+    const singleImg = el("img", { src: m.url, loading: "lazy", style: _imgStyle });
     if (detailView) singleImg.addEventListener("click", () => openImageZoom(m.url));
-    const wrap = el("div", { class: "post-media", style: "position:relative;" }, singleImg);
+    const wrap = el("div", { class: "post-media", style: "border-radius:14px;overflow:hidden;margin:8px 0;" }, singleImg);
     if (song) _wireStandaloneSong(wrap);
     return wrap;
   }
@@ -1612,7 +1629,7 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
   if (items.length === 2) {
     const grid = el("div", {
       class: "post-media",
-      style: "display:grid;grid-template-columns:1fr 1fr;gap:2px;border-radius:12px;overflow:hidden;height:280px;position:relative;",
+      style: "display:grid;grid-template-columns:1fr 1fr;gap:3px;border-radius:14px;overflow:hidden;height:260px;margin:8px 0;position:relative;",
     });
     items.forEach((m, i) => grid.appendChild(_makeGridCell(m, false, items, i, postId)));
     if (song) _wireStandaloneSong(grid);
@@ -1623,7 +1640,7 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
   if (items.length === 3) {
     const grid = el("div", {
       class: "post-media",
-      style: "display:grid;grid-template-columns:2fr 1fr;grid-template-rows:140px 140px;gap:2px;border-radius:12px;overflow:hidden;position:relative;",
+      style: "display:grid;grid-template-columns:2fr 1fr;grid-template-rows:130px 130px;gap:3px;border-radius:14px;overflow:hidden;margin:8px 0;position:relative;",
     });
     items.forEach((m, i) => grid.appendChild(_makeGridCell(m, i === 0, items, i, postId)));
     if (song) _wireStandaloneSong(grid);
@@ -1662,7 +1679,7 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
     cur = (n + items.length) % items.length;
     slides[cur].style.display = ""; dots[cur].classList.add("active");
   };
-  const wrap = el("div", { class: "post-media carousel", style: "position:relative;" }, ...slides, dotsWrap);
+  const wrap = el("div", { class: "post-media carousel", style: "border-radius:14px;overflow:hidden;margin:8px 0;position:relative;" }, ...slides, dotsWrap);
   if (song) _wireStandaloneSong(wrap);
 
   // Touch swipe support
@@ -2636,46 +2653,6 @@ const renderExplore = (root, hashtagFilter = null) => {
   document.addEventListener("click", (e) => {
     if (!searchWrap.contains(e.target)) { searchResults.classList.add("hidden"); }
   });
-
-  // ── Suggested profiles ──────────────────────────────────────────────────
-  if (!hashtagFilter) {
-    const suggSection = el("div", { class: "explore-suggested" });
-    suggSection.appendChild(el("div", { class: "explore-suggested-head" }, "Suggested for you"));
-    const suggScroller = el("div", { class: "explore-suggested-scroller" });
-    suggSection.appendChild(suggScroller);
-    root.appendChild(suggSection);
-    getDocs(query(collection(db, "users"), orderBy("createdAt", "desc"), limit(30))).then((snap) => {
-      const all = snap.docs.map((d) => ({ uid: d.id, ...d.data() }))
-        .filter((u) => u.uid !== state.uid && !(state.me?.following || []).includes(u.uid));
-      for (let i = all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [all[i], all[j]] = [all[j], all[i]]; }
-      if (!all.length) { suggSection.classList.add("hidden"); return; }
-      all.slice(0, 10).forEach((u) => {
-        let iFollow = (state.me?.following || []).includes(u.uid);
-        const followBtn = el("button", { class: `btn sm ${iFollow ? "ghost" : "primary"}` }, iFollow ? "Following" : "Follow");
-        followBtn.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          const meRef = doc(db, "users", state.uid);
-          const themRef = doc(db, "users", u.uid);
-          const batch = writeBatch(db);
-          if (iFollow) { batch.update(meRef, { following: arrayRemove(u.uid) }); batch.update(themRef, { followers: arrayRemove(state.uid) }); }
-          else { batch.update(meRef, { following: arrayUnion(u.uid) }); batch.update(themRef, { followers: arrayUnion(state.uid) }); }
-          await batch.commit().catch(() => {});
-          state.cache.users.delete(u.uid);
-          state.cache.users.delete(state.uid);
-          iFollow = !iFollow;
-          followBtn.className = `btn sm ${iFollow ? "ghost" : "primary"}`;
-          followBtn.textContent = iFollow ? "Following" : "Follow";
-          if (state.me.following) iFollow ? state.me.following.push(u.uid) : (state.me.following = state.me.following.filter((x) => x !== u.uid));
-        });
-        suggScroller.appendChild(el("div", { class: "explore-sugg-card", onclick: () => location.hash = `#profile/${u.uid}` },
-          el("img", { class: "avatar md", src: avatarFor(u) }),
-          el("div", { class: "esc-name" }, u.name || "User"),
-          el("div", { class: "esc-sub" }, "@" + (u.username || "user")),
-          followBtn,
-        ));
-      });
-    }).catch(() => {});
-  }
 
   // ── Trending in Orbit ─────────────────────────────────────────────────
   if (!hashtagFilter) {
