@@ -300,30 +300,32 @@ const buildVideoPlayer = (url, opts = {}) => {
   // ── Play on scroll into view / pause on scroll out ────────────────────────
   // Uses IntersectionObserver: starts playing when ≥50% visible, pauses when less.
   //
-  // Real cause of "picture is frozen but I can already hear it / sound
-  // finishes before the picture does": with preload="metadata" almost
-  // nothing is buffered yet when a video first scrolls into view. Calling
-  // .play() at that moment starts the audio track almost immediately
-  // (tiny amount of data needed) while the video decoder is still waiting
-  // on the network for enough frame data — so you hear it before you see
-  // it, and the picture has to "skip-catch-up" through frames it decoded
-  // late, which is also why it can visually look frozen for a stretch and
-  // then jump. Two fixes, both required:
-  //  1. Don't call play() the instant it's visible — wait until the
-  //     browser reports enough buffered data to play through the current
-  //     position (readyState >= HAVE_FUTURE_DATA) so audio and the first
-  //     rendered frame start together instead of audio going out alone.
-  //  2. Keep correcting *during* playback: if the network stalls mid-clip,
-  //     the audio clock (video.currentTime) can keep advancing slightly
-  //     faster than frames are actually being rendered. We watch the real
-  //     decoded-frame timestamp via requestVideoFrameCallback and nudge
-  //     playbackRate down briefly whenever it falls behind, letting the
-  //     picture catch back up to what you're hearing instead of drifting
-  //     further apart for the rest of the clip.
+  // The actual mechanism, confirmed by the report that it's specifically
+  // "frame freezes right as it starts, audio is already moving, and by the
+  // end audio has finished while the picture hasn't caught up": that is the
+  // signature of resuming video decode from a MID-STREAM position rather
+  // than the start of the file. Video frames are only fully decodable from
+  // a keyframe forward — most encoders only place a keyframe every ~1-2s
+  // (a "GOP"). When you pause a video partway through and later call
+  // .play() again from that same currentTime, the audio track can resume
+  // instantly (any sample is playable on its own), but the video decoder
+  // has to rewind to the last keyframe *before* that point and decode
+  // forward through every frame in between before it can show anything —
+  // on a phone-grade CPU that takes long enough that audio visibly gets
+  // ahead, and if the decoder never fully catches up you keep watching
+  // "old" frames for the rest of the clip while the audio plays at the
+  // correct real-time pace.
+  //
+  // The fix isn't to buffer more or nudge the playback rate after the
+  // fact — it's to never resume from a mid-file position at all. Every
+  // time a video leaves the viewport we now pause it AND rewind it to 0,
+  // so the next time it's played it always restarts from the file's very
+  // first frame — which is always a keyframe — instead of reviving decode
+  // from some arbitrary point deep in the last GOP.
   const HAVE_FUTURE_DATA = 3;
   let _pendingPlay = null, _wantPlaying = false, _ioDebounce = null, _readyListener = null;
   const _startPlayback = () => {
-    _pendingPlay = video.play().catch(() => {}).finally(() => { _pendingPlay = null; if (!_wantPlaying) video.pause(); });
+    _pendingPlay = video.play().catch(() => {}).finally(() => { _pendingPlay = null; if (!_wantPlaying) { video.pause(); video.currentTime = 0; } });
   };
   const _applyIntent = () => {
     if (_wantPlaying) {
@@ -342,8 +344,8 @@ const buildVideoPlayer = (url, opts = {}) => {
       }
     } else {
       if (_readyListener) { video.removeEventListener("canplay", _readyListener); _readyListener = null; }
-      if (!_pendingPlay) video.pause();
-    } // if a play() is still in flight, its .finally() above will pause once it settles
+      if (!_pendingPlay) { video.pause(); video.currentTime = 0; } // always leave it parked at a keyframe (frame 0)
+    } // if a play() is still in flight, its .finally() above will pause+rewind once it settles
   };
   const _io = new IntersectionObserver((entries) => {
     _wantPlaying = entries[0].isIntersecting;
@@ -352,9 +354,13 @@ const buildVideoPlayer = (url, opts = {}) => {
   }, { threshold: 0.5 });
   _io.observe(wrap);
 
-  // Mid-playback drift correction: compare the timestamp of the frame
-  // actually on screen against the audio/playback clock, and slow down
-  // briefly to let rendering catch back up if it falls behind.
+  // Mid-playback drift correction: even starting clean from 0, a slow
+  // device can still fall behind mid-clip if it briefly can't decode as
+  // fast as real time. Compare the timestamp of the frame actually on
+  // screen against the audio/playback clock, and slow down briefly to let
+  // rendering catch back up if it falls behind (not supported on Safari/
+  // iOS — no requestVideoFrameCallback there — but the reset-to-0 fix
+  // above is the primary one and works everywhere).
   if (typeof video.requestVideoFrameCallback === "function") {
     const DRIFT_START = 0.12, DRIFT_CLEAR = 0.03, CATCHUP_RATE = 0.75;
     let correcting = false, rvfcActive = false;
@@ -1218,6 +1224,23 @@ const router = () => {
   }
 };
 window.addEventListener("hashchange", router);
+
+// ── Bottom nav auto-hide on scroll-down, show on scroll-up (Twitter style) ──
+const _initBottomNavScroll = () => {
+  const _bn = document.querySelector(".bottomnav");
+  const _ct = document.getElementById("content");
+  if (!_bn || !_ct) return;
+  let _lastScrollY = 0;
+  _ct.addEventListener("scroll", () => {
+    const y  = _ct.scrollTop;
+    const dy = y - _lastScrollY;
+    if (Math.abs(dy) < 5) return;
+    if (dy > 0 && y > 80) _bn.classList.add("bn-hidden");
+    else                   _bn.classList.remove("bn-hidden");
+    _lastScrollY = y;
+  }, { passive: true });
+};
+setTimeout(_initBottomNavScroll, 700);
 $$(".nav-item, .bn, .brand").forEach((b) => {
   if (!b.dataset.route) return;
   b.addEventListener("click", () => { location.hash = "#" + b.dataset.route; });
@@ -1413,15 +1436,6 @@ const renderFeed = (root) => {
     });
   });
 
-  // Trending lane container (filled later)
-  const trendingLane = el("div", { class: "trending-lane hidden" });
-  trendingLane.appendChild(el("div", { class: "trending-head" },
-    el("i", { class: "ri-fire-fill" }), "Trending in your orbit"
-  ));
-  const trendingScroller = el("div", { class: "trending-scroller" });
-  trendingLane.appendChild(trendingScroller);
-  feedMainContent.appendChild(trendingLane);
-
   // Posts container
   const list = el("div", { class: "feed-list" });
   list.appendChild(el("div", { class: "empty" },
@@ -1438,7 +1452,6 @@ const renderFeed = (root) => {
     if (_newIds === _lastPostIds && list.children.length > 0) return;
     _lastPostIds = _newIds;
     list.innerHTML = "";
-    trendingScroller.innerHTML = "";
     if (snap.empty) {
       list.appendChild(el("div", { class: "empty" },
         el("i", { class: "ri-planet-line" }),
@@ -1452,16 +1465,6 @@ const renderFeed = (root) => {
     // resolve authors
     const authors = await Promise.all([...new Set(posts.map((p) => p.authorUid))].map(fetchUser));
     const byUid = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
-
-    // Trending = top 5 by orbitCount with at least 3 orbits
-    const trending = [...posts].filter((p) => (p.orbitCount || 0) >= 3)
-      .sort((a, b) => (b.orbitCount || 0) - (a.orbitCount || 0)).slice(0, 5);
-    if (trending.length) {
-      trendingLane.classList.remove("hidden");
-      trending.forEach((p) => trendingScroller.appendChild(renderTrendingCard(p, byUid[p.authorUid])));
-    } else {
-      trendingLane.classList.add("hidden");
-    }
 
     // Algorithm: score posts by affinity (following > hashtag match > engagement > recency)
     // A random component (+0–15) shuffles the feed differently on each fresh load
@@ -2108,6 +2111,20 @@ const renderPost = (p, author, opts = {}) => {
 
     post._focusComment = () => cForm.querySelector("input").focus();
   }
+  // ── X / Twitter layout: move avatar to its own left column ──────────────
+  const _xHead = post.querySelector(".post-head");
+  const _xAv   = _xHead && _xHead.firstElementChild;
+  if (_xHead && _xAv && _xAv.tagName === "IMG") {
+    _xHead.removeChild(_xAv);
+    _xAv.className = "avatar";
+    _xAv.style.cssText = "width:36px;height:36px;flex-shrink:0;cursor:pointer;border-radius:50%;object-fit:cover;";
+    const _avatarCol = el("div", { class: "post-avatar-col" }, _xAv);
+    const _bodyCol   = el("div", { class: "post-body-col" });
+    while (post.firstChild) _bodyCol.appendChild(post.firstChild);
+    post.appendChild(_avatarCol);
+    post.appendChild(_bodyCol);
+  }
+
   return post;
 };
 
@@ -2658,6 +2675,27 @@ const renderExplore = (root, hashtagFilter = null) => {
         ));
       });
     }).catch(() => {});
+  }
+
+  // ── Trending in Orbit ─────────────────────────────────────────────────
+  if (!hashtagFilter) {
+    const trendSection = el("div", { class: "trending-lane", style: "margin-bottom:12px;" });
+    trendSection.appendChild(el("div", { class: "trending-head" },
+      el("i", { class: "ri-fire-fill" }), "Trending in Orbit"
+    ));
+    const trendScroller = el("div", { class: "trending-scroller" });
+    trendSection.appendChild(trendScroller);
+    root.appendChild(trendSection);
+    getDocs(query(collection(db, "posts"), orderBy("orbitCount", "desc"), limit(10)))
+      .then(async (tSnap) => {
+        const tPosts = tSnap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(p => (p.orbitCount || 0) >= 1);
+        if (!tPosts.length) { trendSection.style.display = "none"; return; }
+        const tAuthors = await Promise.all([...new Set(tPosts.map(p => p.authorUid))].map(fetchUser));
+        const tByUid = Object.fromEntries(tAuthors.filter(Boolean).map(u => [u.uid, u]));
+        tPosts.slice(0, 5).forEach(p => trendScroller.appendChild(renderTrendingCard(p, tByUid[p.authorUid])));
+      }).catch(() => { trendSection.style.display = "none"; });
   }
 
   const grid = el("div", { class: "grid-3" });
