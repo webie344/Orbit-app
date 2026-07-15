@@ -300,26 +300,49 @@ const buildVideoPlayer = (url, opts = {}) => {
   // ── Play on scroll into view / pause on scroll out ────────────────────────
   // Uses IntersectionObserver: starts playing when ≥50% visible, pauses when less.
   //
-  // This is the actual source of the audio-runs-ahead-of-picture bug (not
-  // just for posts with a song — any video). A fast scroll fires several
-  // intersection changes in quick succession, so play() and pause() were
-  // being called back-to-back on the SAME <video> element before the
-  // previous play() had actually started producing frames. The browser's
-  // audio track picks up and starts ticking near-instantly on play(), but
-  // the video decoder needs a moment to spin up (especially after a recent
-  // pause/seek); calling pause() then play() again mid-spin-up repeatedly
-  // lets the audio clock get a head start each time while the decoder keeps
-  // resetting, so the gap compounds the more you scroll past it. Debouncing
-  // the visibility signal and never issuing an overlapping play()/pause()
-  // pair on the same element fixes this at the source.
-  let _pendingPlay = null, _wantPlaying = false, _ioDebounce = null;
+  // Real cause of "picture is frozen but I can already hear it / sound
+  // finishes before the picture does": with preload="metadata" almost
+  // nothing is buffered yet when a video first scrolls into view. Calling
+  // .play() at that moment starts the audio track almost immediately
+  // (tiny amount of data needed) while the video decoder is still waiting
+  // on the network for enough frame data — so you hear it before you see
+  // it, and the picture has to "skip-catch-up" through frames it decoded
+  // late, which is also why it can visually look frozen for a stretch and
+  // then jump. Two fixes, both required:
+  //  1. Don't call play() the instant it's visible — wait until the
+  //     browser reports enough buffered data to play through the current
+  //     position (readyState >= HAVE_FUTURE_DATA) so audio and the first
+  //     rendered frame start together instead of audio going out alone.
+  //  2. Keep correcting *during* playback: if the network stalls mid-clip,
+  //     the audio clock (video.currentTime) can keep advancing slightly
+  //     faster than frames are actually being rendered. We watch the real
+  //     decoded-frame timestamp via requestVideoFrameCallback and nudge
+  //     playbackRate down briefly whenever it falls behind, letting the
+  //     picture catch back up to what you're hearing instead of drifting
+  //     further apart for the rest of the clip.
+  const HAVE_FUTURE_DATA = 3;
+  let _pendingPlay = null, _wantPlaying = false, _ioDebounce = null, _readyListener = null;
+  const _startPlayback = () => {
+    _pendingPlay = video.play().catch(() => {}).finally(() => { _pendingPlay = null; if (!_wantPlaying) video.pause(); });
+  };
   const _applyIntent = () => {
     if (_wantPlaying) {
-      if (video.paused && !_pendingPlay) {
-        _pendingPlay = video.play().catch(() => {}).finally(() => { _pendingPlay = null; if (!_wantPlaying) video.pause(); });
+      if (!video.paused || _pendingPlay || _readyListener) return;
+      if (video.readyState >= HAVE_FUTURE_DATA) {
+        _startPlayback();
+      } else {
+        // Buffer first, THEN play — this is what keeps audio from starting
+        // before there's actually a frame ready to show alongside it.
+        _readyListener = () => {
+          video.removeEventListener("canplay", _readyListener);
+          _readyListener = null;
+          if (_wantPlaying) _startPlayback();
+        };
+        video.addEventListener("canplay", _readyListener);
       }
-    } else if (!_pendingPlay) {
-      video.pause();
+    } else {
+      if (_readyListener) { video.removeEventListener("canplay", _readyListener); _readyListener = null; }
+      if (!_pendingPlay) video.pause();
     } // if a play() is still in flight, its .finally() above will pause once it settles
   };
   const _io = new IntersectionObserver((entries) => {
@@ -328,8 +351,26 @@ const buildVideoPlayer = (url, opts = {}) => {
     _ioDebounce = setTimeout(_applyIntent, 120);
   }, { threshold: 0.5 });
   _io.observe(wrap);
+
+  // Mid-playback drift correction: compare the timestamp of the frame
+  // actually on screen against the audio/playback clock, and slow down
+  // briefly to let rendering catch back up if it falls behind.
+  if (typeof video.requestVideoFrameCallback === "function") {
+    const DRIFT_START = 0.12, DRIFT_CLEAR = 0.03, CATCHUP_RATE = 0.75;
+    let correcting = false, rvfcActive = false;
+    const frameTick = (_now, metadata) => {
+      if (video.paused || video.ended) { rvfcActive = false; return; }
+      const drift = video.currentTime - (metadata.mediaTime ?? video.currentTime);
+      if (!correcting && drift > DRIFT_START) { correcting = true; video.playbackRate = CATCHUP_RATE; }
+      else if (correcting && drift < DRIFT_CLEAR) { correcting = false; video.playbackRate = 1; }
+      video.requestVideoFrameCallback(frameTick);
+    };
+    video.addEventListener("play", () => { if (!rvfcActive) { rvfcActive = true; video.requestVideoFrameCallback(frameTick); } });
+    video.addEventListener("pause", () => { correcting = false; video.playbackRate = 1; });
+  }
+
   // Clean up observer if the player is ever removed from DOM
-  video.addEventListener("emptied", () => _io.disconnect(), { once: true });
+  video.addEventListener("emptied", () => { _io.disconnect(); if (_readyListener) video.removeEventListener("canplay", _readyListener); }, { once: true });
 
   if (overlays) _renderFeedOverlays(wrap, overlays);
   if (song) _wireSongPlayback(wrap, song, video);
