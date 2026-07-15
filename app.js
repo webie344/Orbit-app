@@ -297,102 +297,135 @@ const buildVideoPlayer = (url, opts = {}) => {
   muteBtn.onclick = (e) => { e.stopPropagation(); video.muted = !video.muted; muteI.className = video.muted ? "ri-volume-mute-line" : "ri-volume-up-line"; _showBar(); };
   fullBtn.onclick = (e) => { e.stopPropagation(); (video.requestFullscreen || video.webkitRequestFullscreen || (() => {})).call(video); };
 
-  // ── Play on scroll into view / pause on scroll out ────────────────────────
-  // Uses IntersectionObserver: starts playing when ≥50% visible, pauses when less.
+  // ── Scroll-play engine (TikTok / Instagram pattern) ─────────────────────
   //
-  // The actual mechanism, confirmed by the report that it's specifically
-  // "frame freezes right as it starts, audio is already moving, and by the
-  // end audio has finished while the picture hasn't caught up": that is the
-  // signature of resuming video decode from a MID-STREAM position rather
-  // than the start of the file. Video frames are only fully decodable from
-  // a keyframe forward — most encoders only place a keyframe every ~1-2s
-  // (a "GOP"). When you pause a video partway through and later call
-  // .play() again from that same currentTime, the audio track can resume
-  // instantly (any sample is playable on its own), but the video decoder
-  // has to rewind to the last keyframe *before* that point and decode
-  // forward through every frame in between before it can show anything —
-  // on a phone-grade CPU that takes long enough that audio visibly gets
-  // ahead, and if the decoder never fully catches up you keep watching
-  // "old" frames for the rest of the clip while the audio plays at the
-  // correct real-time pace.
+  // GUARANTEE: audio and video always start decoding together from byte 0.
   //
-  // The fix isn't to buffer more or nudge the playback rate after the
-  // fact — it's to never resume from a mid-file position at all. Every
-  // time a video leaves the viewport we now pause it AND rewind it to 0,
-  // so the next time it's played it always restarts from the file's very
-  // first frame — which is always a keyframe — instead of reviving decode
-  // from some arbitrary point deep in the last GOP.
-  const HAVE_FUTURE_DATA = 3;
-  let _pendingPlay = null, _wantPlaying = false, _ioDebounce = null, _readyListener = null;
-  const _startPlayback = () => {
-    _pendingPlay = video.play().catch(() => {}).finally(() => { _pendingPlay = null; if (!_wantPlaying) { video.pause(); video.currentTime = 0; } });
+  // Phase 1 — ENTER view:
+  //   video.load()       → resets the media pipeline; both codecs start fresh
+  //   wait "canplay"     → browser has decoded enough to begin presentation
+  //   currentTime = 0   → parks decoder on exact frame-0 boundary (fixes
+  //   wait "seeked"        encoder PTS-offset desync on some MP4s)
+  //   video.play()       → audio + video both start from the same point
+  //
+  // Phase 2 — LEAVE view:
+  //   video.pause()      → immediate, no debounce
+  //   currentTime = 0   → rewind to keyframe
+  //   video.load()       → clears decode buffer; guarantees Phase 1 next time
+  //
+  // AbortError handling: play() is a promise; if the user scrolls past before
+  // buffering finishes the browser throws AbortError. We catch it and do a
+  // clean teardown so the element is reusable for the next scroll-in.
+
+  let _wantPlaying = false, _ioDebounce = null;
+  let _inflightPlay = null;   // the Promise returned by video.play()
+  let _canplayOff  = null;    // cleanup fn for the canplay listener
+  let _seekedOff   = null;    // cleanup fn for the seeked listener
+
+  const _abort = () => {
+    if (_canplayOff) { _canplayOff(); _canplayOff = null; }
+    if (_seekedOff)  { _seekedOff();  _seekedOff  = null; }
+    // _inflightPlay will settle on its own; its .catch handles AbortError
   };
-  const _applyIntent = () => {
-    if (_wantPlaying) {
-      if (!video.paused || _pendingPlay || _readyListener) return;
-      if (video.readyState >= HAVE_FUTURE_DATA) {
-        _startPlayback();
-      } else {
-        // With preload="none" the browser hasn't fetched anything yet.
-        // Call video.load() first — this kicks off a simultaneous audio+video
-        // fetch from byte 0, so both codecs start together and stay in sync.
-        // Without this the audio codec (lighter work) can finish buffering and
-        // start playing while the video decoder is still seeking to the first
-        // keyframe, producing the "sound plays, frozen frame" symptom.
-        if (video.networkState === 0 /* NETWORK_EMPTY */ || video.networkState === 3 /* NETWORK_NO_SOURCE */) {
-          video.load(); // initialise the media engine from scratch
-        } else if (video.currentTime !== 0) {
-          video.currentTime = 0; // ensure we start at a keyframe boundary
-        }
-        _readyListener = () => {
-          video.removeEventListener("canplay", _readyListener);
-          _readyListener = null;
-          if (_wantPlaying) _startPlayback();
-        };
-        video.addEventListener("canplay", _readyListener);
-      }
-    } else {
-      if (_readyListener) { video.removeEventListener("canplay", _readyListener); _readyListener = null; }
-      if (!_pendingPlay) {
+
+  const _doPlay = () => {
+    if (!_wantPlaying || (_inflightPlay && _inflightPlay._active)) return;
+    const p = video.play();
+    _inflightPlay = p;
+    p.then(() => {
+      // playing successfully — nothing extra needed
+    }).catch((err) => {
+      if (err.name === "AbortError") return; // user scrolled past — normal
+      // NotAllowedError = browser blocked autoplay (no prior gesture).
+      // Show the overlay so user can tap to start.
+      if (err.name === "NotAllowedError") overlay.classList.remove("playing");
+    }).finally(() => {
+      if (_inflightPlay === p) _inflightPlay = null;
+      // If we no longer want playing (left viewport while loading), tear down
+      if (!_wantPlaying && !video.paused) {
         video.pause();
         video.currentTime = 0;
-        // With preload="none", unloading after scrolling away lets the browser
-        // free the decode buffer entirely — next play() always starts cold from
-        // frame 0 so audio/video are guaranteed to begin decoding together.
         video.load();
       }
-    }
+    });
   };
+
+  const _enterView = () => {
+    if (!_wantPlaying) return;
+    _abort(); // cancel any previous listeners still pending
+
+    // Step 1: fresh pipeline — both codecs will start from byte 0 together
+    video.load();
+
+    // Step 2: wait until the browser has enough to begin playback
+    const _onCanPlay = () => {
+      _canplayOff = null;
+      if (!_wantPlaying) return;
+
+      // Step 3: seek to exact frame 0 (fixes PTS-offset desync on some MP4s)
+      // If already at 0, "seeked" may not fire — check readyState instead
+      if (video.currentTime === 0 && video.readyState >= 3) {
+        _doPlay();
+        return;
+      }
+      const _onSeeked = () => {
+        _seekedOff = null;
+        if (_wantPlaying) _doPlay();
+      };
+      _seekedOff = () => video.removeEventListener("seeked", _onSeeked);
+      video.addEventListener("seeked", _onSeeked, { once: true });
+      video.currentTime = 0;
+    };
+    _canplayOff = () => video.removeEventListener("canplay", _onCanPlay);
+    video.addEventListener("canplay", _onCanPlay, { once: true });
+  };
+
+  const _leaveView = () => {
+    _abort();
+    // Pause is safe even if play() is still in flight — the promise will
+    // reject with AbortError which we handle above
+    try { video.pause(); } catch (_) {}
+    video.currentTime = 0;
+    video.load(); // free decode buffer → next entry guaranteed clean
+  };
+
   const _io = new IntersectionObserver((entries) => {
-    _wantPlaying = entries[0].isIntersecting;
+    const visible = entries[0].isIntersecting;
+    if (visible === _wantPlaying) return; // no change
+    _wantPlaying = visible;
     clearTimeout(_ioDebounce);
-    _ioDebounce = setTimeout(_applyIntent, 200);
-  }, { threshold: 0.6 });
+    if (visible) {
+      // Small debounce on enter only — prevents wasted load() calls during
+      // a fast fling through the feed
+      _ioDebounce = setTimeout(_enterView, 150);
+    } else {
+      // Leave is instant — no point decoding off-screen frames
+      _leaveView();
+    }
+  }, { threshold: 0.6, rootMargin: "0px" });
   _io.observe(wrap);
 
-  // Mid-playback drift correction: even starting clean from 0, a slow
-  // device can still fall behind mid-clip if it briefly can't decode as
-  // fast as real time. Compare the timestamp of the frame actually on
-  // screen against the audio/playback clock, and slow down briefly to let
-  // rendering catch back up if it falls behind (not supported on Safari/
-  // iOS — no requestVideoFrameCallback there — but the reset-to-0 fix
-  // above is the primary one and works everywhere).
+  // Mid-playback drift correction via requestVideoFrameCallback (Chrome/Edge).
+  // Compares the actual rendered frame's mediaTime against currentTime; if the
+  // renderer is falling behind, briefly slows playbackRate to let it catch up.
+  // Safari / iOS don't support rVFC — the load()+seeked fix above handles them.
   if (typeof video.requestVideoFrameCallback === "function") {
-    const DRIFT_START = 0.12, DRIFT_CLEAR = 0.03, CATCHUP_RATE = 0.75;
+    const DRIFT_START = 0.10, DRIFT_CLEAR = 0.02, CATCHUP_RATE = 0.80;
     let correcting = false, rvfcActive = false;
-    const frameTick = (_now, metadata) => {
-      if (video.paused || video.ended) { rvfcActive = false; return; }
+    const _frameTick = (_now, metadata) => {
+      if (video.paused || video.ended) { rvfcActive = false; correcting = false; video.playbackRate = 1; return; }
       const drift = video.currentTime - (metadata.mediaTime ?? video.currentTime);
-      if (!correcting && drift > DRIFT_START) { correcting = true; video.playbackRate = CATCHUP_RATE; }
+      if (!correcting && drift > DRIFT_START)  { correcting = true;  video.playbackRate = CATCHUP_RATE; }
       else if (correcting && drift < DRIFT_CLEAR) { correcting = false; video.playbackRate = 1; }
-      video.requestVideoFrameCallback(frameTick);
+      video.requestVideoFrameCallback(_frameTick);
     };
-    video.addEventListener("play", () => { if (!rvfcActive) { rvfcActive = true; video.requestVideoFrameCallback(frameTick); } });
-    video.addEventListener("pause", () => { correcting = false; video.playbackRate = 1; });
+    video.addEventListener("play",  () => { if (!rvfcActive) { rvfcActive = true; video.requestVideoFrameCallback(_frameTick); } });
+    video.addEventListener("pause", () => { if (correcting)  { correcting = false; video.playbackRate = 1; } });
   }
 
-  // Clean up observer if the player is ever removed from DOM
-  video.addEventListener("emptied", () => { _io.disconnect(); if (_readyListener) video.removeEventListener("canplay", _readyListener); }, { once: true });
+  // DOM removal cleanup
+  const _onEmptied = () => { _io.disconnect(); _abort(); };
+  video.addEventListener("emptied", _onEmptied, { once: true });
 
   if (overlays) _renderFeedOverlays(wrap, overlays);
   if (song) _wireSongPlayback(wrap, song, video);
