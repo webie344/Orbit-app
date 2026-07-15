@@ -197,7 +197,7 @@ function _wireSongPlayback(wrap, song, videoEl) {
     const io = new IntersectionObserver((entries) => {
       if (!document.body.contains(wrap)) { audio.pause(); io.disconnect(); return; }
       if (entries[0].isIntersecting) audio.play().catch(() => {}); else audio.pause();
-    }, { threshold: 0.6 });
+    }, { root: document.getElementById("content"), threshold: 0.5 });
     io.observe(wrap);
   }
 }
@@ -354,6 +354,9 @@ const buildVideoPlayer = (url, opts = {}) => {
     if (!_wantPlaying) return;
     _abort(); // cancel any previous listeners still pending
 
+    // If already ready (cached / preloaded), skip the load+canplay wait
+    if (video.readyState >= 3 && video.currentTime === 0) { _doPlay(); return; }
+
     // Step 1: fresh pipeline — both codecs will start from byte 0 together
     video.load();
 
@@ -402,7 +405,7 @@ const buildVideoPlayer = (url, opts = {}) => {
       // Leave is instant — no point decoding off-screen frames
       _leaveView();
     }
-  }, { threshold: 0.6, rootMargin: "0px" });
+  }, { root: document.getElementById("content") || null, threshold: 0.5, rootMargin: "0px" });
   _io.observe(wrap);
 
   // Mid-playback drift correction via requestVideoFrameCallback (Chrome/Edge).

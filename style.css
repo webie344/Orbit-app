@@ -460,9 +460,9 @@ textarea { resize: vertical; min-height: 80px; }
   flex-wrap: nowrap;
 }
 .post-actions-left {
-  display: flex; align-items: center; gap: 4px;
+  display: flex; align-items: center; gap: 2px;
   min-width: 0;
-  overflow: hidden;
+  flex-shrink: 1;
 }
 .post-actions-right {
   display: flex; align-items: center; gap: 2px;
@@ -471,7 +471,7 @@ textarea { resize: vertical; min-height: 80px; }
 }
 .post-act {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 8px 10px; border-radius: var(--radius-pill); font-size: 13px;
+  padding: 6px 8px; border-radius: var(--radius-pill); font-size: 13px;
   transition: background var(--speed), color var(--speed), transform var(--speed);
   flex-shrink: 0;
   white-space: nowrap;
