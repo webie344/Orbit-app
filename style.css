@@ -438,17 +438,21 @@ textarea { resize: vertical; min-height: 80px; }
 .post-views { cursor: default; }
 .post-views:hover { background: none; color: var(--text-dim); }
 .post-media {
-  margin: 6px -14px 8px -14px;
-  border-top: 1px solid var(--line-soft);
-  border-bottom: 1px solid var(--line-soft);
-  background: #000;
+  margin: 8px 0;
+  border-radius: 14px;
   overflow: hidden;
+  background: var(--bg-elev-2);
+  position: relative;
 }
-.post-media img { width: 100%; max-height: 85vh; object-fit: contain; display: block; background: #000; }
+.post-media img {
+  width: 100%; display: block;
+  max-height: 520px;
+  object-fit: cover;
+}
 
-/* Feed video player — full width, full frame, no cropping */
-.post-media .vid-player { width: 100% !important; max-width: none !important; background: #000; }
-.post-media .vid-player video { width: 100% !important; max-height: 85vh; object-fit: contain; display: block; background: #000; }
+/* Feed video — contained, cover */
+.post-media .vid-player { width: 100%; border-radius: 14px; overflow: hidden; }
+.post-media .vid-player video { width: 100%; max-height: 520px; object-fit: cover; display: block; }
 
 .post-actions {
   display: flex; align-items: center; gap: 4px;
@@ -522,7 +526,7 @@ textarea { resize: vertical; min-height: 80px; }
 /* Post media carousel */
 .post-media.carousel { position: relative; }
 .carousel-slide { width: 100%; }
-.carousel-slide img, .carousel-slide video { width: 100%; max-height: 85vh; object-fit: contain; border-radius: 0; background: #000; display: block; }
+.carousel-slide img, .carousel-slide video { width: 100%; max-height: 460px; object-fit: cover; border-radius: 0; display: block; }
 .carousel-arrow {
   position: absolute; top: 50%; transform: translateY(-50%);
   background: rgba(0,0,0,.55); color: white; border-radius: 50%;
