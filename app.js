@@ -125,34 +125,60 @@ const _cloudPoster = (url) => {
   try { return url.replace(/\.mp4(\?.*)?$/, ".jpg").replace(/\.webm(\?.*)?$/, ".jpg").replace(/\.mov(\?.*)?$/, ".jpg"); }
   catch { return ""; }
 };
-// Renders the text/sticker overlay layer created in the create-post studio
-// on top of a video (images have overlays already baked in at post time).
-function _renderFeedOverlays(wrap, overlays) {
-  if (!overlays || !overlays.length) return;
-  const layer = el("div", { class: "cr-overlay-layer", style: "pointer-events:none;" });
-  const paint = () => {
-    layer.innerHTML = "";
-    const w = wrap.clientWidth || 320;
-    overlays.forEach((ov) => {
-      const fontPx = w * ((ov.sizePct * ov.scale) / 100);
-      const style = `left:${ov.x}%;top:${ov.y}%;transform:translate(-50%,-50%) rotate(${ov.rotation}deg);font-size:${fontPx}px;` +
-        (ov.type === "text" ? `color:${ov.color};` : "");
-      layer.appendChild(el("div", { class: `cr-layer ${ov.type}`, style }, ov.type === "text" ? ov.text : ov.icon));
-    });
-  };
-  paint();
-  window.addEventListener("resize", paint);
-  // Feed posts are torn down via innerHTML replacement, not removal events,
-  // so detect detachment lazily and drop the global listener once the layer
-  // is no longer in the document (checked opportunistically on next resize).
-  const _cleanupOnDetach = () => {
-    if (!document.body.contains(layer)) window.removeEventListener("resize", _cleanupOnDetach);
-    else paint();
-  };
-  window.removeEventListener("resize", paint);
-  window.addEventListener("resize", _cleanupOnDetach);
-  wrap.appendChild(layer);
+
+
+
+// ── Global feed-video scroll manager ─────────────────────────────────────────
+// Replaces IntersectionObserver for scroll-play. One passive "scroll" listener
+// is attached to #content (the actual scroll container) plus window as a
+// fallback. On each tick, every registered video computes its visible fraction
+// via getBoundingClientRect — the same technique the bottom-nav hide uses.
+// Entries clean themselves up when their wrap is no longer in the DOM.
+const _feedVideos = []; // { wrap, enter, leave, vis, debounce }
+
+function _fvCheck() {
+  const ct  = document.getElementById("content");
+  const top = ct ? ct.getBoundingClientRect().top    : 0;
+  const bot = ct ? ct.getBoundingClientRect().bottom : window.innerHeight;
+
+  for (let i = _feedVideos.length - 1; i >= 0; i--) {
+    const rec = _feedVideos[i];
+    // Auto-purge stale entries
+    if (!document.body.contains(rec.wrap)) { _feedVideos.splice(i, 1); continue; }
+    const wr  = rec.wrap.getBoundingClientRect();
+    const vis = wr.height > 0
+      ? Math.max(0, Math.min(wr.bottom, bot) - Math.max(wr.top, top)) / wr.height
+      : 0;
+    const nowVisible = vis >= 0.5;
+    if (nowVisible === rec.vis) continue;
+    rec.vis = nowVisible;
+    clearTimeout(rec.debounce);
+    if (nowVisible) {
+      // 150 ms debounce on enter — ignores fast flings
+      rec.debounce = setTimeout(() => { if (rec.vis) rec.enter(); }, 150);
+    } else {
+      rec.leave();
+    }
+  }
 }
+
+// Attach once to both scroll containers
+let _fvInited = false;
+function _fvInit() {
+  if (_fvInited) return;
+  _fvInited = true;
+  const ct = document.getElementById("content");
+  if (ct) ct.addEventListener("scroll", _fvCheck, { passive: true });
+  window.addEventListener("scroll", _fvCheck, { passive: true });
+}
+
+function _registerFeedVideo(wrap, enter, leave) {
+  _fvInit();
+  _feedVideos.push({ wrap, enter, leave, vis: false, debounce: null });
+  // Defer initial check — wrap may not be in the DOM yet at register time
+  requestAnimationFrame(() => requestAnimationFrame(_fvCheck));
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 // Attaches an attached song to a post: plays/pauses in sync with visibility
 // (image/carousel posts) or with the video's own play state (video posts).
@@ -166,58 +192,12 @@ function _renderFeedOverlays(wrap, overlays) {
 // the page at least once (tap/click/scroll anywhere counts) — same
 // limitation TikTok/Instagram have. After that first interaction the song
 // plays automatically as posts scroll into view.
-const SONG_BG_VOLUME = 0.25;
-function _wireSongPlayback(wrap, song, videoEl) {
-  if (!song?.url) return;
-  const audio = new Audio(song.url);
-  audio.loop = true; audio.muted = false; audio.volume = SONG_BG_VOLUME; audio.preload = "none";
-  if (videoEl) {
-    videoEl.muted = true; // song is the only audio source for posts with music
-    const DRIFT_TOLERANCE = 0.25; // seconds — resync once audio/video clocks drift past this
-    const syncTime = () => { audio.currentTime = videoEl.currentTime % (audio.duration || 1e9); };
-    // "play"/"pause" alone aren't enough: while the video stalls to buffer it
-    // fires "waiting" (not "pause"), so the song kept advancing silently
-    // ahead of the picture during any rebuffer. Pausing on "waiting" and
-    // resyncing+resuming on "playing" keeps the song locked to what's
-    // actually on screen, not just to whether playback was ever paused.
-    videoEl.addEventListener("play", () => { syncTime(); audio.play().catch(() => {}); });
-    videoEl.addEventListener("playing", () => { syncTime(); audio.play().catch(() => {}); });
-    videoEl.addEventListener("waiting", () => audio.pause());
-    videoEl.addEventListener("pause", () => audio.pause());
-    videoEl.addEventListener("seeking", () => audio.pause());
-    videoEl.addEventListener("seeked", () => { syncTime(); if (!videoEl.paused) audio.play().catch(() => {}); });
-    // Independent clocks drift apart over long continuous playback even
-    // without any stall — nudge back in sync whenever it exceeds tolerance.
-    videoEl.addEventListener("timeupdate", () => {
-      if (videoEl.paused || videoEl.seeking || !audio.duration) return;
-      const drift = Math.abs(audio.currentTime - videoEl.currentTime);
-      if (drift > DRIFT_TOLERANCE) syncTime();
-    });
-  } else {
-    const io = new IntersectionObserver((entries) => {
-      if (!document.body.contains(wrap)) { audio.pause(); io.disconnect(); return; }
-      if (entries[0].isIntersecting) audio.play().catch(() => {}); else audio.pause();
-    }, { root: document.getElementById("content"), threshold: 0.5 });
-    io.observe(wrap);
-  }
-}
 
-// Small "now playing" pill for the post header — icon + truncated song
-// info, no controls. Rendered next to the follow/more button by renderPost.
-function _songHeaderBadge(song) {
-  if (!song?.name) return null;
-  return el("div", {
-    class: "post-song-badge",
-    title: `${song.name} — ${song.artist}`,
-    style: "display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--text-mute);max-width:120px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;margin-right:6px;flex-shrink:0;",
-  },
-    el("i", { class: "ri-music-2-fill" }),
-    el("span", { style: "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" }, `${song.name} — ${song.artist}`),
-  );
-}
+
+
 
 const buildVideoPlayer = (url, opts = {}) => {
-  const { song, overlays } = opts;
+  // opts reserved for future use
   const poster = _cloudPoster(url);
   // muted enables browser auto-play-on-scroll; user can unmute via the button
   const video = el("video", { src: url, poster, preload: "none", playsinline: "", muted: "", style: "width:100%;display:block;" });
@@ -317,7 +297,7 @@ const buildVideoPlayer = (url, opts = {}) => {
   // buffering finishes the browser throws AbortError. We catch it and do a
   // clean teardown so the element is reusable for the next scroll-in.
 
-  let _wantPlaying = false, _ioDebounce = null;
+  let _wantPlaying = false;
   let _inflightPlay = null;   // the Promise returned by video.play()
   let _canplayOff  = null;    // cleanup fn for the canplay listener
   let _seekedOff   = null;    // cleanup fn for the seeked listener
@@ -392,21 +372,11 @@ const buildVideoPlayer = (url, opts = {}) => {
     video.load(); // free decode buffer → next entry guaranteed clean
   };
 
-  const _io = new IntersectionObserver((entries) => {
-    const visible = entries[0].isIntersecting;
-    if (visible === _wantPlaying) return; // no change
-    _wantPlaying = visible;
-    clearTimeout(_ioDebounce);
-    if (visible) {
-      // Small debounce on enter only — prevents wasted load() calls during
-      // a fast fling through the feed
-      _ioDebounce = setTimeout(_enterView, 150);
-    } else {
-      // Leave is instant — no point decoding off-screen frames
-      _leaveView();
-    }
-  }, { root: document.getElementById("content") || null, threshold: 0.5, rootMargin: "0px" });
-  _io.observe(wrap);
+  // Register with global scroll manager — no IntersectionObserver needed.
+  // _fvCheck runs on every #content scroll event and calls _enterView /
+  // _leaveView based on getBoundingClientRect, which works regardless of
+  // which ancestor is the actual scroll container.
+  _registerFeedVideo(wrap, _enterView, _leaveView);
 
   // Mid-playback drift correction via requestVideoFrameCallback (Chrome/Edge).
   // Compares the actual rendered frame's mediaTime against currentTime; if the
@@ -427,11 +397,14 @@ const buildVideoPlayer = (url, opts = {}) => {
   }
 
   // DOM removal cleanup
-  const _onEmptied = () => { _io.disconnect(); _abort(); };
-  video.addEventListener("emptied", _onEmptied, { once: true });
+  // emptied fires on every video.load() — only abort pending listeners here.
+  // Do NOT disconnect _io: we need it to keep firing on every scroll-in/out.
+  const _onEmptied = () => { _abort(); };
+  video.addEventListener("emptied", _onEmptied);
 
-  if (overlays) _renderFeedOverlays(wrap, overlays);
-  if (song) _wireSongPlayback(wrap, song, video);
+  // Dead-entry cleanup is handled by _fvCheck on the next scroll tick.
+
+
 
   return wrap;
 };
@@ -1455,7 +1428,7 @@ const renderFeed = (root) => {
 
   const stub = el("div", { class: "composer-stub" },
     el("img", { class: "avatar sm", src: avatarFor(state.me), style: "cursor:pointer;", onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${state.uid}`; } }),
-    el("button", { onclick: () => openCreatePost() }, `What's orbiting your mind, ${(state.me?.name || "there").split(" ")[0]}?`)
+    el("button", { onclick: () => openCreatePost() }, `What's on your mind, ${(state.me?.name || "there").split(" ")[0]}?`)
   );
   wrap.appendChild(stub);
 
@@ -1611,13 +1584,9 @@ const _makeGridCell = (m, spanRows = false, _allItems = [], _idx = 0, _postId = 
 };
 
 const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
-  const { detailView = false, song = null } = opts;
+  const { detailView = false } = opts;
   const items = Array.isArray(mediaRaw) ? mediaRaw : (mediaRaw ? [mediaRaw] : []);
   if (!items.length) return null;
-  // A song attaches at the post level; if the media itself isn't a single
-  // video (which syncs playback directly), sync the song to the whole
-  // media block scrolling into view instead.
-  const _wireStandaloneSong = (node) => { if (song) _wireSongPlayback(node, song, null); return node; };
 
   // ── Detail view: all items stacked vertically (Facebook-style) ──
   if (detailView && items.length > 1) {
@@ -1626,7 +1595,7 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
     items.forEach((m) => {
       if (m.type === "video") {
         sawVideo = true;
-        const player = buildVideoPlayer(m.url, { song, overlays: m.overlays });
+        const player = buildVideoPlayer(m.url, {});
         player.style.borderRadius = "14px";
         stack.appendChild(player);
       } else {
@@ -1638,7 +1607,7 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
         stack.appendChild(img);
       }
     });
-    if (song && !sawVideo) _wireStandaloneSong(stack);
+
     return stack;
   }
 
@@ -1647,7 +1616,7 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
     const m = items[0];
     if (m.type === "video") {
       // Full-width, no side border-radius so it stretches edge-to-edge
-      const player = buildVideoPlayer(m.url, { song, overlays: m.overlays });
+      const player = buildVideoPlayer(m.url, {});
       player.style.borderRadius = "14px";
       const wrap = el("div", { class: "post-media", style: "border-radius:14px;overflow:hidden;margin:8px 0;" });
       wrap.appendChild(player);
@@ -1657,7 +1626,7 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
     const singleImg = el("img", { src: m.url, loading: "lazy", style: _imgStyle });
     if (detailView) singleImg.addEventListener("click", () => openImageZoom(m.url));
     const wrap = el("div", { class: "post-media", style: "border-radius:14px;overflow:hidden;margin:8px 0;" }, singleImg);
-    if (song) _wireStandaloneSong(wrap);
+
     return wrap;
   }
 
@@ -1668,7 +1637,7 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
       style: "display:grid;grid-template-columns:1fr 1fr;gap:3px;border-radius:14px;overflow:hidden;height:260px;margin:8px 0;position:relative;",
     });
     items.forEach((m, i) => grid.appendChild(_makeGridCell(m, false, items, i, postId)));
-    if (song) _wireStandaloneSong(grid);
+
     return grid;
   }
 
@@ -1679,7 +1648,7 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
       style: "display:grid;grid-template-columns:2fr 1fr;grid-template-rows:130px 130px;gap:3px;border-radius:14px;overflow:hidden;margin:8px 0;position:relative;",
     });
     items.forEach((m, i) => grid.appendChild(_makeGridCell(m, i === 0, items, i, postId)));
-    if (song) _wireStandaloneSong(grid);
+
     return grid;
   }
 
@@ -1688,7 +1657,7 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
   const slides = items.map((m, i) => {
     const slide = el("div", { class: "carousel-slide", style: i === 0 ? "" : "display:none;" });
     if (m.type === "video") {
-      const player = buildVideoPlayer(m.url, { overlays: m.overlays });
+      const player = buildVideoPlayer(m.url, {});
       // Clicking anywhere on the player navigates to the post detail
       if (postId) {
         const overlay = player.querySelector(".vp-overlay");
@@ -1716,7 +1685,6 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
     slides[cur].style.display = ""; dots[cur].classList.add("active");
   };
   const wrap = el("div", { class: "post-media carousel", style: "border-radius:14px;overflow:hidden;margin:8px 0;position:relative;" }, ...slides, dotsWrap);
-  if (song) _wireStandaloneSong(wrap);
 
   // Touch swipe support
   let _swipeStartX = 0;
@@ -1779,7 +1747,7 @@ const renderPost = (p, author, opts = {}) => {
         fmtTime(p.createdAt),
       )
     ),
-    _songHeaderBadge(p.song),
+
     !isMine ? (() => {
       let _isFollowing = (state.me?.following || []).includes(author?.uid);
       const fbtn = el("button", { class: `follow-btn${_isFollowing ? " following" : ""}` },
@@ -1860,7 +1828,7 @@ const renderPost = (p, author, opts = {}) => {
   }
 
   // Media (single, grid, or carousel)
-  const carousel = renderMediaCarousel(p.media, p.id, { detailView: _detailView, song: p.song });
+  const carousel = renderMediaCarousel(p.media, p.id, { detailView: _detailView });
   if (carousel) post.appendChild(carousel);
 
   // Feature: extra detail block for build/project posts (stage, progress, tags, links)
@@ -1955,8 +1923,7 @@ const renderPost = (p, author, opts = {}) => {
     // ── Comment media + voice-note state ────────────────────────
     let _cmtMediaFile = null;
     let _cmtAudioBlob = null;
-    let _cmtRecorder  = null;
-    let _cmtRecording = false;
+
 
     const cmtMediaInput = el("input", { type: "file", accept: "image/*,video/*" });
     cmtMediaInput.style.display = "none";
@@ -2006,7 +1973,7 @@ const renderPost = (p, author, opts = {}) => {
     });
     cmtMediaBtn.addEventListener("click", (e) => { e.stopPropagation(); cmtMediaInput.click(); });
 
-    // Mic button (voice note)
+    let _cmtRecorder = null, _cmtRecording = false;
     const SVG_MIC  = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`;
     const SVG_STOP = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>`;
     const cmtMicBtn = el("button", { type: "button", class: "icon-btn cmt-icon-btn", title: "Record voice note", html: SVG_MIC });
@@ -2079,7 +2046,7 @@ const renderPost = (p, author, opts = {}) => {
       submitBtn.disabled = false;
       await addDoc(collection(db, "posts", p.id, "comments"), commentData);
       await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
-      const notifSnippet = commentData.text ? `"${commentData.text.slice(0, 60)}"` : commentData.mediaType ? "📷 sent a photo" : "🎙️ sent a voice note";
+      const notifSnippet = commentData.text ? `"${commentData.text.slice(0, 60)}"` : "📷 sent a photo";
       if (author?.uid && author.uid !== state.uid) {
         writeNotif(author.uid, "comment", { postId: p.id, text: `${state.me?.name || "Someone"} commented: ${notifSnippet}` }).catch(() => {});
         const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
@@ -2447,8 +2414,7 @@ const renderPostDetail = async (root, postId) => {
   // ── Detail comment: media + voice-note state ────────────────
   let _dCmtMediaFile = null;
   let _dCmtAudioBlob = null;
-  let _dCmtRecorder  = null;
-  let _dCmtRecording = false;
+
 
   const dCmtMediaInput = el("input", { type: "file", accept: "image/*,video/*" });
   dCmtMediaInput.style.display = "none";
@@ -2495,6 +2461,7 @@ const renderPostDetail = async (root, postId) => {
   });
   dCmtMediaBtn.addEventListener("click", (e) => { e.stopPropagation(); dCmtMediaInput.click(); });
 
+  let _dCmtRecorder = null, _dCmtRecording = false;
   const D_SVG_MIC  = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`;
   const D_SVG_STOP = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>`;
   const dCmtMicBtn = el("button", { type: "button", class: "icon-btn cmt-icon-btn", title: "Record voice note", html: D_SVG_MIC });
@@ -2558,7 +2525,7 @@ const renderPostDetail = async (root, postId) => {
     clearDCmtAttach(); sfxComment(); submitBtn.disabled = false;
     await addDoc(collection(db, "posts", p.id, "comments"), commentData);
     await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
-    const notifSnippet = commentData.text ? `"${commentData.text.slice(0, 60)}"` : commentData.mediaType ? "📷 sent a photo" : "🎙️ sent a voice note";
+    const notifSnippet = commentData.text ? `"${commentData.text.slice(0, 60)}"` : "📷 sent a photo";
     if (author?.uid && author.uid !== state.uid) {
       writeNotif(author.uid, "comment", { postId: p.id, text: `${state.me?.name || "Someone"} commented: ${notifSnippet}` }).catch(() => {});
       const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
@@ -3246,618 +3213,86 @@ $("#groupForm").addEventListener("submit", async (e) => {
 });
 
 // =========================================================================
-// 14c. CREATE-POST STUDIO — dedicated full-page flow for image/video posts:
-// pick or record media, add text/sticker overlays, attach a song, write a
-// caption, then publish. Replaces the old "Post" tab in the compose modal.
+// 14c. CREATE POST — simple sheet (upload from device, no in-app camera)
 // =========================================================================
-
-// Music search uses the Internet Archive's public catalog — no API key,
-// signup, or billing required (see crSearchMusic below).
-const CR_STICKERS = ["🔥","❤️","⭐","👍","🎉","😂","💯","✨","🙌","😍","👏","🥳","😎","💜","🎶","⚡"];
-const CR_TEXT_COLORS = ["#ffffff","#000000","#ff5c7a","#ffb04a","#3fdca0","#5cd3ff","#8b6cff","#ff5cae"];
-
-let crState = null;
-const _crFreshState = () => ({
-  step: "pick",           // pick | cam | editor | music | details
-  slides: [],             // [{ type:'image'|'video', file, url, overlays:[], recordedInApp? }]
-  textOnly: false,        // true when publishing a text-only post (no media)
-  song: null,             // { id, name, artist, url, duration }
-  caption: "",
-  location: null,
-  activeSlide: 0,
-  selectedLayerId: null,
-  camStream: null,
-  camRecorder: null,
-  camChunks: [],
-  camTimer: null,
-});
-
-// Music can only be attached to a single video that was recorded in-app —
-// never to images, carousels, or videos picked from the device library.
-// Keeps licensing/rights simple and matches how the feature was designed.
-const crCanAddMusic = () =>
-  crState.slides.length === 1 && crState.slides[0].type === "video" && crState.slides[0].recordedInApp === true;
-
-const crLayerId = () => "l" + Math.random().toString(36).slice(2, 9);
-
 function openCreatePost() {
-  if (crState) return; // already open
-  crState = _crFreshState();
-  const root = el("div", { class: "cr-root", id: "crRoot" });
-  document.body.appendChild(root);
-  crRenderShell(root);
-  crGoto("pick");
-}
+  if (document.getElementById("cr-simple-sheet")) return;
 
-function crClose() {
-  if (!crState) return;
-  crStopCamera();
-  crState.slides.forEach((s) => { try { URL.revokeObjectURL(s.url); } catch {} });
-  crState = null;
-  $("#crRoot")?.remove();
-}
+  const fileInput = el("input", { type: "file", accept: "image/*,video/*", multiple: "", style: "display:none;" });
+  let _files = [], _previews = [];
 
-let _crShellRefs = null;
-function crRenderShell(root) {
-  const closeBtn = el("button", { class: "cr-head-close", onclick: () => crClose() }, el("i", { class: "ri-close-line" }));
-  const backBtn = el("button", { class: "cr-head-close", style: "display:none;", onclick: () => crBack() }, el("i", { class: "ri-arrow-left-line" }));
-  const title = el("div", { class: "cr-head-title", text: "New post" });
-  const nextBtn = el("button", { class: "cr-head-btn primary", style: "display:none;" }, "Next");
-  const head = el("div", { class: "cr-head" }, el("div", { style: "display:flex;align-items:center;gap:8px;" }, backBtn, closeBtn), title, nextBtn);
-  const stepsWrap = el("div", { class: "cr-steps" });
-  root.appendChild(head);
-  root.appendChild(stepsWrap);
-  _crShellRefs = { head, backBtn, closeBtn, title, nextBtn, stepsWrap };
-}
+  const previewWrap = el("div", { style: "display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;min-height:0;" });
 
-function crBack() {
-  if (crState.step === "cam") { crStopCamera(); crGoto("pick"); return; }
-  const order = crState.textOnly
-    ? ["pick", "details"]
-    : (crCanAddMusic() ? ["pick", "editor", "music", "details"] : ["pick", "editor", "details"]);
-  const idx = order.indexOf(crState.step);
-  if (idx <= 0) { crClose(); return; }
-  crGoto(order[idx - 1]);
-}
-
-function crGoto(step) {
-  if (step === "music" && !crCanAddMusic()) step = "details"; // music is video-only + recorded-in-app only
-  crState.step = step;
-  const { stepsWrap, backBtn, nextBtn, title } = _crShellRefs;
-  stepsWrap.innerHTML = "";
-  backBtn.style.display = step === "pick" ? "none" : "";
-  nextBtn.style.display = "none";
-  if (step === "pick") { title.textContent = "New post"; stepsWrap.appendChild(crBuildPickStep()); }
-  else if (step === "cam") { title.textContent = "Record video"; stepsWrap.appendChild(crBuildCamStep()); }
-  else if (step === "editor") {
-    title.textContent = "Edit";
-    stepsWrap.appendChild(crBuildEditorStep());
-    nextBtn.style.display = ""; nextBtn.textContent = "Next"; nextBtn.onclick = () => crGoto(crCanAddMusic() ? "music" : "details");
-  } else if (step === "music") {
-    title.textContent = "Add music";
-    stepsWrap.appendChild(crBuildMusicStep());
-    nextBtn.style.display = ""; nextBtn.textContent = "Next"; nextBtn.onclick = () => crGoto("details");
-  } else if (step === "details") {
-    title.textContent = "Share";
-    stepsWrap.appendChild(crBuildDetailsStep());
-    nextBtn.style.display = ""; nextBtn.textContent = "Post"; nextBtn.onclick = () => crSubmitPost(nextBtn);
-  }
-}
-
-// ---------------- Step 1: pick media ----------------
-function crBuildPickStep() {
-  crState.textOnly = false;
-  const fileInput = el("input", { type: "file", accept: "image/*,video/*", multiple: true, hidden: true });
-  fileInput.addEventListener("change", (e) => {
-    const files = Array.from(e.target.files || []);
-    if (!files.length) return;
-    const hasVideo = files.some((f) => f.type.startsWith("video/"));
-    if (hasVideo) {
-      const f = files.find((f) => f.type.startsWith("video/"));
-      // recordedInApp:false — uploaded videos can't have music attached, only ones recorded with the in-app camera.
-      crState.slides = [{ type: "video", file: f, url: URL.createObjectURL(f), overlays: [], recordedInApp: false }];
-    } else {
-      crState.slides = files.slice(0, 10).map((f) => ({ type: "image", file: f, url: URL.createObjectURL(f), overlays: [] }));
-    }
-    crState.activeSlide = 0;
-    crGoto("editor");
-  });
-  const step = el("div", { class: "cr-step active" },
-    el("div", { class: "cr-pick" },
-      el("div", { class: "cr-pick-title" }, "Create a post"),
-      el("div", { class: "cr-pick-sub" }, "Photos, a video, a carousel, or just words."),
-      el("div", { class: "cr-pick-grid" },
-        el("button", { class: "cr-pick-opt", onclick: () => fileInput.click() },
-          el("i", { class: "ri-image-add-line" }), el("span", {}, "Photos / video")),
-        el("button", { class: "cr-pick-opt", onclick: () => crGoto("cam") },
-          el("i", { class: "ri-camera-line" }), el("span", {}, "Record video")),
-        el("button", { class: "cr-pick-opt", onclick: () => { crState.textOnly = true; crState.slides = []; crGoto("details"); } },
-          el("i", { class: "ri-text" }), el("span", {}, "Text post")),
-      ),
-      el("div", { class: "cr-pick-hint" }, "Pick multiple photos to make a swipeable carousel. Music can be added to videos you record in-app."),
-      fileInput,
-    ),
-  );
-  return step;
-}
-
-// ---------------- Camera recording ----------------
-function crStopCamera() {
-  if (crState?.camTimer) { clearInterval(crState.camTimer); crState.camTimer = null; }
-  if (crState?.camRecorder && crState.camRecorder.state !== "inactive") { try { crState.camRecorder.stop(); } catch {} }
-  if (crState?.camStream) { crState.camStream.getTracks().forEach((t) => t.stop()); crState.camStream = null; }
-}
-
-function crBuildCamStep() {
-  const video = el("video", { autoplay: true, muted: true, playsinline: true });
-  const timer = el("div", { class: "cr-cam-timer" }, el("span", { class: "dot" }), el("span", { class: "t" }, "0:00"));
-  const recBtn = el("button", { class: "cr-rec-btn" });
-  const cam = el("div", { class: "cr-cam" },
-    video, timer,
-    el("button", { class: "cr-cam-close", onclick: () => { crStopCamera(); crGoto("pick"); } }, el("i", { class: "ri-close-line" })),
-    el("div", { class: "cr-cam-bar" }, recBtn),
-  );
-  const step = el("div", { class: "cr-step active" }, cam);
-
-  navigator.mediaDevices?.getUserMedia({ video: { facingMode: "user" }, audio: true }).then((stream) => {
-    crState.camStream = stream;
-    video.srcObject = stream;
-  }).catch(() => { toast("Camera access denied or unavailable"); crGoto("pick"); });
-
-  let seconds = 0;
-  recBtn.addEventListener("click", () => {
-    if (!crState.camStream) return;
-    if (!crState.camRecorder || crState.camRecorder.state === "inactive") {
-      crState.camChunks = [];
-      const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus") ? "video/webm;codecs=vp9,opus" : "video/webm";
-      const rec = new MediaRecorder(crState.camStream, { mimeType: mime });
-      rec.ondataavailable = (ev) => { if (ev.data.size) crState.camChunks.push(ev.data); };
-      rec.onstop = () => {
-        const blob = new Blob(crState.camChunks, { type: "video/webm" });
-        const file = new File([blob], `orbit-recording-${Date.now()}.webm`, { type: "video/webm" });
-        crState.slides = [{ type: "video", file, url: URL.createObjectURL(file), overlays: [], recordedInApp: true }];
-        crState.activeSlide = 0;
-        crStopCamera();
-        crGoto("editor");
-      };
-      rec.start();
-      crState.camRecorder = rec;
-      recBtn.classList.add("recording");
-      seconds = 0; timer.classList.add("show");
-      crState.camTimer = setInterval(() => {
-        seconds++;
-        timer.querySelector(".t").textContent = `0:${String(seconds).padStart(2, "0")}`;
-        if (seconds >= 60) recBtn.click(); // 60s cap
-      }, 1000);
-    } else {
-      recBtn.classList.remove("recording");
-      timer.classList.remove("show");
-      if (crState.camTimer) { clearInterval(crState.camTimer); crState.camTimer = null; }
-      crState.camRecorder.stop();
-    }
-  });
-  return step;
-}
-
-// ---------------- Step 2: overlay editor ----------------
-function crFontPx(ov, stageWidth) { return stageWidth * ((ov.sizePct * ov.scale) / 100); }
-
-function crBuildEditorStep() {
-  const stage = el("div", { class: "cr-stage" });
-  const overlayLayer = el("div", { class: "cr-overlay-layer" });
-  const dotsNav = el("div", { class: "cr-slides-nav" });
-  const thumbstrip = el("div", { class: "cr-stage-thumbstrip" });
-  const layerControls = el("div", { class: "cr-layer-controls" });
-  const stickerPanel = el("div", { class: "cr-sticker-panel", style: "display:none;" });
-
-  const step = el("div", { class: "cr-step active" },
-    el("div", { class: "cr-editor" },
-      crState.slides.length > 1 ? dotsNav : null,
-      el("div", { class: "cr-stage-wrap" }, stage),
-      crState.slides.length > 1 || crState.slides[0]?.type === "image" ? thumbstrip : null,
-      stickerPanel,
-      layerControls,
-      el("div", { class: "cr-editor-toolbar" },
-        el("button", { class: "cr-tool-btn", onclick: () => crAddTextLayer(stage, overlayLayer) }, el("i", { class: "ri-text" }), "Text"),
-        el("button", { class: "cr-tool-btn", onclick: () => { stickerPanel.style.display = stickerPanel.style.display === "none" ? "flex" : "none"; } }, el("i", { class: "ri-emotion-happy-line" }), "Sticker"),
-        crState.slides[0]?.type === "image" ? el("button", { class: "cr-tool-btn", onclick: () => crAddMoreImages() }, el("i", { class: "ri-add-circle-line" }), "Add photo") : null,
-      ),
-    ),
-  );
-
-  CR_STICKERS.forEach((emo) => {
-    stickerPanel.appendChild(el("button", { class: "cr-sticker-opt", onclick: () => { crAddStickerLayer(stage, overlayLayer, emo); stickerPanel.style.display = "none"; } }, emo));
-  });
-
-  function paintDots() {
-    dotsNav.innerHTML = "";
-    crState.slides.forEach((_, i) => dotsNav.appendChild(el("div", { class: "cr-slide-dot" + (i === crState.activeSlide ? " active" : "") })));
-  }
-  function paintThumbs() {
-    thumbstrip.innerHTML = "";
-    crState.slides.forEach((s, i) => {
-      const t = s.type === "video"
-        ? el("video", { src: s.url, class: "cr-stage-thumb" + (i === crState.activeSlide ? " active" : ""), muted: true })
-        : el("img", { src: s.url, class: "cr-stage-thumb" + (i === crState.activeSlide ? " active" : "") });
-      t.addEventListener("click", () => { crState.activeSlide = i; crState.selectedLayerId = null; paintStage(); });
-      thumbstrip.appendChild(t);
+  fileInput.addEventListener("change", () => {
+    _files = Array.from(fileInput.files).slice(0, 10);
+    previewWrap.innerHTML = "";
+    _previews.forEach((u) => URL.revokeObjectURL(u));
+    _previews = _files.map((f) => URL.createObjectURL(f));
+    _previews.forEach((url, i) => {
+      const f = _files[i];
+      const thumb = f.type.startsWith("video/")
+        ? el("video", { src: url, muted: "", playsinline: "", style: "width:72px;height:72px;object-fit:cover;border-radius:10px;flex-shrink:0;" })
+        : el("img",   { src: url, style: "width:72px;height:72px;object-fit:cover;border-radius:10px;flex-shrink:0;" });
+      previewWrap.appendChild(thumb);
     });
-    if (crState.slides[0]?.type === "image" && crState.slides.length < 10) {
-      thumbstrip.appendChild(el("div", { class: "cr-stage-thumb-add", onclick: () => crAddMoreImages() }, el("i", { class: "ri-add-line" })));
-    }
-  }
-  function paintLayerControls() {
-    const slide = crState.slides[crState.activeSlide];
-    const ov = slide.overlays.find((o) => o.id === crState.selectedLayerId);
-    layerControls.innerHTML = "";
-    if (!ov) { layerControls.classList.remove("show"); return; }
-    layerControls.classList.add("show");
-    const sizeInput = el("input", { type: "range", min: "40", max: "260", value: String(Math.round(ov.scale * 100)) });
-    sizeInput.addEventListener("input", () => { ov.scale = Number(sizeInput.value) / 100; paintStage(); });
-    const rotInput = el("input", { type: "range", min: "-180", max: "180", value: String(ov.rotation) });
-    rotInput.addEventListener("input", () => { ov.rotation = Number(rotInput.value); paintStage(); });
-    layerControls.appendChild(el("label", {}, "Size", sizeInput));
-    layerControls.appendChild(el("label", {}, "Rotate", rotInput));
-    if (ov.type === "text") {
-      const colorInput = el("input", { type: "color", value: ov.color });
-      colorInput.addEventListener("input", () => { ov.color = colorInput.value; paintStage(); });
-      layerControls.appendChild(colorInput);
-    }
-    layerControls.appendChild(el("button", { class: "icon-btn", onclick: () => {
-      slide.overlays = slide.overlays.filter((o) => o.id !== ov.id);
-      crState.selectedLayerId = null;
-      paintStage();
-    } }, el("i", { class: "ri-delete-bin-line" })));
-  }
+  });
 
-  function paintStage() {
-    stage.innerHTML = "";
-    const slide = crState.slides[crState.activeSlide];
-    const media = slide.type === "video"
-      ? el("video", { src: slide.url, muted: true, loop: true, autoplay: true, playsinline: true })
-      : el("img", { src: slide.url });
-    stage.appendChild(media);
-    stage.appendChild(overlayLayer);
-    overlayLayer.innerHTML = "";
-    const rect = () => stage.getBoundingClientRect();
-    slide.overlays.forEach((ov) => {
-      // Note: the layer's scale is already baked into its px font-size below
-      // (via crFontPx), so the CSS transform only handles position + rotation.
-      const layer = el("div", {
-        class: `cr-layer ${ov.type}` + (ov.id === crState.selectedLayerId ? " selected" : ""),
-        style: `left:${ov.x}%;top:${ov.y}%;transform:translate(-50%,-50%) rotate(${ov.rotation}deg);` +
-          (ov.type === "text" ? `color:${ov.color};` : ""),
-      },
-        ov.type === "text" ? el("span", { text: ov.text, contenteditable: false }) : ov.icon,
-        el("button", { class: "cr-layer-del", onclick: (e) => { e.stopPropagation(); slide.overlays = slide.overlays.filter((o) => o.id !== ov.id); crState.selectedLayerId = null; paintStage(); } }, el("i", { class: "ri-close-line" })),
-      );
-      layer.style.fontSize = crFontPx(ov, rect().width || 320) + "px";
+  const caption  = el("textarea", { placeholder: `What's on your mind, ${(state.me?.name || "there").split(" ")[0]}?`, rows: "3",
+    style: "width:100%;resize:none;background:var(--bg-elev);border:1px solid var(--line);border-radius:var(--radius);padding:12px;font-size:14px;color:var(--text);font-family:inherit;box-sizing:border-box;" });
+  const mediaBtn = el("button", { class: "btn ghost", type: "button" }, el("i", { class: "ri-image-add-line" }), " Photo / Video");
+  const postBtn  = el("button", { class: "btn primary", type: "button" }, "Post");
+  const cancelBtn = el("button", { class: "btn ghost", type: "button" }, "Cancel");
+  mediaBtn.addEventListener("click", () => fileInput.click());
 
-      // Tap-to-edit: a tap (pointerdown+up with negligible movement) on a
-      // layer that was ALREADY selected enters edit mode immediately — this
-      // is far more reliable on touch than waiting for a true dblclick,
-      // which conflicts with the pointer-capture drag logic below. The
-      // first tap on an unselected layer just selects it (shows handles);
-      // the very next tap edits it. Desktop dblclick still works too.
-      let dragging = false, moved = false, sx = 0, sy = 0, ox = 0, oy = 0, wasSelectedBeforeTap = false;
-      layer.addEventListener("pointerdown", (e) => {
-        wasSelectedBeforeTap = crState.selectedLayerId === ov.id;
-        crState.selectedLayerId = ov.id;
-        paintLayerControls();
-        $(".cr-layer", overlayLayer).forEach((l) => l.classList.remove("selected"));
-        layer.classList.add("selected");
-        dragging = true; moved = false; sx = e.clientX; sy = e.clientY; ox = ov.x; oy = ov.y;
-        layer.setPointerCapture(e.pointerId);
-      });
-      layer.addEventListener("pointermove", (e) => {
-        if (!dragging) return;
-        const dx = e.clientX - sx, dy = e.clientY - sy;
-        if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
-        const r = rect();
-        ov.x = Math.min(96, Math.max(4, ox + (dx / r.width) * 100));
-        ov.y = Math.min(96, Math.max(4, oy + (dy / r.height) * 100));
-        layer.style.left = ov.x + "%"; layer.style.top = ov.y + "%";
-      });
-      layer.addEventListener("pointerup", () => {
-        dragging = false;
-        if (!moved && ov.type === "text" && wasSelectedBeforeTap) crEnterTextEdit(layer, ov);
-      });
-      if (ov.type === "text") {
-        layer.addEventListener("dblclick", () => crEnterTextEdit(layer, ov));
+  const inner = el("div", {
+    style: "background:var(--bg);border-radius:20px 20px 0 0;padding:20px 18px 32px;width:100%;max-width:520px;display:flex;flex-direction:column;gap:12px;",
+    onclick: (e) => e.stopPropagation(),
+  },
+    el("div", { style: "display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;" },
+      el("span", { style: "font-weight:700;font-size:16px;" }, "New Post"), cancelBtn),
+    fileInput, caption, previewWrap,
+    el("div", { style: "display:flex;gap:10px;align-items:center;" }, mediaBtn, el("span", { style: "flex:1;" }), postBtn),
+  );
+
+  const sheet = el("div", { id: "cr-simple-sheet",
+    style: "position:fixed;inset:0;z-index:200;display:flex;align-items:flex-end;justify-content:center;background:var(--overlay);" },
+    inner);
+
+  function close() { _previews.forEach((u) => URL.revokeObjectURL(u)); sheet.remove(); }
+  sheet.addEventListener("click", close);
+  cancelBtn.addEventListener("click", close);
+
+  postBtn.addEventListener("click", async () => {
+    const text = caption.value.trim();
+    if (!text && _files.length === 0) { toast("Add a caption or media first"); return; }
+    postBtn.disabled = true; postBtn.textContent = "Posting…";
+    try {
+      const mediaArr = [];
+      for (const f of _files) {
+        const fd = new FormData();
+        fd.append("file", f);
+        fd.append("upload_preset", CLOUDINARY_PRESET);
+        const res  = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/auto/upload`, { method: "POST", body: fd });
+        const json = await res.json();
+        if (!json.secure_url) throw new Error("Upload failed");
+        mediaArr.push({ type: f.type.startsWith("video/") ? "video" : "image", url: json.secure_url });
       }
-      overlayLayer.appendChild(layer);
-    });
-    paintDots(); paintThumbs(); paintLayerControls();
-  }
-
-  crAddMoreImages = () => {
-    const input = el("input", { type: "file", accept: "image/*", multiple: true, hidden: true });
-    input.addEventListener("change", (e) => {
-      const files = Array.from(e.target.files || []).slice(0, 10 - crState.slides.length);
-      files.forEach((f) => crState.slides.push({ type: "image", file: f, url: URL.createObjectURL(f), overlays: [] }));
-      paintStage();
-      input.remove();
-    });
-    document.body.appendChild(input);
-    input.click();
-  };
-
-  paintStage();
-  return step;
-}
-
-// Reassigned each time the editor step is built (needs access to that
-// step's local paintStage closure); declared once at module scope so the
-// toolbar/thumbstrip buttons above can reference it before it's built.
-let crAddMoreImages = () => {};
-
-function crEnterTextEdit(layer, ov) {
-  const span = layer.querySelector("span");
-  span.contentEditable = "true";
-  span.focus();
-  const sel = getSelection(); sel.selectAllChildren(span);
-  span.addEventListener("blur", () => { ov.text = span.textContent.trim() || "Tap to edit"; span.contentEditable = "false"; span.textContent = ov.text; }, { once: true });
-}
-
-function crAddTextLayer(stage) {
-  const slide = crState.slides[crState.activeSlide];
-  const ov = { id: crLayerId(), type: "text", text: "Tap to edit", x: 50, y: 50, rotation: 0, scale: 1, sizePct: 9, color: "#ffffff" };
-  slide.overlays.push(ov);
-  crState.selectedLayerId = ov.id;
-  crGoto("editor"); // re-render this step to pick up the new layer immediately
-}
-function crAddStickerLayer(stage, overlayLayer, emo) {
-  const slide = crState.slides[crState.activeSlide];
-  const ov = { id: crLayerId(), type: "sticker", icon: emo, x: 50, y: 50, rotation: 0, scale: 1, sizePct: 14 };
-  slide.overlays.push(ov);
-  crState.selectedLayerId = ov.id;
-  crGoto("editor");
-}
-
-// ---------------- Step 3: music ----------------
-let _crPreviewAudio = null;
-function crBuildMusicStep() {
-  const results = el("div", {});
-  const searchInput = el("input", { type: "text", placeholder: "Search songs, artists, moods…" });
-  const step = el("div", { class: "cr-step active" },
-    el("div", { class: "cr-music" },
-      el("div", {
-        class: "cr-music-none" + (!crState.song ? " active" : ""),
-        onclick: () => { crState.song = null; crStopPreview(); crBuildMusicStepPaint(results); },
-      }, el("i", { class: "ri-forbid-line" }), "No music"),
-      el("div", { class: "cr-music-search" }, el("i", { class: "ri-search-line" }), searchInput),
-      results,
-    ),
-  );
-  let t = null;
-  searchInput.addEventListener("input", () => {
-    clearTimeout(t);
-    t = setTimeout(() => crSearchMusic(searchInput.value.trim(), results), 350);
-  });
-  crSearchMusic("", results);
-  return step;
-}
-function crStopPreview() { if (_crPreviewAudio) { _crPreviewAudio.pause(); _crPreviewAudio = null; } }
-
-// Internet Archive's public catalog needs no API key/signup at all — its
-// search + metadata endpoints are open and CORS-enabled. We search the
-// "audio" mediatype for Creative-Commons-friendly netlabel/free-music
-// collections, then resolve a playable mp3 URL per result via /metadata.
-const ARCHIVE_AUDIO_COLLECTIONS = "(collection:netlabels OR collection:opensource_audio OR collection:free_music_archive)";
-async function crSearchMusic(qText, results) {
-  results.innerHTML = `<div class="cr-music-empty"><i class="ri-loader-4-line"></i> Loading…</div>`;
-  try {
-    const q = qText
-      ? `${ARCHIVE_AUDIO_COLLECTIONS} AND mediatype:audio AND (${qText})`
-      : `${ARCHIVE_AUDIO_COLLECTIONS} AND mediatype:audio`;
-    const searchUrl = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(q)}&fl[]=identifier&fl[]=title&fl[]=creator&rows=20&output=json`;
-    const r = await fetch(searchUrl);
-    const j = await r.json();
-    const docs = j.response?.docs || [];
-    results.innerHTML = "";
-    if (!docs.length) { results.appendChild(el("div", { class: "cr-music-empty" }, "No tracks found — try a different search")); return; }
-    docs.forEach((doc) => results.appendChild(crTrackRow(doc, results)));
-  } catch {
-    results.innerHTML = "";
-    results.appendChild(el("div", { class: "cr-music-empty" }, "Couldn't load music right now"));
-  }
-}
-// Each search result is an Archive.org "item" that can contain several
-// files; resolve the first playable mp3/ogg file lazily (only once the
-// user actually previews or picks the track, to avoid 20 metadata calls
-// per search).
-async function crResolveTrackUrl(identifier) {
-  const r = await fetch(`https://archive.org/metadata/${identifier}`);
-  const j = await r.json();
-  const file = (j.files || []).find((f) => /\.(mp3|ogg)$/i.test(f.name) && f.source === "derivative")
-    || (j.files || []).find((f) => /\.(mp3|ogg)$/i.test(f.name));
-  if (!file) return null;
-  return `https://archive.org/download/${identifier}/${encodeURIComponent(file.name)}`;
-}
-function crTrackRow(doc, results) {
-  const isActive = crState.song?.id === doc.identifier;
-  const title = doc.title || doc.identifier;
-  const creator = Array.isArray(doc.creator) ? doc.creator[0] : (doc.creator || "Unknown artist");
-  const playIcon = el("i", { class: "ri-play-fill" });
-  const playBtn = el("button", { class: "cr-track-play" }, playIcon);
-  const pickBtn = el("button", { class: "cr-track-pick" }, isActive ? "Selected" : "Use");
-  const row = el("div", { class: "cr-track" + (isActive ? " active" : "") },
-    el("div", { class: "cr-track-art" }, el("i", { class: "ri-music-2-fill" })),
-    el("div", { class: "cr-track-info" }, el("div", { class: "n" }, title), el("div", { class: "a" }, creator)),
-    playBtn,
-    pickBtn,
-  );
-  playBtn.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    if (_crPreviewAudio && _crPreviewAudio._identifier === doc.identifier && !_crPreviewAudio.paused) {
-      crStopPreview(); playIcon.className = "ri-play-fill"; return;
-    }
-    crStopPreview();
-    playIcon.className = "ri-loader-4-line";
-    const url = await crResolveTrackUrl(doc.identifier).catch(() => null);
-    if (!url) { playIcon.className = "ri-play-fill"; toast("Couldn't load that track"); return; }
-    _crPreviewAudio = new Audio(url);
-    _crPreviewAudio._identifier = doc.identifier;
-    _crPreviewAudio.play().catch(() => {});
-    playIcon.className = "ri-pause-fill";
-    _crPreviewAudio.addEventListener("ended", () => { playIcon.className = "ri-play-fill"; });
-  });
-  pickBtn.addEventListener("click", async () => {
-    pickBtn.textContent = "…";
-    const url = _crPreviewAudio?._identifier === doc.identifier ? _crPreviewAudio.src : await crResolveTrackUrl(doc.identifier).catch(() => null);
-    if (!url) { toast("Couldn't load that track"); pickBtn.textContent = "Use"; return; }
-    crState.song = { id: doc.identifier, name: title, artist: creator, url };
-    crStopPreview();
-    crBuildMusicStepPaint(results);
-  });
-  return row;
-}
-function crBuildMusicStepPaint(results) {
-  crSearchMusic("", results);
-}
-
-// ---------------- Step 4: details + publish ----------------
-function crBuildDetailsStep() {
-  const thumbSlide = crState.slides[0];
-  const caption = el("textarea", { placeholder: crState.textOnly ? "What's on your mind?" : "Write a caption… use #hashtags and @mentions" });
-  caption.value = crState.caption;
-  caption.addEventListener("input", () => { crState.caption = caption.value; });
-
-  const locRow = el("div", { class: "cr-details-row" },
-    el("div", { class: "l" }, el("i", { class: "ri-map-pin-line" }), "Tag location"),
-    el("div", { class: "v" }, crState.location?.city || "Not tagged"),
-  );
-  locRow.addEventListener("click", () => {
-    if (!("geolocation" in navigator)) { toast("Location not available"); return; }
-    locRow.querySelector(".v").textContent = "Locating…";
-    navigator.geolocation.getCurrentPosition(async (pos) => {
-      const { latitude: lat, longitude: lng } = pos.coords; let city = null;
-      try {
-        const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=10`);
-        const j = await r.json();
-        city = j.address?.city || j.address?.town || j.address?.state || (j.display_name || "").split(",")[0] || null;
-      } catch {}
-      crState.location = { lat: Math.round(lat * 100) / 100, lng: Math.round(lng * 100) / 100, city };
-      locRow.querySelector(".v").textContent = city || "My location";
-    }, () => { toast("Location access denied"); locRow.querySelector(".v").textContent = crState.location?.city || "Not tagged"; }, { timeout: 8000 });
-  });
-
-  const musicRow = crCanAddMusic() ? el("div", { class: "cr-details-row" },
-    el("div", { class: "l" }, el("i", { class: "ri-music-2-line" }), "Music"),
-    el("div", { class: "v" }, crState.song ? `${crState.song.name} — ${crState.song.artist}` : "None"),
-  ) : null;
-  musicRow?.addEventListener("click", () => crGoto("music"));
-
-  return el("div", { class: "cr-step active" },
-    el("div", { class: "cr-details" },
-      crState.textOnly ? null : el("div", { class: "cr-details-preview" },
-        thumbSlide.type === "video"
-          ? el("video", { src: thumbSlide.url, class: "cr-details-thumb", muted: true })
-          : el("img", { src: thumbSlide.url, class: "cr-details-thumb" }),
-        el("div", { style: "flex:1;color:var(--text-mute);font-size:13px;" },
-          crState.slides.length > 1 ? `${crState.slides.length} photos in this post` : (thumbSlide.type === "video" ? "1 video" : "1 photo")),
-      ),
-      caption,
-      locRow,
-      musicRow,
-    ),
-  );
-}
-
-// Bake all overlays for an image slide into a single flattened image file
-// (video overlays are NOT baked — they're stored as metadata and rendered
-// live over the <video> element during playback; see wireFeedOverlays).
-function crFlattenImageSlide(slide) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(img, 0, 0);
-      slide.overlays.forEach((ov) => {
-        ctx.save();
-        const px = (ov.x / 100) * canvas.width, py = (ov.y / 100) * canvas.height;
-        ctx.translate(px, py);
-        ctx.rotate((ov.rotation * Math.PI) / 180);
-        const fontPx = crFontPx(ov, canvas.width);
-        if (ov.type === "text") {
-          ctx.font = `800 ${fontPx}px "Plus Jakarta Sans", sans-serif`;
-          ctx.fillStyle = ov.color; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-          ctx.shadowColor = "rgba(0,0,0,.5)"; ctx.shadowBlur = fontPx * 0.15;
-          ctx.fillText(ov.text, 0, 0);
-        } else {
-          ctx.font = `${fontPx}px sans-serif`;
-          ctx.textAlign = "center"; ctx.textBaseline = "middle";
-          ctx.fillText(ov.icon, 0, 0);
-        }
-        ctx.restore();
+      await addDoc(collection(db, "posts"), {
+        uid: state.uid, author: state.me?.name || "Unknown", avatar: state.me?.photoURL || "",
+        text, media: mediaArr, likes: [], comments: 0, shares: 0, saves: [], ts: Date.now(),
       });
-      canvas.toBlob((blob) => resolve(new File([blob], slide.file.name.replace(/\.\w+$/, "") + "-edited.png", { type: "image/png" })), "image/png", 0.95);
-    };
-    img.onerror = reject;
-    img.src = slide.url;
-  });
-}
-
-async function crSubmitPost(btn) {
-  if (!crState.textOnly && !crState.slides.length) { toast("Pick a photo or video first"); return; }
-  if (crState.textOnly && !crState.caption.trim()) { toast("Write something first"); return; }
-  btn.disabled = true; btn.textContent = "Posting…";
-  try {
-    let media;
-    if (!crState.textOnly) {
-      toast("Uploading…");
-      if (crState.slides[0].type === "video") {
-        const slide = crState.slides[0];
-        const uploaded = await uploadToCloudinary(slide.file, "video");
-        if (slide.overlays.length) uploaded.overlays = slide.overlays;
-        media = uploaded;
-      } else if (crState.slides.length === 1) {
-        const flat = await crFlattenImageSlide(crState.slides[0]);
-        media = await uploadToCloudinary(flat, "image");
-      } else {
-        const flats = await Promise.all(crState.slides.map(crFlattenImageSlide));
-        media = await Promise.all(flats.map((f) => uploadToCloudinary(f, "image")));
-      }
+      toast("Posted! 🎉");
+      close();
+    } catch (err) {
+      toast("Failed to post: " + (err.message || "unknown error"));
+      postBtn.disabled = false; postBtn.textContent = "Post";
     }
-    const text = crState.caption.trim();
-    const hashtags = extractHashtags(text);
-    const postData = {
-      authorUid: state.uid, text, hashtags,
-      orbits: [], orbitCount: 0, commentCount: 0, createdAt: serverTimestamp(),
-    };
-    if (media) postData.media = media;
-    if (crState.location) postData.location = crState.location;
-    if (crState.song) postData.song = crState.song;
-    const newPostRef = await addDoc(collection(db, "posts"), postData);
-    sfxPost();
-    toast("Posted!");
-    crClose();
-    addDoc(collection(db, "notifications", state.uid, "items"), {
-      type: "postConfirm", postId: newPostRef.id, text: "Your post is live!", read: false, createdAt: serverTimestamp(),
-    }).catch(() => {});
-    (async () => {
-      let followers = state.me?.followers || [];
-      try {
-        const freshSnap = await getDoc(doc(db, "users", state.uid));
-        if (freshSnap.exists()) followers = freshSnap.data().followers || followers;
-      } catch {}
-      followers = followers.slice(0, 200);
-      if (!followers.length) return;
-      const preview = (text || "shared new media").slice(0, 60);
-      const postThumb = Array.isArray(media) ? media[0]?.url : media?.url;
-      const { notifyUser } = await import("./notifications.js");
-      followers.forEach((uid) => {
-        writeNotif(uid, "newPost", { postId: newPostRef.id, text: `${state.me?.name || "Someone"} posted: "${preview}"` }).catch(() => {});
-        notifyUser(uid, state.me?.name || "Someone", `New post: ${preview}`, "/#post/" + newPostRef.id, state.me?.photoURL || "", postThumb || "").catch(() => {});
-      });
-    })().catch(() => {});
-  } catch (err) {
-    toast("Failed to post: " + (err.message || "unknown error"));
-    btn.disabled = false; btn.textContent = "Post";
-  }
+  });
+
+  document.body.appendChild(sheet);
+  requestAnimationFrame(() => caption.focus());
 }
+// ─────────────────────────────────────────────────────────────────────────────
 
 // =========================================================================
 // 14b. INLINE FEED SUGGESTION CARDS (People / Groups / Spaces)
