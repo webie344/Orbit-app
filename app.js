@@ -155,29 +155,44 @@ function _renderFeedOverlays(wrap, overlays) {
 }
 
 // Attaches an attached song to a post: plays/pauses in sync with visibility
-// (image/carousel posts) or with the video's own play state (video posts),
-// starting muted like Facebook/TikTok — tap the speaker to hear it.
+// (image/carousel posts) or with the video's own play state (video posts).
+// Plays automatically at a low background volume — no floating controls on
+// the media itself (the video's own volume button already covers the
+// clip's own audio; the song is a separate, quiet background layer). A
+// small "now playing" badge is rendered in the post header instead — see
+// _songHeaderBadge, used by renderPost.
+//
+// Note: browsers block unmuted autoplay until the user has interacted with
+// the page at least once (tap/click/scroll anywhere counts) — same
+// limitation TikTok/Instagram have. After that first interaction the song
+// plays automatically as posts scroll into view.
+const SONG_BG_VOLUME = 0.25;
 function _wireSongPlayback(wrap, song, videoEl) {
   if (!song?.url) return;
   const audio = new Audio(song.url);
-  audio.loop = true; audio.muted = true; audio.preload = "none";
-  const soundBtn = el("button", { class: "post-sound-toggle" }, el("i", { class: "ri-volume-mute-line" }));
-  const songBar = el("div", { class: "post-song-bar" }, el("i", { class: "ri-music-2-fill" }),
-    el("span", {}, el("span", { class: "marquee" }, `${song.name} — ${song.artist}`)));
-  wrap.appendChild(songBar);
-  wrap.appendChild(soundBtn);
-  soundBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    audio.muted = !audio.muted;
-    if (videoEl) videoEl.muted = true; // song replaces the clip's own audio
-    soundBtn.querySelector("i").className = audio.muted ? "ri-volume-mute-line" : "ri-volume-up-line";
-    if (!audio.muted) audio.play().catch(() => {});
-  });
+  audio.loop = true; audio.muted = false; audio.volume = SONG_BG_VOLUME; audio.preload = "none";
   if (videoEl) {
     videoEl.muted = true; // song is the only audio source for posts with music
-    videoEl.addEventListener("play", () => { audio.currentTime = videoEl.currentTime % (audio.duration || 1e9); audio.play().catch(() => {}); });
+    const DRIFT_TOLERANCE = 0.25; // seconds — resync once audio/video clocks drift past this
+    const syncTime = () => { audio.currentTime = videoEl.currentTime % (audio.duration || 1e9); };
+    // "play"/"pause" alone aren't enough: while the video stalls to buffer it
+    // fires "waiting" (not "pause"), so the song kept advancing silently
+    // ahead of the picture during any rebuffer. Pausing on "waiting" and
+    // resyncing+resuming on "playing" keeps the song locked to what's
+    // actually on screen, not just to whether playback was ever paused.
+    videoEl.addEventListener("play", () => { syncTime(); audio.play().catch(() => {}); });
+    videoEl.addEventListener("playing", () => { syncTime(); audio.play().catch(() => {}); });
+    videoEl.addEventListener("waiting", () => audio.pause());
     videoEl.addEventListener("pause", () => audio.pause());
-    videoEl.addEventListener("seeked", () => { audio.currentTime = videoEl.currentTime % (audio.duration || 1e9); });
+    videoEl.addEventListener("seeking", () => audio.pause());
+    videoEl.addEventListener("seeked", () => { syncTime(); if (!videoEl.paused) audio.play().catch(() => {}); });
+    // Independent clocks drift apart over long continuous playback even
+    // without any stall — nudge back in sync whenever it exceeds tolerance.
+    videoEl.addEventListener("timeupdate", () => {
+      if (videoEl.paused || videoEl.seeking || !audio.duration) return;
+      const drift = Math.abs(audio.currentTime - videoEl.currentTime);
+      if (drift > DRIFT_TOLERANCE) syncTime();
+    });
   } else {
     const io = new IntersectionObserver((entries) => {
       if (!document.body.contains(wrap)) { audio.pause(); io.disconnect(); return; }
@@ -187,11 +202,25 @@ function _wireSongPlayback(wrap, song, videoEl) {
   }
 }
 
+// Small "now playing" pill for the post header — icon + truncated song
+// info, no controls. Rendered next to the follow/more button by renderPost.
+function _songHeaderBadge(song) {
+  if (!song?.name) return null;
+  return el("div", {
+    class: "post-song-badge",
+    title: `${song.name} — ${song.artist}`,
+    style: "display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--text-mute);max-width:120px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;margin-right:6px;flex-shrink:0;",
+  },
+    el("i", { class: "ri-music-2-fill" }),
+    el("span", { style: "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" }, `${song.name} — ${song.artist}`),
+  );
+}
+
 const buildVideoPlayer = (url, opts = {}) => {
   const { song, overlays } = opts;
   const poster = _cloudPoster(url);
   // muted enables browser auto-play-on-scroll; user can unmute via the button
-  const video = el("video", { src: url, poster, preload: "metadata", playsinline: "", muted: "", style: "width:100%;display:block;" });
+  const video = el("video", { src: url, poster, preload: "none", playsinline: "", muted: "", style: "width:100%;display:block;" });
   const playIcon  = el("i", { class: "ri-play-fill" });
   const overlay   = el("div", { class: "vp-overlay" }, el("button", { class: "vp-big-play" }, playIcon));
   const playSmI   = el("i", { class: "ri-play-fill" });
@@ -205,7 +234,7 @@ const buildVideoPlayer = (url, opts = {}) => {
   const fullBtn   = el("button", { class: "vp-btn" }, el("i", { class: "ri-fullscreen-line" }));
   const bar       = el("div", { class: "vp-bar" }, playSmBtn, seek, timeEl, muteBtn, fullBtn);
   // inline style overrides chat.css max-width:320px for post-context players
-  const wrap      = el("div", { class: "vid-player", style: "width:100%;max-width:none;" }, video, overlay, bar);
+  const wrap      = el("div", { class: "vid-player", style: "width:100%;max-width:none;overflow:hidden;border-radius:14px;" }, video, overlay, bar);
 
   // ── Controls auto-hide ────────────────────────────────────────────────────
   // Shows bar on any interaction; hides 4 s later while playing.
@@ -270,16 +299,100 @@ const buildVideoPlayer = (url, opts = {}) => {
 
   // ── Play on scroll into view / pause on scroll out ────────────────────────
   // Uses IntersectionObserver: starts playing when ≥50% visible, pauses when less.
-  const _io = new IntersectionObserver((entries) => {
-    if (entries[0].isIntersecting) {
-      video.play().catch(() => {});
+  //
+  // The actual mechanism, confirmed by the report that it's specifically
+  // "frame freezes right as it starts, audio is already moving, and by the
+  // end audio has finished while the picture hasn't caught up": that is the
+  // signature of resuming video decode from a MID-STREAM position rather
+  // than the start of the file. Video frames are only fully decodable from
+  // a keyframe forward — most encoders only place a keyframe every ~1-2s
+  // (a "GOP"). When you pause a video partway through and later call
+  // .play() again from that same currentTime, the audio track can resume
+  // instantly (any sample is playable on its own), but the video decoder
+  // has to rewind to the last keyframe *before* that point and decode
+  // forward through every frame in between before it can show anything —
+  // on a phone-grade CPU that takes long enough that audio visibly gets
+  // ahead, and if the decoder never fully catches up you keep watching
+  // "old" frames for the rest of the clip while the audio plays at the
+  // correct real-time pace.
+  //
+  // The fix isn't to buffer more or nudge the playback rate after the
+  // fact — it's to never resume from a mid-file position at all. Every
+  // time a video leaves the viewport we now pause it AND rewind it to 0,
+  // so the next time it's played it always restarts from the file's very
+  // first frame — which is always a keyframe — instead of reviving decode
+  // from some arbitrary point deep in the last GOP.
+  const HAVE_FUTURE_DATA = 3;
+  let _pendingPlay = null, _wantPlaying = false, _ioDebounce = null, _readyListener = null;
+  const _startPlayback = () => {
+    _pendingPlay = video.play().catch(() => {}).finally(() => { _pendingPlay = null; if (!_wantPlaying) { video.pause(); video.currentTime = 0; } });
+  };
+  const _applyIntent = () => {
+    if (_wantPlaying) {
+      if (!video.paused || _pendingPlay || _readyListener) return;
+      if (video.readyState >= HAVE_FUTURE_DATA) {
+        _startPlayback();
+      } else {
+        // With preload="none" the browser hasn't fetched anything yet.
+        // Call video.load() first — this kicks off a simultaneous audio+video
+        // fetch from byte 0, so both codecs start together and stay in sync.
+        // Without this the audio codec (lighter work) can finish buffering and
+        // start playing while the video decoder is still seeking to the first
+        // keyframe, producing the "sound plays, frozen frame" symptom.
+        if (video.networkState === 0 /* NETWORK_EMPTY */ || video.networkState === 3 /* NETWORK_NO_SOURCE */) {
+          video.load(); // initialise the media engine from scratch
+        } else if (video.currentTime !== 0) {
+          video.currentTime = 0; // ensure we start at a keyframe boundary
+        }
+        _readyListener = () => {
+          video.removeEventListener("canplay", _readyListener);
+          _readyListener = null;
+          if (_wantPlaying) _startPlayback();
+        };
+        video.addEventListener("canplay", _readyListener);
+      }
     } else {
-      video.pause();
+      if (_readyListener) { video.removeEventListener("canplay", _readyListener); _readyListener = null; }
+      if (!_pendingPlay) {
+        video.pause();
+        video.currentTime = 0;
+        // With preload="none", unloading after scrolling away lets the browser
+        // free the decode buffer entirely — next play() always starts cold from
+        // frame 0 so audio/video are guaranteed to begin decoding together.
+        video.load();
+      }
     }
-  }, { threshold: 0.5 });
+  };
+  const _io = new IntersectionObserver((entries) => {
+    _wantPlaying = entries[0].isIntersecting;
+    clearTimeout(_ioDebounce);
+    _ioDebounce = setTimeout(_applyIntent, 200);
+  }, { threshold: 0.6 });
   _io.observe(wrap);
+
+  // Mid-playback drift correction: even starting clean from 0, a slow
+  // device can still fall behind mid-clip if it briefly can't decode as
+  // fast as real time. Compare the timestamp of the frame actually on
+  // screen against the audio/playback clock, and slow down briefly to let
+  // rendering catch back up if it falls behind (not supported on Safari/
+  // iOS — no requestVideoFrameCallback there — but the reset-to-0 fix
+  // above is the primary one and works everywhere).
+  if (typeof video.requestVideoFrameCallback === "function") {
+    const DRIFT_START = 0.12, DRIFT_CLEAR = 0.03, CATCHUP_RATE = 0.75;
+    let correcting = false, rvfcActive = false;
+    const frameTick = (_now, metadata) => {
+      if (video.paused || video.ended) { rvfcActive = false; return; }
+      const drift = video.currentTime - (metadata.mediaTime ?? video.currentTime);
+      if (!correcting && drift > DRIFT_START) { correcting = true; video.playbackRate = CATCHUP_RATE; }
+      else if (correcting && drift < DRIFT_CLEAR) { correcting = false; video.playbackRate = 1; }
+      video.requestVideoFrameCallback(frameTick);
+    };
+    video.addEventListener("play", () => { if (!rvfcActive) { rvfcActive = true; video.requestVideoFrameCallback(frameTick); } });
+    video.addEventListener("pause", () => { correcting = false; video.playbackRate = 1; });
+  }
+
   // Clean up observer if the player is ever removed from DOM
-  video.addEventListener("emptied", () => _io.disconnect(), { once: true });
+  video.addEventListener("emptied", () => { _io.disconnect(); if (_readyListener) video.removeEventListener("canplay", _readyListener); }, { once: true });
 
   if (overlays) _renderFeedOverlays(wrap, overlays);
   if (song) _wireSongPlayback(wrap, song, video);
@@ -709,6 +822,68 @@ const toggleTheme = () =>
   applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark");
 
 // =========================================================================
+// ORBIT LOADER — branded spinner shown during async auth operations
+// =========================================================================
+const _injectOrbitLoaderStyles = (() => {
+  let done = false;
+  return () => {
+    if (done) return; done = true;
+    const s = document.createElement("style");
+    s.textContent = `
+      .orbit-loader-overlay {
+        position: fixed; inset: 0; z-index: 9999;
+        background: var(--bg, #0e0e1a);
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+        gap: 20px;
+        animation: orbitLoaderFadeIn .18s ease;
+      }
+      @keyframes orbitLoaderFadeIn { from { opacity: 0; } to { opacity: 1; } }
+      .orbit-loader-ring {
+        width: 56px; height: 56px;
+        border-radius: 50%;
+        border: 3px solid transparent;
+        border-top-color: #6c63ff;
+        border-right-color: #ff6b9d;
+        animation: orbitSpin .85s linear infinite;
+        position: relative;
+      }
+      .orbit-loader-ring::before {
+        content: '';
+        position: absolute; inset: 5px;
+        border-radius: 50%;
+        border: 2px solid transparent;
+        border-top-color: rgba(108,99,255,.35);
+        border-right-color: rgba(255,107,157,.35);
+        animation: orbitSpin 1.4s linear infinite reverse;
+      }
+      @keyframes orbitSpin { to { transform: rotate(360deg); } }
+      .orbit-loader-text {
+        font-size: 13px; font-weight: 600; letter-spacing: .5px;
+        background: linear-gradient(90deg, #6c63ff, #ff6b9d);
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        background-clip: text;
+      }
+    `;
+    document.head.appendChild(s);
+  };
+})();
+
+let _orbitLoaderEl = null;
+const showOrbitLoader = (label = "Signing in…") => {
+  _injectOrbitLoaderStyles();
+  if (_orbitLoaderEl) return;
+  _orbitLoaderEl = el("div", { class: "orbit-loader-overlay" },
+    el("div", { class: "orbit-loader-ring" }),
+    el("div", { class: "orbit-loader-text" }, label),
+  );
+  document.body.appendChild(_orbitLoaderEl);
+};
+const hideOrbitLoader = () => {
+  if (_orbitLoaderEl) { _orbitLoaderEl.remove(); _orbitLoaderEl = null; }
+};
+
+// =========================================================================
 // 6. AUTH FLOW
 // =========================================================================
 const showOnboarding = () => {
@@ -758,8 +933,8 @@ const finishOnboarding = () => {
   showAuth();
 };
 
-const showAuth = () => { $("#auth").classList.remove("hidden"); $("#app").classList.add("hidden"); $("#boot").classList.add("hidden"); $("#onboarding").classList.add("hidden"); };
-const showApp  = () => { $("#auth").classList.add("hidden"); $("#app").classList.remove("hidden"); $("#boot").classList.add("hidden"); };
+const showAuth = () => { hideOrbitLoader(); $("#auth").classList.remove("hidden"); $("#app").classList.add("hidden"); $("#boot").classList.add("hidden"); $("#onboarding").classList.add("hidden"); };
+const showApp  = () => { hideOrbitLoader(); $("#auth").classList.add("hidden"); $("#app").classList.remove("hidden"); $("#boot").classList.add("hidden"); };
 
 const ensureUserDoc = async (user, extras = {}) => {
   const ref = doc(db, "users", user.uid);
@@ -869,25 +1044,32 @@ document.getElementById("onboardGetStarted")?.addEventListener("click", () => {
 $("#signinForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
+  showOrbitLoader("Signing in…");
   try {
     await signInWithEmailAndPassword(auth, fd.get("email"), fd.get("password"));
-  } catch (err) { toast(err.message.replace("Firebase: ", "")); }
+    // loader dismissed by showApp() → hideOrbitLoader() is called there
+  } catch (err) {
+    hideOrbitLoader();
+    toast(err.message.replace("Firebase: ", ""));
+  }
 });
 
 $("#signupForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
   const name = fd.get("name"), username = fd.get("username");
+  showOrbitLoader("Creating your account…");
   try {
     const cred = await createUserWithEmailAndPassword(auth, fd.get("email"), fd.get("password"));
     await updateProfile(cred.user, { displayName: name });
     await ensureUserDoc(cred.user, { name, username });
-  } catch (err) { toast(err.message.replace("Firebase: ", "")); }
+  } catch (err) { hideOrbitLoader(); toast(err.message.replace("Firebase: ", "")); }
 });
 
 $("#googleBtn").addEventListener("click", async () => {
+  showOrbitLoader("Connecting with Google…");
   try { await signInWithPopup(auth, new GoogleAuthProvider()); }
-  catch (err) { toast(err.message.replace("Firebase: ", "")); }
+  catch (err) { hideOrbitLoader(); toast(err.message.replace("Firebase: ", "")); }
 });
 
 $("#signOutBtn").addEventListener("click", async () => {
@@ -1058,6 +1240,23 @@ const router = () => {
   }
 };
 window.addEventListener("hashchange", router);
+
+// ── Bottom nav auto-hide on scroll-down, show on scroll-up (Twitter style) ──
+const _initBottomNavScroll = () => {
+  const _bn = document.querySelector(".bottomnav");
+  const _ct = document.getElementById("content");
+  if (!_bn || !_ct) return;
+  let _lastScrollY = 0;
+  _ct.addEventListener("scroll", () => {
+    const y  = _ct.scrollTop;
+    const dy = y - _lastScrollY;
+    if (Math.abs(dy) < 5) return;
+    if (dy > 0 && y > 80) _bn.classList.add("bn-hidden");
+    else                   _bn.classList.remove("bn-hidden");
+    _lastScrollY = y;
+  }, { passive: true });
+};
+setTimeout(_initBottomNavScroll, 700);
 $$(".nav-item, .bn, .brand").forEach((b) => {
   if (!b.dataset.route) return;
   b.addEventListener("click", () => { location.hash = "#" + b.dataset.route; });
@@ -1253,15 +1452,6 @@ const renderFeed = (root) => {
     });
   });
 
-  // Trending lane container (filled later)
-  const trendingLane = el("div", { class: "trending-lane hidden" });
-  trendingLane.appendChild(el("div", { class: "trending-head" },
-    el("i", { class: "ri-fire-fill" }), "Trending in your orbit"
-  ));
-  const trendingScroller = el("div", { class: "trending-scroller" });
-  trendingLane.appendChild(trendingScroller);
-  feedMainContent.appendChild(trendingLane);
-
   // Posts container
   const list = el("div", { class: "feed-list" });
   list.appendChild(el("div", { class: "empty" },
@@ -1278,7 +1468,6 @@ const renderFeed = (root) => {
     if (_newIds === _lastPostIds && list.children.length > 0) return;
     _lastPostIds = _newIds;
     list.innerHTML = "";
-    trendingScroller.innerHTML = "";
     if (snap.empty) {
       list.appendChild(el("div", { class: "empty" },
         el("i", { class: "ri-planet-line" }),
@@ -1292,16 +1481,6 @@ const renderFeed = (root) => {
     // resolve authors
     const authors = await Promise.all([...new Set(posts.map((p) => p.authorUid))].map(fetchUser));
     const byUid = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
-
-    // Trending = top 5 by orbitCount with at least 3 orbits
-    const trending = [...posts].filter((p) => (p.orbitCount || 0) >= 3)
-      .sort((a, b) => (b.orbitCount || 0) - (a.orbitCount || 0)).slice(0, 5);
-    if (trending.length) {
-      trendingLane.classList.remove("hidden");
-      trending.forEach((p) => trendingScroller.appendChild(renderTrendingCard(p, byUid[p.authorUid])));
-    } else {
-      trendingLane.classList.add("hidden");
-    }
 
     // Algorithm: score posts by affinity (following > hashtag match > engagement > recency)
     // A random component (+0–15) shuffles the feed differently on each fresh load
@@ -1320,7 +1499,7 @@ const renderFeed = (root) => {
     const _suggTypes = ["people", "groups", "spaces"];
     let _suggShown = 0;
     _scored.forEach(({ p }, idx) => {
-      list.appendChild(renderPost(p, byUid[p.authorUid]));
+      list.appendChild(renderPost(p, byUid[p.authorUid], { hideComments: true }));
       // Suggestion card at post 4, then every 7 after that
       if (idx === 4 || (idx > 4 && (idx - 4) % 7 === 0)) {
         const type = _suggTypes[_suggShown % 3];
@@ -1412,12 +1591,12 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
       if (m.type === "video") {
         sawVideo = true;
         const player = buildVideoPlayer(m.url, { song, overlays: m.overlays });
-        player.style.borderRadius = "0";
+        player.style.borderRadius = "14px";
         stack.appendChild(player);
       } else {
         const img = el("img", {
           src: m.url, loading: "lazy",
-          style: "width:100%;display:block;max-height:85vh;object-fit:contain;background:#000;cursor:zoom-in;",
+          style: "width:100%;display:block;max-height:520px;object-fit:cover;cursor:zoom-in;border-radius:0;",
         });
         img.addEventListener("click", () => openImageZoom(m.url));
         stack.appendChild(img);
@@ -1433,14 +1612,15 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
     if (m.type === "video") {
       // Full-width, no side border-radius so it stretches edge-to-edge
       const player = buildVideoPlayer(m.url, { song, overlays: m.overlays });
-      player.style.borderRadius = "0";
-      const wrap = el("div", { class: "post-media", style: "border-radius:0;overflow:hidden;" });
+      player.style.borderRadius = "14px";
+      const wrap = el("div", { class: "post-media", style: "border-radius:14px;overflow:hidden;margin:8px 0;" });
       wrap.appendChild(player);
       return wrap;
     }
-    const singleImg = el("img", { src: m.url, loading: "lazy", style: detailView ? "cursor:zoom-in;" : "" });
+    const _imgStyle = "width:100%;display:block;max-height:520px;object-fit:cover;" + (detailView ? "cursor:zoom-in;" : "");
+    const singleImg = el("img", { src: m.url, loading: "lazy", style: _imgStyle });
     if (detailView) singleImg.addEventListener("click", () => openImageZoom(m.url));
-    const wrap = el("div", { class: "post-media", style: "position:relative;" }, singleImg);
+    const wrap = el("div", { class: "post-media", style: "border-radius:14px;overflow:hidden;margin:8px 0;" }, singleImg);
     if (song) _wireStandaloneSong(wrap);
     return wrap;
   }
@@ -1449,7 +1629,7 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
   if (items.length === 2) {
     const grid = el("div", {
       class: "post-media",
-      style: "display:grid;grid-template-columns:1fr 1fr;gap:2px;border-radius:12px;overflow:hidden;height:280px;position:relative;",
+      style: "display:grid;grid-template-columns:1fr 1fr;gap:3px;border-radius:14px;overflow:hidden;height:260px;margin:8px 0;position:relative;",
     });
     items.forEach((m, i) => grid.appendChild(_makeGridCell(m, false, items, i, postId)));
     if (song) _wireStandaloneSong(grid);
@@ -1460,7 +1640,7 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
   if (items.length === 3) {
     const grid = el("div", {
       class: "post-media",
-      style: "display:grid;grid-template-columns:2fr 1fr;grid-template-rows:140px 140px;gap:2px;border-radius:12px;overflow:hidden;position:relative;",
+      style: "display:grid;grid-template-columns:2fr 1fr;grid-template-rows:130px 130px;gap:3px;border-radius:14px;overflow:hidden;margin:8px 0;position:relative;",
     });
     items.forEach((m, i) => grid.appendChild(_makeGridCell(m, i === 0, items, i, postId)));
     if (song) _wireStandaloneSong(grid);
@@ -1499,7 +1679,7 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
     cur = (n + items.length) % items.length;
     slides[cur].style.display = ""; dots[cur].classList.add("active");
   };
-  const wrap = el("div", { class: "post-media carousel", style: "position:relative;" }, ...slides, dotsWrap);
+  const wrap = el("div", { class: "post-media carousel", style: "border-radius:14px;overflow:hidden;margin:8px 0;position:relative;" }, ...slides, dotsWrap);
   if (song) _wireStandaloneSong(wrap);
 
   // Touch swipe support
@@ -1563,6 +1743,7 @@ const renderPost = (p, author, opts = {}) => {
         fmtTime(p.createdAt),
       )
     ),
+    _songHeaderBadge(p.song),
     !isMine ? (() => {
       let _isFollowing = (state.me?.following || []).includes(author?.uid);
       const fbtn = el("button", { class: `follow-btn${_isFollowing ? " following" : ""}` },
@@ -1947,13 +2128,116 @@ const renderPost = (p, author, opts = {}) => {
 
     post._focusComment = () => cForm.querySelector("input").focus();
   }
+  // ── X / Twitter layout: move avatar to its own left column ──────────────
+  const _xHead = post.querySelector(".post-head");
+  const _xAv   = _xHead && _xHead.firstElementChild;
+  if (_xHead && _xAv && _xAv.tagName === "IMG") {
+    _xHead.removeChild(_xAv);
+    _xAv.className = "avatar";
+    _xAv.style.cssText = "width:36px;height:36px;flex-shrink:0;cursor:pointer;border-radius:50%;object-fit:cover;";
+    const _avatarCol = el("div", { class: "post-avatar-col" }, _xAv);
+    const _bodyCol   = el("div", { class: "post-body-col" });
+    while (post.firstChild) _bodyCol.appendChild(post.firstChild);
+    post.appendChild(_avatarCol);
+    post.appendChild(_bodyCol);
+  }
+
   return post;
 };
 
 // =========================================================================
 // 8b. POST DETAIL — full single post with all comments + back button
 // =========================================================================
+// Inject Twitter-comment styles once
+const _injectTwCmtStyles = (() => {
+  let done = false;
+  return () => {
+    if (done) return; done = true;
+    const s = document.createElement("style");
+    s.textContent = `
+      /* Twitter-style comments */
+      .tw-comment {
+        display: flex;
+        gap: 12px;
+        padding: 12px 16px;
+        border-top: 1px solid var(--border, rgba(255,255,255,0.08));
+      }
+      .tw-comment:first-child { border-top: none; }
+      .tw-cmt-avatar { flex-shrink: 0; cursor: pointer; }
+      .tw-cmt-body { flex: 1; min-width: 0; }
+      .tw-cmt-header {
+        display: flex; align-items: center; gap: 5px;
+        flex-wrap: wrap; margin-bottom: 3px;
+      }
+      .tw-cmt-name { font-weight: 700; font-size: 14px; }
+      .tw-cmt-username { font-size: 13px; color: var(--text3); }
+      .tw-cmt-dot { font-size: 12px; color: var(--text3); }
+      .tw-cmt-time { font-size: 13px; color: var(--text3); }
+      .tw-cmt-text { font-size: 14px; line-height: 1.5; color: var(--text); word-break: break-word; }
+      .tw-cmt-actions {
+        display: flex; align-items: center; gap: 20px;
+        margin-top: 10px;
+      }
+      .tw-cmt-act-btn {
+        display: flex; align-items: center; gap: 5px;
+        background: none; border: none; cursor: pointer;
+        color: var(--text3); font-size: 13px;
+        padding: 4px; border-radius: 999px;
+        transition: color .15s, background .15s;
+      }
+      .tw-cmt-act-btn i { font-size: 17px; }
+      .tw-cmt-act-btn:hover { color: var(--primary); background: rgba(108,99,255,.1); }
+      .tw-cmt-act-btn.liked { color: var(--danger, #e0245e); }
+      .tw-cmt-act-btn.liked:hover { background: rgba(224,36,94,.1); }
+      .tw-cmt-act-count { font-size: 13px; }
+      .detail-cmt-list { border-radius: 12px; overflow: hidden; }
+
+      /* Ensure mention colour isn't overridden inside comment body */
+      .tw-cmt-body a.mention {
+        color: var(--primary, #6c63ff);
+        text-decoration: none;
+        font-weight: 500;
+      }
+      .tw-cmt-body a.mention:hover { text-decoration: underline; }
+
+      /* Twitter-style reply banner */
+      .detail-reply-banner {
+        display: flex; align-items: center; justify-content: space-between;
+        margin: 0 16px 6px;
+        padding: 8px 12px 8px 14px;
+        border-radius: 10px;
+        background: rgba(108,99,255,.08);
+        border-left: 3px solid var(--primary, #6c63ff);
+        animation: replyBannerIn .15s ease;
+      }
+      .detail-reply-banner.hidden { display: none; }
+      @keyframes replyBannerIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+      .detail-reply-banner-inner {
+        display: flex; align-items: center; gap: 6px;
+        font-size: 13px; color: var(--text3);
+      }
+      .detail-reply-banner-icon { font-size: 14px; color: var(--primary, #6c63ff); }
+      .detail-reply-banner-label { color: var(--text3); }
+      .detail-reply-banner-user {
+        color: var(--primary, #6c63ff);
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .detail-reply-banner-close {
+        background: none; border: none; cursor: pointer;
+        color: var(--text3); padding: 2px 4px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        transition: color .15s, background .15s;
+        font-size: 15px; line-height: 1;
+      }
+      .detail-reply-banner-close:hover { color: var(--text); background: rgba(255,255,255,.08); }
+    `;
+    document.head.appendChild(s);
+  };
+})();
+
 const renderPostDetail = async (root, postId) => {
+  _injectTwCmtStyles();
   if (!postId) { location.hash = "#feed"; return; }
 
   const back = el("div", { class: "detail-topbar" },
@@ -1989,71 +2273,103 @@ const renderPostDetail = async (root, postId) => {
 
   // Track reply state for detail view
   let _detailReplyTo = null;
-  const detailReplyBanner = el("div", { class: "reply-banner hidden" },
-    el("span", { class: "reply-banner-text" }, ""),
-    el("button", { class: "reply-cancel-btn", onclick: () => {
-      _detailReplyTo = null;
-      detailReplyBanner.classList.add("hidden");
-      cmtSection.querySelector("input").placeholder = "Write a comment…";
-      cmtSection.querySelector("input").value = "";
-    }}, el("i", { class: "ri-close-line" })),
+  const detailReplyBanner = el("div", { class: "detail-reply-banner hidden" });
+  const _replyBannerUsername = el("span", { class: "detail-reply-banner-user" }, "");
+  detailReplyBanner.appendChild(
+    el("div", { class: "detail-reply-banner-inner" },
+      el("i", { class: "ri-corner-down-right-line detail-reply-banner-icon" }),
+      el("span", { class: "detail-reply-banner-label" }, "Replying to "),
+      _replyBannerUsername,
+    ),
   );
+  const _replyBannerClose = el("button", { class: "detail-reply-banner-close", type: "button", onclick: () => {
+    _detailReplyTo = null;
+    detailReplyBanner.classList.add("hidden");
+    const inp = cmtSection.querySelector("input[type='text']");
+    if (inp) { inp.placeholder = "Write a comment…"; inp.value = ""; }
+  }}, el("i", { class: "ri-close-line" }));
+  detailReplyBanner.appendChild(_replyBannerClose);
   cmtSection.appendChild(detailReplyBanner);
 
   const renderDetailComment = (c, a) => {
     const isLiked = (c.likes || []).includes(state.uid);
-    const likeCountEl = el("span", { text: String((c.likes || []).length || "") });
-    const likeIconEl = el("i", { class: isLiked ? "ri-heart-fill" : "ri-heart-line", style: isLiked ? "color:var(--danger);" : "" });
+    const likeCount = (c.likes || []).length;
+    const likeCountEl = el("span", { class: "tw-cmt-act-count", text: likeCount > 0 ? String(likeCount) : "" });
+    const likeIconEl  = el("i", { class: isLiked ? "ri-heart-fill" : "ri-heart-line" });
     let _liked = isLiked;
-    const likeBtn = el("button", { class: "cmt-like-btn", onclick: async (ev) => {
-      ev.stopPropagation();
-      _liked = !_liked;
-      likeIconEl.className = _liked ? "ri-heart-fill" : "ri-heart-line";
-      likeIconEl.style.color = _liked ? "var(--danger)" : "";
-      const newCount = (c.likes?.length || 0) + (_liked ? 1 : -1);
-      likeCountEl.textContent = newCount > 0 ? String(newCount) : "";
-      await updateDoc(doc(db, "posts", p.id, "comments", c.id), {
-        likes: _liked ? arrayUnion(state.uid) : arrayRemove(state.uid),
-      }).catch(() => {});
-      if (_liked && a?.uid && a.uid !== state.uid) {
-        writeNotif(a.uid, "commentLike", { postId: p.id, text: `${state.me?.name || "Someone"} liked your comment` }).catch(() => {});
-        import("./notifications.js").then(({ notifyUser }) =>
-          notifyUser(a.uid, state.me?.name || "Someone", "liked your comment", "/#post/" + p.id, state.me?.photoURL || "")
-        ).catch(() => {});
-      }
-    }}, likeIconEl, likeCountEl);
 
-    const replyBtn = el("button", { class: "cmt-reply-btn", onclick: () => {
-      _detailReplyTo = { uid: a?.uid, name: a?.name || "user", username: a?.username || "" };
-      detailReplyBanner.querySelector(".reply-banner-text").textContent = `Replying to @${a?.username || a?.name || "user"}`;
-      detailReplyBanner.classList.remove("hidden");
-      const inp = cmtSection.querySelector("input");
-      inp.placeholder = `Reply to @${a?.username || a?.name || "user"}…`;
-      inp.focus();
-    }}, "Reply");
+    const likeBtn = el("button", {
+      class: `tw-cmt-act-btn${_liked ? " liked" : ""}`,
+      onclick: async (ev) => {
+        ev.stopPropagation();
+        _liked = !_liked;
+        likeIconEl.className = _liked ? "ri-heart-fill" : "ri-heart-line";
+        likeBtn.classList.toggle("liked", _liked);
+        const newCount = (c.likes?.length || 0) + (_liked ? 1 : -1);
+        likeCountEl.textContent = newCount > 0 ? String(newCount) : "";
+        await updateDoc(doc(db, "posts", p.id, "comments", c.id), {
+          likes: _liked ? arrayUnion(state.uid) : arrayRemove(state.uid),
+        }).catch(() => {});
+        if (_liked && a?.uid && a.uid !== state.uid) {
+          writeNotif(a.uid, "commentLike", { postId: p.id, text: `${state.me?.name || "Someone"} liked your comment` }).catch(() => {});
+          import("./notifications.js").then(({ notifyUser }) =>
+            notifyUser(a.uid, state.me?.name || "Someone", "liked your comment", "/#post/" + p.id, state.me?.photoURL || "")
+          ).catch(() => {});
+        }
+      },
+    }, likeIconEl, likeCountEl);
 
-    return el("div", { class: "comment detail-cmt" },
-      el("img", { class: "avatar xs", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
-      el("div", { class: "body" },
-        el("div", { class: "name" }, a?.name || "User",
-          a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
-          el("span", { class: "cmt-time" }, fmtTime(c.createdAt)),
+    const replyBtn = el("button", {
+      class: "tw-cmt-act-btn",
+      onclick: () => {
+        const handle = a?.username || a?.name || "user";
+        _detailReplyTo = { uid: a?.uid, name: a?.name || "user", username: a?.username || "" };
+        _replyBannerUsername.textContent = `@${handle}`;
+        detailReplyBanner.classList.remove("hidden");
+        const inp = cmtSection.querySelector("input[type='text']");
+        if (inp) { inp.placeholder = `Reply to @${handle}…`; inp.focus(); }
+      },
+    }, el("i", { class: "ri-chat-1-line" }));
+
+    const shareBtn = el("button", {
+      class: "tw-cmt-act-btn",
+      onclick: async (ev) => {
+        ev.stopPropagation();
+        const url = `${location.origin}${location.pathname}#post/${p.id}`;
+        try { await navigator.share?.({ title: "Orbit", text: c.text || "", url }); }
+        catch { await navigator.clipboard.writeText(url); toast("Link copied"); }
+      },
+    }, el("i", { class: "ri-share-forward-line" }));
+
+    return el("div", { class: "tw-comment" },
+      el("img", { class: "avatar xs tw-cmt-avatar", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
+      el("div", { class: "tw-cmt-body" },
+        el("div", { class: "tw-cmt-header" },
+          el("span", { class: "tw-cmt-name" }, a?.name || "User",
+            a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
+          ),
+          el("span", { class: "tw-cmt-username" }, `@${a?.username || "user"}`),
+          el("span", { class: "tw-cmt-dot" }, "·"),
+          el("span", { class: "tw-cmt-time" }, fmtTime(c.createdAt)),
         ),
-        (c.replyToUsername || c.replyToName) ? el("div", { class: "reply-to-label" }, el("i", { class: "ri-corner-down-right-line" }), el("a", { class: "mention", href: `#profile-u/${c.replyToUsername || c.replyToName}` }, `@${c.replyToUsername || c.replyToName}`)) : null,
-        c.text ? el("div", { class: "text", text: c.text }) : null,
+        (c.replyToUsername || c.replyToName) ? el("div", { class: "reply-to-label" },
+          el("i", { class: "ri-corner-down-right-line" }),
+          el("a", { class: "mention", href: `#profile-u/${c.replyToUsername || c.replyToName}` }, `@${c.replyToUsername || c.replyToName}`)
+        ) : null,
+        c.text ? el("div", { class: "tw-cmt-text" }, c.text) : null,
         c.mediaUrl ? el("div", { class: "cmt-media", onclick: (ev) => { ev.stopPropagation(); c.mediaType === "video" ? openVideoViewer([{ type: "video", url: c.mediaUrl }], 0) : openImageZoom(c.mediaUrl); }},
           c.mediaType === "video"
             ? el("div", { class: "cmt-media-video-wrap" },
-                el("video", { src: c.mediaUrl, muted: "", preload: "metadata", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;" }),
+                el("video", { src: c.mediaUrl, muted: "", preload: "metadata", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;border-radius:10px;" }),
                 el("div", { class: "cmt-media-video-play", html: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>` }),
               )
-            : el("img", { src: c.mediaUrl, loading: "lazy", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;" }),
+            : el("img", { src: c.mediaUrl, loading: "lazy", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;border-radius:10px;margin-top:8px;" }),
         ) : null,
         c.audioUrl ? el("div", { class: "cmt-voice-note" },
           el("span", { html: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>` }),
           el("audio", { src: c.audioUrl, controls: true, style: "height:28px;max-width:150px;" }),
         ) : null,
-        el("div", { class: "cmt-meta-row" }, replyBtn, likeBtn),
+        el("div", { class: "tw-cmt-actions" }, replyBtn, shareBtn, likeBtn),
       ),
     );
   };
@@ -2181,7 +2497,7 @@ const renderPostDetail = async (root, postId) => {
 
   cForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const input = cForm.querySelector("input");
+    const input = cForm.querySelector("input[type='text']");
     const text = input.value.trim();
     if (!text && !_dCmtMediaFile && !_dCmtAudioBlob) return;
     const submitBtn = cForm.querySelector("button[type='submit']");
@@ -2338,44 +2654,25 @@ const renderExplore = (root, hashtagFilter = null) => {
     if (!searchWrap.contains(e.target)) { searchResults.classList.add("hidden"); }
   });
 
-  // ── Suggested profiles ──────────────────────────────────────────────────
+  // ── Trending in Orbit ─────────────────────────────────────────────────
   if (!hashtagFilter) {
-    const suggSection = el("div", { class: "explore-suggested" });
-    suggSection.appendChild(el("div", { class: "explore-suggested-head" }, "Suggested for you"));
-    const suggScroller = el("div", { class: "explore-suggested-scroller" });
-    suggSection.appendChild(suggScroller);
-    root.appendChild(suggSection);
-    getDocs(query(collection(db, "users"), orderBy("createdAt", "desc"), limit(30))).then((snap) => {
-      const all = snap.docs.map((d) => ({ uid: d.id, ...d.data() }))
-        .filter((u) => u.uid !== state.uid && !(state.me?.following || []).includes(u.uid));
-      for (let i = all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [all[i], all[j]] = [all[j], all[i]]; }
-      if (!all.length) { suggSection.classList.add("hidden"); return; }
-      all.slice(0, 10).forEach((u) => {
-        let iFollow = (state.me?.following || []).includes(u.uid);
-        const followBtn = el("button", { class: `btn sm ${iFollow ? "ghost" : "primary"}` }, iFollow ? "Following" : "Follow");
-        followBtn.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          const meRef = doc(db, "users", state.uid);
-          const themRef = doc(db, "users", u.uid);
-          const batch = writeBatch(db);
-          if (iFollow) { batch.update(meRef, { following: arrayRemove(u.uid) }); batch.update(themRef, { followers: arrayRemove(state.uid) }); }
-          else { batch.update(meRef, { following: arrayUnion(u.uid) }); batch.update(themRef, { followers: arrayUnion(state.uid) }); }
-          await batch.commit().catch(() => {});
-          state.cache.users.delete(u.uid);
-          state.cache.users.delete(state.uid);
-          iFollow = !iFollow;
-          followBtn.className = `btn sm ${iFollow ? "ghost" : "primary"}`;
-          followBtn.textContent = iFollow ? "Following" : "Follow";
-          if (state.me.following) iFollow ? state.me.following.push(u.uid) : (state.me.following = state.me.following.filter((x) => x !== u.uid));
-        });
-        suggScroller.appendChild(el("div", { class: "explore-sugg-card", onclick: () => location.hash = `#profile/${u.uid}` },
-          el("img", { class: "avatar md", src: avatarFor(u) }),
-          el("div", { class: "esc-name" }, u.name || "User"),
-          el("div", { class: "esc-sub" }, "@" + (u.username || "user")),
-          followBtn,
-        ));
-      });
-    }).catch(() => {});
+    const trendSection = el("div", { class: "trending-lane", style: "margin-bottom:12px;" });
+    trendSection.appendChild(el("div", { class: "trending-head" },
+      el("i", { class: "ri-fire-fill" }), "Trending in Orbit"
+    ));
+    const trendScroller = el("div", { class: "trending-scroller" });
+    trendSection.appendChild(trendScroller);
+    root.appendChild(trendSection);
+    getDocs(query(collection(db, "posts"), orderBy("orbitCount", "desc"), limit(10)))
+      .then(async (tSnap) => {
+        const tPosts = tSnap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter(p => (p.orbitCount || 0) >= 1);
+        if (!tPosts.length) { trendSection.style.display = "none"; return; }
+        const tAuthors = await Promise.all([...new Set(tPosts.map(p => p.authorUid))].map(fetchUser));
+        const tByUid = Object.fromEntries(tAuthors.filter(Boolean).map(u => [u.uid, u]));
+        tPosts.slice(0, 5).forEach(p => trendScroller.appendChild(renderTrendingCard(p, tByUid[p.authorUid])));
+      }).catch(() => { trendSection.style.display = "none"; });
   }
 
   const grid = el("div", { class: "grid-3" });
@@ -2440,7 +2737,7 @@ const renderSaved = (root) => {
     const posts = docs.filter((d) => d.exists()).map((d) => ({ id: d.id, ...d.data() }));
     const authors = await Promise.all([...new Set(posts.map((p) => p.authorUid))].map(fetchUser));
     const map = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
-    posts.forEach((p) => list.appendChild(renderPost(p, map[p.authorUid])));
+    posts.forEach((p) => list.appendChild(renderPost(p, map[p.authorUid], { hideComments: true })));
   });
 };
 
@@ -2579,23 +2876,57 @@ const renderProfile = async (root, uid) => {
       el("div", { class: "t" }, "Loading…")));
 
     if (which === "posts") {
-      // Live listener — any post created, edited, or deleted by this user
-      // reflects on their profile immediately, without needing to leave
-      // and re-enter the page.
+      // Live listener — any post created or deleted by this user reflects
+      // on their profile immediately.  We use docChanges() so that a simple
+      // orbit/like write (type:"modified") does NOT wipe and re-render the
+      // feed — which would interrupt any playing video back to the start.
+      // The orbitBtn already updates its icon/count optimistically, so we
+      // can safely skip re-rendering on "modified".
+      let _profFeed = null;
+      const _postEls = new Map(); // postId → article element
+
       _profileTabUnsub = onSnapshot(
         query(collection(db, "posts"), where("authorUid", "==", uid), limit(60)),
         (snap) => {
-          body.innerHTML = "";
-          if (snap.empty) {
-            body.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-image-line" }), el("div", { class: "t" }, "No posts yet")));
+          const changes = snap.docChanges();
+
+          // ── First paint: all changes arrive as "added" ──────────────────
+          if (!_profFeed) {
+            body.innerHTML = "";
+            if (snap.empty) {
+              body.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-image-line" }), el("div", { class: "t" }, "No posts yet")));
+              return;
+            }
+            const posts = snap.docs
+              .map((d) => ({ id: d.id, ...d.data() }))
+              .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+            _profFeed = el("div", { class: "profile-feed-list" }); body.appendChild(_profFeed);
+            posts.forEach((p) => {
+              const card = renderPost(p, u, { hideComments: true });
+              _postEls.set(p.id, card);
+              _profFeed.appendChild(card);
+            });
             return;
           }
-          const posts = snap.docs
-            .map((d) => ({ id: d.id, ...d.data() }))
-            .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
 
-          const profFeed = el("div", { class: "profile-feed-list" }); body.appendChild(profFeed);
-          posts.forEach((p) => profFeed.appendChild(renderPost(p, u)));
+          // ── Incremental updates ──────────────────────────────────────────
+          for (const change of changes) {
+            if (change.type === "removed") {
+              const card = _postEls.get(change.doc.id);
+              if (card) { card.remove(); _postEls.delete(change.doc.id); }
+              if (_postEls.size === 0) {
+                _profFeed.remove(); _profFeed = null;
+                body.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-image-line" }), el("div", { class: "t" }, "No posts yet")));
+              }
+            } else if (change.type === "added") {
+              const p = { id: change.doc.id, ...change.doc.data() };
+              const card = renderPost(p, u, { hideComments: true });
+              _postEls.set(p.id, card);
+              _profFeed.prepend(card);
+            }
+            // "modified" (e.g. orbit/like write) — intentionally ignored:
+            // the orbitBtn already updated its own UI optimistically.
+          }
         },
         () => {}
       );
@@ -2892,7 +3223,8 @@ const CR_TEXT_COLORS = ["#ffffff","#000000","#ff5c7a","#ffb04a","#3fdca0","#5cd3
 let crState = null;
 const _crFreshState = () => ({
   step: "pick",           // pick | cam | editor | music | details
-  slides: [],             // [{ type:'image'|'video', file, url, overlays:[] }]
+  slides: [],             // [{ type:'image'|'video', file, url, overlays:[], recordedInApp? }]
+  textOnly: false,        // true when publishing a text-only post (no media)
   song: null,             // { id, name, artist, url, duration }
   caption: "",
   location: null,
@@ -2903,6 +3235,12 @@ const _crFreshState = () => ({
   camChunks: [],
   camTimer: null,
 });
+
+// Music can only be attached to a single video that was recorded in-app —
+// never to images, carousels, or videos picked from the device library.
+// Keeps licensing/rights simple and matches how the feature was designed.
+const crCanAddMusic = () =>
+  crState.slides.length === 1 && crState.slides[0].type === "video" && crState.slides[0].recordedInApp === true;
 
 const crLayerId = () => "l" + Math.random().toString(36).slice(2, 9);
 
@@ -2937,14 +3275,17 @@ function crRenderShell(root) {
 }
 
 function crBack() {
-  const order = ["pick", "editor", "music", "details"];
   if (crState.step === "cam") { crStopCamera(); crGoto("pick"); return; }
+  const order = crState.textOnly
+    ? ["pick", "details"]
+    : (crCanAddMusic() ? ["pick", "editor", "music", "details"] : ["pick", "editor", "details"]);
   const idx = order.indexOf(crState.step);
   if (idx <= 0) { crClose(); return; }
   crGoto(order[idx - 1]);
 }
 
 function crGoto(step) {
+  if (step === "music" && !crCanAddMusic()) step = "details"; // music is video-only + recorded-in-app only
   crState.step = step;
   const { stepsWrap, backBtn, nextBtn, title } = _crShellRefs;
   stepsWrap.innerHTML = "";
@@ -2955,7 +3296,7 @@ function crGoto(step) {
   else if (step === "editor") {
     title.textContent = "Edit";
     stepsWrap.appendChild(crBuildEditorStep());
-    nextBtn.style.display = ""; nextBtn.textContent = "Next"; nextBtn.onclick = () => crGoto("music");
+    nextBtn.style.display = ""; nextBtn.textContent = "Next"; nextBtn.onclick = () => crGoto(crCanAddMusic() ? "music" : "details");
   } else if (step === "music") {
     title.textContent = "Add music";
     stepsWrap.appendChild(crBuildMusicStep());
@@ -2969,6 +3310,7 @@ function crGoto(step) {
 
 // ---------------- Step 1: pick media ----------------
 function crBuildPickStep() {
+  crState.textOnly = false;
   const fileInput = el("input", { type: "file", accept: "image/*,video/*", multiple: true, hidden: true });
   fileInput.addEventListener("change", (e) => {
     const files = Array.from(e.target.files || []);
@@ -2976,7 +3318,8 @@ function crBuildPickStep() {
     const hasVideo = files.some((f) => f.type.startsWith("video/"));
     if (hasVideo) {
       const f = files.find((f) => f.type.startsWith("video/"));
-      crState.slides = [{ type: "video", file: f, url: URL.createObjectURL(f), overlays: [] }];
+      // recordedInApp:false — uploaded videos can't have music attached, only ones recorded with the in-app camera.
+      crState.slides = [{ type: "video", file: f, url: URL.createObjectURL(f), overlays: [], recordedInApp: false }];
     } else {
       crState.slides = files.slice(0, 10).map((f) => ({ type: "image", file: f, url: URL.createObjectURL(f), overlays: [] }));
     }
@@ -2986,14 +3329,16 @@ function crBuildPickStep() {
   const step = el("div", { class: "cr-step active" },
     el("div", { class: "cr-pick" },
       el("div", { class: "cr-pick-title" }, "Create a post"),
-      el("div", { class: "cr-pick-sub" }, "Photos, a video, or a carousel — add text, stickers and a song next."),
+      el("div", { class: "cr-pick-sub" }, "Photos, a video, a carousel, or just words."),
       el("div", { class: "cr-pick-grid" },
         el("button", { class: "cr-pick-opt", onclick: () => fileInput.click() },
           el("i", { class: "ri-image-add-line" }), el("span", {}, "Photos / video")),
         el("button", { class: "cr-pick-opt", onclick: () => crGoto("cam") },
           el("i", { class: "ri-camera-line" }), el("span", {}, "Record video")),
+        el("button", { class: "cr-pick-opt", onclick: () => { crState.textOnly = true; crState.slides = []; crGoto("details"); } },
+          el("i", { class: "ri-text" }), el("span", {}, "Text post")),
       ),
-      el("div", { class: "cr-pick-hint" }, "Pick multiple photos to make a swipeable carousel."),
+      el("div", { class: "cr-pick-hint" }, "Pick multiple photos to make a swipeable carousel. Music can be added to videos you record in-app."),
       fileInput,
     ),
   );
@@ -3034,7 +3379,7 @@ function crBuildCamStep() {
       rec.onstop = () => {
         const blob = new Blob(crState.camChunks, { type: "video/webm" });
         const file = new File([blob], `orbit-recording-${Date.now()}.webm`, { type: "video/webm" });
-        crState.slides = [{ type: "video", file, url: URL.createObjectURL(file), overlays: [] }];
+        crState.slides = [{ type: "video", file, url: URL.createObjectURL(file), overlays: [], recordedInApp: true }];
         crState.activeSlide = 0;
         crStopCamera();
         crGoto("editor");
@@ -3152,31 +3497,37 @@ function crBuildEditorStep() {
       );
       layer.style.fontSize = crFontPx(ov, rect().width || 320) + "px";
 
-      let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+      // Tap-to-edit: a tap (pointerdown+up with negligible movement) on a
+      // layer that was ALREADY selected enters edit mode immediately — this
+      // is far more reliable on touch than waiting for a true dblclick,
+      // which conflicts with the pointer-capture drag logic below. The
+      // first tap on an unselected layer just selects it (shows handles);
+      // the very next tap edits it. Desktop dblclick still works too.
+      let dragging = false, moved = false, sx = 0, sy = 0, ox = 0, oy = 0, wasSelectedBeforeTap = false;
       layer.addEventListener("pointerdown", (e) => {
+        wasSelectedBeforeTap = crState.selectedLayerId === ov.id;
         crState.selectedLayerId = ov.id;
         paintLayerControls();
-        $$(".cr-layer", overlayLayer).forEach((l) => l.classList.remove("selected"));
+        $(".cr-layer", overlayLayer).forEach((l) => l.classList.remove("selected"));
         layer.classList.add("selected");
-        dragging = true; sx = e.clientX; sy = e.clientY; ox = ov.x; oy = ov.y;
+        dragging = true; moved = false; sx = e.clientX; sy = e.clientY; ox = ov.x; oy = ov.y;
         layer.setPointerCapture(e.pointerId);
       });
       layer.addEventListener("pointermove", (e) => {
         if (!dragging) return;
+        const dx = e.clientX - sx, dy = e.clientY - sy;
+        if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
         const r = rect();
-        ov.x = Math.min(96, Math.max(4, ox + ((e.clientX - sx) / r.width) * 100));
-        ov.y = Math.min(96, Math.max(4, oy + ((e.clientY - sy) / r.height) * 100));
+        ov.x = Math.min(96, Math.max(4, ox + (dx / r.width) * 100));
+        ov.y = Math.min(96, Math.max(4, oy + (dy / r.height) * 100));
         layer.style.left = ov.x + "%"; layer.style.top = ov.y + "%";
       });
-      layer.addEventListener("pointerup", () => { dragging = false; });
+      layer.addEventListener("pointerup", () => {
+        dragging = false;
+        if (!moved && ov.type === "text" && wasSelectedBeforeTap) crEnterTextEdit(layer, ov);
+      });
       if (ov.type === "text") {
-        layer.addEventListener("dblclick", () => {
-          const span = layer.querySelector("span");
-          span.contentEditable = "true";
-          span.focus();
-          const sel = getSelection(); sel.selectAllChildren(span);
-          span.addEventListener("blur", () => { ov.text = span.textContent.trim() || "Tap to edit"; span.contentEditable = "false"; span.textContent = ov.text; }, { once: true });
-        });
+        layer.addEventListener("dblclick", () => crEnterTextEdit(layer, ov));
       }
       overlayLayer.appendChild(layer);
     });
@@ -3203,6 +3554,14 @@ function crBuildEditorStep() {
 // step's local paintStage closure); declared once at module scope so the
 // toolbar/thumbstrip buttons above can reference it before it's built.
 let crAddMoreImages = () => {};
+
+function crEnterTextEdit(layer, ov) {
+  const span = layer.querySelector("span");
+  span.contentEditable = "true";
+  span.focus();
+  const sel = getSelection(); sel.selectAllChildren(span);
+  span.addEventListener("blur", () => { ov.text = span.textContent.trim() || "Tap to edit"; span.contentEditable = "false"; span.textContent = ov.text; }, { once: true });
+}
 
 function crAddTextLayer(stage) {
   const slide = crState.slides[crState.activeSlide];
@@ -3324,7 +3683,7 @@ function crBuildMusicStepPaint(results) {
 // ---------------- Step 4: details + publish ----------------
 function crBuildDetailsStep() {
   const thumbSlide = crState.slides[0];
-  const caption = el("textarea", { placeholder: "Write a caption… use #hashtags and @mentions" });
+  const caption = el("textarea", { placeholder: crState.textOnly ? "What's on your mind?" : "Write a caption… use #hashtags and @mentions" });
   caption.value = crState.caption;
   caption.addEventListener("input", () => { crState.caption = caption.value; });
 
@@ -3347,15 +3706,15 @@ function crBuildDetailsStep() {
     }, () => { toast("Location access denied"); locRow.querySelector(".v").textContent = crState.location?.city || "Not tagged"; }, { timeout: 8000 });
   });
 
-  const musicRow = el("div", { class: "cr-details-row" },
+  const musicRow = crCanAddMusic() ? el("div", { class: "cr-details-row" },
     el("div", { class: "l" }, el("i", { class: "ri-music-2-line" }), "Music"),
     el("div", { class: "v" }, crState.song ? `${crState.song.name} — ${crState.song.artist}` : "None"),
-  );
-  musicRow.addEventListener("click", () => crGoto("music"));
+  ) : null;
+  musicRow?.addEventListener("click", () => crGoto("music"));
 
   return el("div", { class: "cr-step active" },
     el("div", { class: "cr-details" },
-      el("div", { class: "cr-details-preview" },
+      crState.textOnly ? null : el("div", { class: "cr-details-preview" },
         thumbSlide.type === "video"
           ? el("video", { src: thumbSlide.url, class: "cr-details-thumb", muted: true })
           : el("img", { src: thumbSlide.url, class: "cr-details-thumb" }),
@@ -3406,29 +3765,33 @@ function crFlattenImageSlide(slide) {
 }
 
 async function crSubmitPost(btn) {
-  if (!crState.slides.length) { toast("Pick a photo or video first"); return; }
+  if (!crState.textOnly && !crState.slides.length) { toast("Pick a photo or video first"); return; }
+  if (crState.textOnly && !crState.caption.trim()) { toast("Write something first"); return; }
   btn.disabled = true; btn.textContent = "Posting…";
   try {
-    toast("Uploading…");
     let media;
-    if (crState.slides[0].type === "video") {
-      const slide = crState.slides[0];
-      const uploaded = await uploadToCloudinary(slide.file, "video");
-      if (slide.overlays.length) uploaded.overlays = slide.overlays;
-      media = uploaded;
-    } else if (crState.slides.length === 1) {
-      const flat = await crFlattenImageSlide(crState.slides[0]);
-      media = await uploadToCloudinary(flat, "image");
-    } else {
-      const flats = await Promise.all(crState.slides.map(crFlattenImageSlide));
-      media = await Promise.all(flats.map((f) => uploadToCloudinary(f, "image")));
+    if (!crState.textOnly) {
+      toast("Uploading…");
+      if (crState.slides[0].type === "video") {
+        const slide = crState.slides[0];
+        const uploaded = await uploadToCloudinary(slide.file, "video");
+        if (slide.overlays.length) uploaded.overlays = slide.overlays;
+        media = uploaded;
+      } else if (crState.slides.length === 1) {
+        const flat = await crFlattenImageSlide(crState.slides[0]);
+        media = await uploadToCloudinary(flat, "image");
+      } else {
+        const flats = await Promise.all(crState.slides.map(crFlattenImageSlide));
+        media = await Promise.all(flats.map((f) => uploadToCloudinary(f, "image")));
+      }
     }
     const text = crState.caption.trim();
     const hashtags = extractHashtags(text);
     const postData = {
-      authorUid: state.uid, text, media, hashtags,
+      authorUid: state.uid, text, hashtags,
       orbits: [], orbitCount: 0, commentCount: 0, createdAt: serverTimestamp(),
     };
+    if (media) postData.media = media;
     if (crState.location) postData.location = crState.location;
     if (crState.song) postData.song = crState.song;
     const newPostRef = await addDoc(collection(db, "posts"), postData);
@@ -4310,5 +4673,5 @@ window.renderAIChat = renderAIChat;
 // 17. INIT
 // =========================================================================
 initTheme();
-// Hide boot once auth state resolved (handled in onAuthStateChanged)
-setTimeout(() => $("#boot").classList.add("hidden"), 1200);
+// Boot screen is hidden by onAuthStateChanged — do NOT hide it on a timer,
+// or there will be a blank-page flash while Firebase resolves auth state.
