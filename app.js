@@ -367,7 +367,7 @@ const buildVideoPlayer = (url, opts = {}) => {
     _wantPlaying = entries[0].isIntersecting;
     clearTimeout(_ioDebounce);
     _ioDebounce = setTimeout(_applyIntent, 200);
-  }, { threshold: 0.6 });
+  }, { threshold: 0.4 });
   _io.observe(wrap);
 
   // Mid-playback drift correction: even starting clean from 0, a slow
@@ -397,44 +397,6 @@ const buildVideoPlayer = (url, opts = {}) => {
   if (overlays) _renderFeedOverlays(wrap, overlays);
   if (song) _wireSongPlayback(wrap, song, video);
 
-  return wrap;
-};
-
-// =========================================================================
-// FEED VIDEO — spec-exact: no controls, autoplay on scroll (50% threshold),
-// tap to mute/unmute only. Used for all video posts in the feed.
-// buildVideoPlayer above is kept for detail view / fullscreen modal.
-// =========================================================================
-const _feedVideoObserver = new IntersectionObserver((entries) => {
-  entries.forEach((entry) => {
-    const video = entry.target;
-    if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
-      video.play().catch(() => {});
-    } else {
-      video.pause();
-    }
-  });
-}, { threshold: 0.5 });
-
-const buildFeedVideo = (url) => {
-  const video = el("video", {
-    class: "feed-video",
-    src: url,
-    poster: _cloudPoster(url),
-    muted: "",
-    loop: "",
-    playsinline: "",
-    "webkit-playsinline": "",
-    disablepictureinpicture: "",
-    controlslist: "nodownload nofullscreen noremoteplayback",
-    preload: "none",
-  });
-  video.addEventListener("click", () => { video.muted = !video.muted; });
-  _feedVideoObserver.observe(video);
-  // Clean up observer when the element is unloaded
-  video.addEventListener("emptied", () => _feedVideoObserver.unobserve(video), { once: true });
-  const wrap = el("div", { class: "post-media", style: "border-radius:14px;overflow:hidden;margin:8px 0;" });
-  wrap.appendChild(video);
   return wrap;
 };
 
@@ -1202,6 +1164,10 @@ const router = () => {
 
   $$(".nav-item, .bn").forEach((b) => b.classList.toggle("active", b.dataset.route === target));
 
+  // Hide bottom nav in post detail, restore on all other routes
+  const _bnEl = document.querySelector(".bottomnav");
+  if (_bnEl) _bnEl.classList.toggle("detail-hidden", target === "post");
+
   // ── Leaving the feed ──────────────────────────────────────────────────
   if (prevRoute === "feed") {
     // Save scroll position
@@ -1455,43 +1421,12 @@ const renderMutuals = async (container, dayOnly = true) => {
 const renderFeed = (root) => {
   const wrap = el("div", { class: "feed-wrap" });
 
-  const stub = el("div", { class: "composer-stub" },
-    el("img", { class: "avatar sm", src: avatarFor(state.me), style: "cursor:pointer;", onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${state.uid}`; } }),
-    el("button", { onclick: () => openCreatePost() }, `What's orbiting your mind, ${(state.me?.name || "there").split(" ")[0]}?`)
-  );
-  wrap.appendChild(stub);
-
-  // ── Feed filter tabs (For You | Mutuals) ───────────────────────────
-  const feedFilterTabs = el("div", { class: "feed-filter-tabs" },
-    el("button", { class: "feed-filter-tab active", "data-ftab": "foryou" }, "For You"),
-    el("button", { class: "feed-filter-tab", "data-ftab": "mutuals" },
-      el("i", { class: "ri-team-line" }), " Mutuals"),
-  );
-  wrap.appendChild(feedFilterTabs);
-
-  // Mutuals panel — shown when Mutuals tab is active
-  const mutualsPanel = el("div", { class: "mutuals-feed-panel hidden" });
-  wrap.appendChild(mutualsPanel);
-
-  // Feed main content wrapper — toggled by tab
+  // Single unified feed — no tab switching
   const feedMainContent = el("div", { class: "feed-main-content" });
   wrap.appendChild(feedMainContent);
 
-  feedFilterTabs.querySelectorAll(".feed-filter-tab").forEach((tab) => {
-    tab.addEventListener("click", () => {
-      feedFilterTabs.querySelectorAll(".feed-filter-tab").forEach((t) => t.classList.toggle("active", t === tab));
-      const isMutuals = tab.dataset.ftab === "mutuals";
-      mutualsPanel.classList.toggle("hidden", !isMutuals);
-      feedMainContent.classList.toggle("hidden", isMutuals);
-      if (isMutuals && !mutualsPanel._loaded) {
-        mutualsPanel._loaded = true;
-        renderMutuals(mutualsPanel, true);
-      }
-    });
-  });
-
   // Posts container
-  const list = el("div", { class: "ig-feed" });
+  const list = el("div", { class: "feed-list" });
   list.appendChild(el("div", { class: "empty" },
     el("i", { class: "ri-loader-4-line" }),
     el("div", { class: "t" }, "Loading your orbit"),
@@ -1538,6 +1473,8 @@ const renderFeed = (root) => {
     let _suggShown = 0;
     _scored.forEach(({ p }, idx) => {
       list.appendChild(renderPost(p, byUid[p.authorUid], { hideComments: true }));
+      // Signal orbit-icon divider between posts
+      list.appendChild(el("div", { class: "signal-divider", html: `<div class="signal-divider-icon"><svg width="16" height="16" viewBox="0 0 26 26" fill="none"><circle cx="13" cy="13" r="4" stroke="currentColor" stroke-width="2" opacity=".3"/><path d="M13 4 A9 9 0 0 1 22 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".3"/><path d="M13 22 A9 9 0 0 1 4 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".15"/></svg></div>` }));
       // Suggestion card at post 4, then every 7 after that
       if (idx === 4 || (idx > 4 && (idx - 4) % 7 === 0)) {
         const type = _suggTypes[_suggShown % 3];
@@ -1547,11 +1484,47 @@ const renderFeed = (root) => {
         else list.appendChild(renderInlineSpaceSuggestion());
       }
     });
+
+    // Wire scroll-to-play on all <video> elements now in the feed
+    _setupFeedVideoScroll(list);
   });
 
   // store unsub globally and on root so route changes can clean up
   _feedUnsub = unsub;
   root._unsub = unsub;
+};
+
+// ── Feed scroll-to-play ───────────────────────────────────────────────────
+// Observes <video> elements directly (not the vid-player wrapper) so the
+// observer works even before the poster loads (wrapper has 0 height until then).
+let _feedVidIO = null;
+const _setupFeedVideoScroll = (list) => {
+  // Disconnect previous observer so removed elements don't accumulate
+  if (_feedVidIO) { _feedVidIO.disconnect(); _feedVidIO = null; }
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach((e) => {
+      const v = e.target;
+      if (e.isIntersecting) {
+        v.muted = true;
+        v.play().catch(() => {});
+      } else {
+        v.pause();
+        v.currentTime = 0;
+      }
+    });
+  }, { threshold: 0.4 });
+  _feedVidIO = io;
+  // Observe all videos already in the list
+  list.querySelectorAll("video").forEach((v) => { v.muted = true; io.observe(v); });
+  // Watch for videos added later (lazy suggestion cards, etc.)
+  const mo = new MutationObserver(() => {
+    list.querySelectorAll("video:not([data-fvio])").forEach((v) => {
+      v.muted = true;
+      v.setAttribute("data-fvio", "1");
+      io.observe(v);
+    });
+  });
+  mo.observe(list, { childList: true, subtree: true });
 };
 
 const renderTrendingCard = (p, author) => {
@@ -1648,9 +1621,11 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
   if (items.length === 1) {
     const m = items[0];
     if (m.type === "video") {
-      // Feed view: spec-exact feed video — no controls, autoplay on scroll
-      const wrap = buildFeedVideo(m.url);
-      if (song) _wireStandaloneSong(wrap);
+      // Full-width, no side border-radius so it stretches edge-to-edge
+      const player = buildVideoPlayer(m.url, { song, overlays: m.overlays });
+      player.style.borderRadius = "14px";
+      const wrap = el("div", { class: "post-media", style: "border-radius:14px;overflow:hidden;margin:8px 0;" });
+      wrap.appendChild(player);
       return wrap;
     }
     const _imgStyle = "width:100%;display:block;max-height:520px;object-fit:cover;" + (detailView ? "cursor:zoom-in;" : "");
@@ -1661,55 +1636,91 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
     return wrap;
   }
 
-  // ── 2+ items: spec-exact scroll-snap swipeable carousel ────────
-  // Single-image uses the plain .post-media path above; every multi-image
-  // post (regardless of count) gets one-at-a-time scroll-snap slides.
-  const _cTrack = el("div", { class: "carousel-track" });
-  const _cDotsWrap = el("div", { class: "carousel-dots" });
+  // ── 2 items: side-by-side ──────────────────────────────────────
+  if (items.length === 2) {
+    const grid = el("div", {
+      class: "post-media",
+      style: "display:grid;grid-template-columns:1fr 1fr;gap:3px;border-radius:14px;overflow:hidden;height:260px;margin:8px 0;position:relative;",
+    });
+    items.forEach((m, i) => grid.appendChild(_makeGridCell(m, false, items, i, postId)));
+    if (song) _wireStandaloneSong(grid);
+    return grid;
+  }
 
-  items.forEach((m, i) => {
+  // ── 3 items: 1 large left + 2 stacked right ────────────────────
+  if (items.length === 3) {
+    const grid = el("div", {
+      class: "post-media",
+      style: "display:grid;grid-template-columns:2fr 1fr;grid-template-rows:130px 130px;gap:3px;border-radius:14px;overflow:hidden;margin:8px 0;position:relative;",
+    });
+    items.forEach((m, i) => grid.appendChild(_makeGridCell(m, i === 0, items, i, postId)));
+    if (song) _wireStandaloneSong(grid);
+    return grid;
+  }
+
+  // ── 4+ items: swipeable carousel ──────────────────────────────
+  let cur = 0;
+  const slides = items.map((m, i) => {
+    const slide = el("div", { class: "carousel-slide", style: i === 0 ? "" : "display:none;" });
     if (m.type === "video") {
-      // Video slide: build a bare feed-video inside a slide container
-      const _slideDiv = el("div", { class: "carousel-slide" });
-      const _v = el("video", {
-        class: "feed-video",
-        src: m.url,
-        poster: _cloudPoster(m.url),
-        muted: "",
-        loop: "",
-        playsinline: "",
-        "webkit-playsinline": "",
-        disablepictureinpicture: "",
-        controlslist: "nodownload nofullscreen noremoteplayback",
-        preload: "none",
-      });
-      _v.addEventListener("click", () => { _v.muted = !_v.muted; });
-      _feedVideoObserver.observe(_v);
-      _v.addEventListener("emptied", () => _feedVideoObserver.unobserve(_v), { once: true });
-      _slideDiv.appendChild(_v);
-      _cTrack.appendChild(_slideDiv);
+      const player = buildVideoPlayer(m.url, { overlays: m.overlays });
+      // Clicking anywhere on the player navigates to the post detail
+      if (postId) {
+        const overlay = player.querySelector(".vp-overlay");
+        if (overlay) overlay.onclick = (e) => { e.stopPropagation(); location.hash = `#post/${postId}`; };
+        const fullBtn = player.querySelector(".vp-btn:last-child");
+        if (fullBtn) fullBtn.onclick = (e) => { e.stopPropagation(); location.hash = `#post/${postId}`; };
+      }
+      slide.appendChild(player);
     } else {
-      const _img = el("img", { class: "carousel-slide", src: m.url, loading: "lazy" });
-      if (postId) _img.onclick = (e) => { e.stopPropagation(); location.hash = `#post/${postId}`; };
-      _cTrack.appendChild(_img);
+      const img = el("img", { src: m.url, loading: "lazy", style: postId ? "cursor:pointer;" : "" });
+      if (postId) img.onclick = (e) => { e.stopPropagation(); location.hash = `#post/${postId}`; };
+      slide.appendChild(img);
     }
-    const _dot = el("span", { class: `dot${i === 0 ? " active" : ""}` });
-    _cDotsWrap.appendChild(_dot);
+    return slide;
   });
+  const dotsWrap = el("div", { class: "carousel-dots" });
+  const dots = items.map((_, i) => {
+    const d = el("button", { class: `carousel-dot${i === 0 ? " active" : ""}` });
+    dotsWrap.appendChild(d);
+    return d;
+  });
+  const go = (n) => {
+    slides[cur].style.display = "none"; dots[cur].classList.remove("active");
+    cur = (n + items.length) % items.length;
+    slides[cur].style.display = ""; dots[cur].classList.add("active");
+  };
+  const wrap = el("div", { class: "post-media carousel", style: "border-radius:14px;overflow:hidden;margin:8px 0;position:relative;" }, ...slides, dotsWrap);
+  if (song) _wireStandaloneSong(wrap);
 
-  const wrap = el("div", {
-    class: "post-media carousel-wrap",
-    style: "border-radius:14px;overflow:hidden;margin:8px 0;",
-  }, _cTrack, _cDotsWrap);
-
-  // Live dot sync as user scrolls/swipes
-  const _cDots = _cDotsWrap.querySelectorAll(".dot");
-  _cTrack.addEventListener("scroll", () => {
-    const index = Math.round(_cTrack.scrollLeft / _cTrack.clientWidth);
-    _cDots.forEach((d, i) => d.classList.toggle("active", i === index));
+  // Touch swipe support
+  let _swipeStartX = 0;
+  let _swipeStartY = 0;
+  wrap.addEventListener("touchstart", (e) => {
+    _swipeStartX = e.touches[0].clientX;
+    _swipeStartY = e.touches[0].clientY;
+  }, { passive: true });
+  wrap.addEventListener("touchend", (e) => {
+    const dx = e.changedTouches[0].clientX - _swipeStartX;
+    const dy = e.changedTouches[0].clientY - _swipeStartY;
+    if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
+      e.stopPropagation();
+      go(dx < 0 ? cur + 1 : cur - 1);
+    }
   }, { passive: true });
 
-  if (song) _wireStandaloneSong(wrap);
+  // Mouse drag support (desktop)
+  let _mouseStartX = 0;
+  let _mouseDragging = false;
+  wrap.addEventListener("mousedown", (e) => { _mouseStartX = e.clientX; _mouseDragging = true; });
+  wrap.addEventListener("mouseup", (e) => {
+    if (!_mouseDragging) return;
+    _mouseDragging = false;
+    const dx = e.clientX - _mouseStartX;
+    if (Math.abs(dx) > 40) { e.stopPropagation(); go(dx < 0 ? cur + 1 : cur - 1); }
+  });
+  wrap.addEventListener("mouseleave", () => { _mouseDragging = false; });
+
   return wrap;
 };
 
@@ -1728,66 +1739,58 @@ const renderPost = (p, author, opts = {}) => {
     }
   }
 
-  const post = el("div", { class: `ig-post${trending ? " is-trending" : ""}` });
+  const post = el("article", { class: `post signal-post${trending ? " is-trending" : ""}` });
 
-  // ── Instagram header: avatar ring · name/timestamp · follow/menu ─────────
-  const _igRingImg = el("img", { src: avatarFor(author), onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${author?.uid}`; } });
-  const _igRing = el("div", { class: "ig-avatar-ring" }, _igRingImg);
-
-  // ── Threads-style +/✓ follow badge overlaid bottom-right on avatar ─────
-  let _igAvatarWrap;
-  if (!isMine && author?.uid) {
-    let _isFollowing = (state.me?.following || []).includes(author.uid);
-    const _badge = el("button", {
-      class: `ig-follow-badge${_isFollowing ? " is-following" : ""}`,
-      title: _isFollowing ? "Following" : "Follow",
-      "aria-label": _isFollowing ? "Following" : "Follow",
-    }, _isFollowing ? "✓" : "+");
-    _badge.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      _isFollowing = !_isFollowing;
-      _badge.textContent = _isFollowing ? "✓" : "+";
-      _badge.title = _isFollowing ? "Following" : "Follow";
-      _badge.classList.toggle("is-following", _isFollowing);
-      await updateDoc(doc(db, "users", state.uid), {
-        following: _isFollowing ? arrayUnion(author.uid) : arrayRemove(author.uid),
-      }).catch(() => {});
-      await updateDoc(doc(db, "users", author.uid), {
-        followers: _isFollowing ? arrayUnion(state.uid) : arrayRemove(state.uid),
-      }).catch(() => {});
-      state.cache.users.delete(author.uid);
-      state.cache.users.delete(state.uid);
-      if (_isFollowing) {
-        writeNotif(author.uid, "follow", {}).catch(() => {});
-        import("./notifications.js").then(({ notifyUser }) =>
-          notifyUser(author.uid, state.me?.name || "Someone", "started following you", "/#profile/" + state.uid, state.me?.photoURL || "")
-        ).catch(() => {});
-      }
-      if (state.me) { state.me.following = _isFollowing ? [...(state.me.following||[]), author.uid] : (state.me.following||[]).filter((x)=>x!==author.uid); }
-    });
-    _igAvatarWrap = el("div", { class: "ig-avatar-wrap" }, _igRing, _badge);
-  } else {
-    _igAvatarWrap = el("div", { class: "ig-avatar-wrap" }, _igRing);
-  }
-
-  const _igHeaderText = el("div", { class: "ig-header-text" },
-    el("span", { class: "meta-name" },
-      author?.name || "User",
-      author?.verified ? el("span", { class: "verified", title: "Location verified", html: '<i class="ri-check-line"></i>' }) : null,
+  const head = el("div", { class: "post-head" },
+    el("img", { class: "avatar md", src: avatarFor(author), onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${author?.uid}`; } }),
+    el("div", { class: "meta", style: "cursor:pointer;", onclick: () => location.hash = `#post/${p.id}` },
+      el("div", { class: "name" },
+        author?.name || "User",
+        author?.verified ? el("span", { class: "verified", title: "Location verified", html: '<i class="ri-check-line"></i>' }) : null,
+      ),
+      el("div", { class: "sub" },
+        `@${author?.username || "user"}`,
+        el("span", { class: "dot" }, "·"),
+        fmtTime(p.createdAt),
+      )
     ),
-    el("span", { class: "meta-sub" }, `@${author?.username || "user"}`),
+    _songHeaderBadge(p.song),
+    !isMine ? (() => {
+      let _isFollowing = (state.me?.following || []).includes(author?.uid);
+      const fbtn = el("button", { class: `follow-btn${_isFollowing ? " following" : ""}` },
+        _isFollowing ? "Following" : "Follow");
+      fbtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        _isFollowing = !_isFollowing;
+        fbtn.textContent = _isFollowing ? "Following" : "Follow";
+        fbtn.classList.toggle("following", _isFollowing);
+        await updateDoc(doc(db, "users", state.uid), {
+          following: _isFollowing ? arrayUnion(author.uid) : arrayRemove(author.uid),
+        }).catch(() => {});
+        await updateDoc(doc(db, "users", author.uid), {
+          followers: _isFollowing ? arrayUnion(state.uid) : arrayRemove(state.uid),
+        }).catch(() => {});
+        // Keep caches for both profiles fresh so follower/following counts
+        // update immediately anywhere they're rendered without a full reload.
+        state.cache.users.delete(author.uid);
+        state.cache.users.delete(state.uid);
+        if (_isFollowing) {
+          writeNotif(author.uid, "follow", {}).catch(() => {});
+          import("./notifications.js").then(({ notifyUser }) =>
+            notifyUser(author.uid, state.me?.name || "Someone", "started following you", "/#profile/" + state.uid, state.me?.photoURL || "")
+          ).catch(() => {});
+        }
+        if (state.me) { state.me.following = _isFollowing ? [...(state.me.following||[]), author.uid] : (state.me.following||[]).filter((x)=>x!==author.uid); }
+      });
+      return fbtn;
+    })() : el("button", { class: "icon-btn more", onclick: async (e) => {
+      e.stopPropagation();
+      if (confirm("Delete this post?")) {
+        await deleteDoc(doc(db, "posts", p.id));
+        toast("Post deleted");
+      }
+    }}, el("i", { class: "ri-more-2-line" })),
   );
-
-  // Own posts: ⋯ delete menu. Others' posts: no right-side button (follow is on the avatar badge)
-  const _igMenuEl = isMine ? el("button", { class: "ig-menu-dot", onclick: async (e) => {
-    e.stopPropagation();
-    if (confirm("Delete this post?")) {
-      await deleteDoc(doc(db, "posts", p.id));
-      toast("Post deleted");
-    }
-  }}, "⋯") : null;
-
-  const head = el("div", { class: "ig-header" }, _igAvatarWrap, _igHeaderText, _songHeaderBadge(p.song), _igMenuEl);
   post.appendChild(head);
 
   if (p.location?.city || p.location?.lat) { post.appendChild(el("div", { class: "post-location-badge" }, el("i", { class: "ri-map-pin-fill" }), " " + (p.location.city || p.location.lat + ", " + p.location.lng))); }
@@ -1803,17 +1806,16 @@ const renderPost = (p, author, opts = {}) => {
     post.appendChild(el("div", { class: "post-feat-title", onclick: () => location.hash = `#post/${p.id}` }, p.title));
   }
 
-  // Caption is deferred — appended below the icon row per Instagram anatomy
-  let _captionBody = null;
   if (p.text) {
     if (p.text.includes("```")) {
-      const body = el("div", { class: "post-text-wrap" });
+      const body = el("div", { class: "post-text-wrap signal-thought", onclick: (e) => { if (!e.target.closest("button,a")) location.hash = `#post/${p.id}`; } });
       import("./features.js").then((m) => body.appendChild(m.renderTextWithCode(p.text))).catch(() => {
         body.innerHTML = linkify(p.text);
       });
-      _captionBody = body;
+      post.appendChild(body);
     } else {
-      const body = el("div", { class: "post-text" });
+      const isShortThought = p.text.length < 120;
+      const body = el("div", { class: `post-text signal-thought${isShortThought ? " short" : ""}` });
       const TRUNC_LEN = 280;
       if (!_detailView && p.text.length > TRUNC_LEN) {
         let expanded = false;
@@ -1827,100 +1829,317 @@ const renderPost = (p, author, opts = {}) => {
         paint();
       } else {
         body.innerHTML = linkify(p.text);
+        body.onclick = () => location.hash = `#post/${p.id}`;
       }
-      _captionBody = body;
+      post.appendChild(body);
     }
   }
 
-  // Media: full-width hero, capped at 500px (section 2 of spec)
+  // Media (single, grid, or carousel)
   const carousel = renderMediaCarousel(p.media, p.id, { detailView: _detailView, song: p.song });
-  if (carousel) {
-    const _igMedia = el("div", { class: "ig-media" });
-    _igMedia.appendChild(carousel);
-    post.appendChild(_igMedia);
-  }
+  if (carousel) post.appendChild(carousel);
 
   // Feature: extra detail block for build/project posts (stage, progress, tags, links)
   if (p.kind === "build" || p.kind === "project") {
     import("./features.js").then((m) => {
       const extra = p.kind === "build" ? m.renderBuildExtra(p) : m.renderProjectExtra(p);
-      const iconRow = post.querySelector(".ig-icon-row");
-      if (iconRow) post.insertBefore(extra, iconRow); else post.appendChild(extra);
+      const actions = post.querySelector(".post-actions");
+      if (actions) post.insertBefore(extra, actions); else post.appendChild(extra);
     }).catch(() => {});
   }
 
-  // ── Instagram icon row: orbit(♡) · comment(💬) · share(↗) · bookmark(🔖) ──
-  const _orbitIcon = el("i", { class: iOrbited ? "ri-fire-fill" : "ri-fire-line" });
-  const _orbitCountSpan = el("span", {}, String(p.orbitCount || 0));
+  // Actions row
+  const orbitIcon = el("i", { class: iOrbited ? "ri-fire-fill" : "ri-fire-line" });
+  const orbitCount = el("span", { text: String(p.orbitCount || 0) });
   let _iOrbited = iOrbited;
-  const _orbitActBtn = el("button", { class: `ig-act-btn${iOrbited ? " orbited" : ""}` }, _orbitIcon);
-  _orbitActBtn.addEventListener("click", async (e) => {
+  const orbitBtn = el("button", { class: `post-act orbit${iOrbited ? " active" : ""}`, onclick: async (e) => {
     e.stopPropagation();
     _iOrbited = !_iOrbited;
     if (_iOrbited) sfxOrbit();
-    _orbitIcon.className = _iOrbited ? "ri-fire-fill" : "ri-fire-line";
-    _orbitActBtn.classList.toggle("orbited", _iOrbited);
-    _orbitCountSpan.textContent = String((p.orbitCount || 0) + (_iOrbited ? 1 : -1));
+    orbitIcon.className = _iOrbited ? "ri-fire-fill" : "ri-fire-line";
+    orbitCount.textContent = String((p.orbitCount || 0) + (_iOrbited ? 1 : -1));
+    orbitBtn.classList.toggle("active", _iOrbited);
     await updateDoc(doc(db, "posts", p.id), {
       orbits: _iOrbited ? arrayUnion(state.uid) : arrayRemove(state.uid),
       orbitCount: increment(_iOrbited ? 1 : -1),
     }).catch(() => {});
+    // Send notification to post author when orbiting (not for own posts)
     if (_iOrbited && author?.uid && author.uid !== state.uid) {
-      writeNotif(author.uid, "orbit", { postId: p.id, text: `${state.me?.name || "Someone"} orbited your post` }).catch(() => {});
+      writeNotif(author.uid, "orbit", {
+        postId: p.id,
+        text: `${state.me?.name || "Someone"} orbited your post`,
+      }).catch(() => {});
       const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
       import("./notifications.js").then(({ notifyUser }) =>
         notifyUser(author.uid, state.me?.name || "Someone", "orbited your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
       ).catch(() => {});
     }
-  });
+  }}, orbitIcon, el("span", {}, "Orbit · "), orbitCount);
 
-  const _saveIcon = (state.me?.saved || []).includes(p.id) ? "ri-bookmark-fill" : "ri-bookmark-line";
-  const _bookmarkActBtn = el("button", { class: "ig-act-btn", onclick: (e) => { e.stopPropagation(); toggleSave(p.id); } },
-    el("i", { class: _saveIcon }),
+  const saveIcon = (state.me?.saved || []).includes(p.id) ? "ri-bookmark-fill" : "ri-bookmark-line";
+
+  const viewsBadge = el("span", { class: "post-act post-views", title: "Views" },
+    el("i", { class: "ri-eye-line" }),
+    " " + String(p.views || 0),
   );
 
-  post.appendChild(el("div", { class: "ig-icon-row" },
-    _orbitActBtn,
-    el("button", { class: "ig-act-btn", onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; } },
-      el("i", { class: "ri-chat-1-line" }),
+  const actions = el("div", { class: "post-actions" },
+    el("div", { class: "post-actions-left" },
+      el("button", { class: "post-act", onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; }},
+        el("i", { class: "ri-chat-1-line" }),
+        String(p.commentCount || 0),
+      ),
+      el("button", { class: "post-act", onclick: async (e) => {
+        e.stopPropagation();
+        const url = `${location.origin}${location.pathname}#post/${p.id}`;
+        try { await navigator.share?.({ title: "Orbit", text: p.text || "Check this out", url }); }
+        catch { await navigator.clipboard.writeText(url); toast("Link copied"); }
+      }},
+        el("i", { class: "ri-share-forward-line" }),
+        "Share",
+      ),
+      el("button", { class: "post-act", onclick: (e) => { e.stopPropagation(); toggleSave(p.id); } },
+        el("i", { class: saveIcon }),
+      ),
     ),
-    el("button", { class: "ig-act-btn", onclick: async (e) => {
-      e.stopPropagation();
-      const url = `${location.origin}${location.pathname}#post/${p.id}`;
-      try { await navigator.share?.({ title: "Orbit", text: p.text || "Check this out", url }); }
-      catch { await navigator.clipboard.writeText(url); toast("Link copied"); }
-    }}, el("i", { class: "ri-share-forward-line" })),
-    el("span", { class: "spacer" }),
-    _bookmarkActBtn,
-  ));
-
-  // ── ig-likes · ig-caption · ig-comments-link · ig-timestamp ─────────────
-  post.appendChild(el("div", { class: "ig-likes" }, _orbitCountSpan, " orbits"));
-
-  // Caption: bolded author name inline with post text (Instagram anatomy)
-  if (_captionBody || _detailView) {
-    const _igCaption = el("div", { class: "ig-caption",
-      onclick: (e) => { if (!e.target.closest("button,a")) location.hash = `#post/${p.id}`; },
-    });
-    _igCaption.appendChild(el("span", { class: "meta-name" }, author?.name || "User"));
-    if (_captionBody) {
-      _igCaption.appendChild(document.createTextNode(" "));
-      _igCaption.appendChild(_captionBody);
-    }
-    post.appendChild(_igCaption);
-  }
+    el("div", { class: "post-actions-right" },
+      viewsBadge,
+      orbitBtn,
+    ),
+  );
+  post.appendChild(actions);
 
   if (!hideComments) {
-    const _cCount = p.commentCount || 0;
-    if (_cCount > 0) {
-      post.appendChild(el("div", { class: "ig-comments-link",
-        onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; },
-      }, `View all ${_cCount} comments`));
-    }
+    // Comments preview (top 5)
+    const cBox = el("div", { class: "comments hidden" });
+    post.appendChild(cBox);
+
+    // Track reply state
+    let _replyTo = null; // { uid, name }
+
+    const replyBanner = el("div", { class: "reply-banner hidden" },
+      el("span", { class: "reply-banner-text" }, ""),
+      el("button", { class: "reply-cancel-btn", onclick: () => {
+        _replyTo = null;
+        replyBanner.classList.add("hidden");
+        cForm.querySelector("input").placeholder = "Add your echo…";
+        cForm.querySelector("input").value = "";
+      }}, el("i", { class: "ri-close-line" })),
+    );
+    post.appendChild(replyBanner);
+
+    // ── Comment media + voice-note state ────────────────────────
+    let _cmtMediaFile = null;
+    let _cmtAudioBlob = null;
+    let _cmtRecorder  = null;
+    let _cmtRecording = false;
+
+    const cmtMediaInput = el("input", { type: "file", accept: "image/*,video/*" });
+    cmtMediaInput.style.display = "none";
+    post.appendChild(cmtMediaInput);
+
+    const cmtAttachPreview = el("div", { class: "cmt-attach-preview hidden" });
+    post.appendChild(cmtAttachPreview);
+
+    const clearCmtAttach = () => {
+      _cmtMediaFile = null; _cmtAudioBlob = null;
+      cmtAttachPreview.innerHTML = ""; cmtAttachPreview.classList.add("hidden");
+    };
+
+    const showCmtMediaPreview = (file) => {
+      cmtAttachPreview.innerHTML = ""; cmtAttachPreview.classList.remove("hidden");
+      const isVideo = file.type.startsWith("video");
+      const url = URL.createObjectURL(file);
+      const thumb = isVideo
+        ? el("video", { src: url, muted: "", preload: "metadata", style: "width:72px;height:72px;object-fit:cover;border-radius:10px;display:block;" })
+        : el("img",  { src: url, style: "width:72px;height:72px;object-fit:cover;border-radius:10px;display:block;" });
+      const rmBtn = el("button", { type: "button", class: "cmt-attach-remove",
+        html: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` });
+      rmBtn.addEventListener("click", clearCmtAttach);
+      cmtAttachPreview.appendChild(el("div", { class: "cmt-attach-thumb" }, thumb, rmBtn));
+    };
+
+    const showCmtAudioPreview = (blob) => {
+      cmtAttachPreview.innerHTML = ""; cmtAttachPreview.classList.remove("hidden");
+      const url = URL.createObjectURL(blob);
+      const audio = el("audio", { src: url, controls: true, style: "height:28px;max-width:160px;" });
+      const rmBtn = el("button", { type: "button", class: "cmt-attach-remove",
+        html: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` });
+      rmBtn.addEventListener("click", clearCmtAttach);
+      cmtAttachPreview.appendChild(el("div", { class: "cmt-attach-audio" }, audio, rmBtn));
+    };
+
+    cmtMediaInput.addEventListener("change", (e) => {
+      const file = e.target.files?.[0]; if (!file) return;
+      _cmtMediaFile = file; _cmtAudioBlob = null;
+      showCmtMediaPreview(file); cmtMediaInput.value = "";
+    });
+
+    // Media button (image/video)
+    const cmtMediaBtn = el("button", {
+      type: "button", class: "icon-btn cmt-icon-btn", title: "Add photo or video",
+      html: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`,
+    });
+    cmtMediaBtn.addEventListener("click", (e) => { e.stopPropagation(); cmtMediaInput.click(); });
+
+    // Mic button (voice note)
+    const SVG_MIC  = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`;
+    const SVG_STOP = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>`;
+    const cmtMicBtn = el("button", { type: "button", class: "icon-btn cmt-icon-btn", title: "Record voice note", html: SVG_MIC });
+    cmtMicBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (_cmtRecording) { _cmtRecorder?.stop(); return; }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const chunks = [];
+        _cmtRecorder = new MediaRecorder(stream);
+        _cmtRecorder.ondataavailable = (ev) => { if (ev.data.size > 0) chunks.push(ev.data); };
+        _cmtRecorder.onstop = () => {
+          stream.getTracks().forEach((t) => t.stop());
+          _cmtAudioBlob = new Blob(chunks, { type: "audio/webm" });
+          _cmtMediaFile = null; _cmtRecording = false;
+          cmtMicBtn.innerHTML = SVG_MIC; cmtMicBtn.style.color = ""; cmtMicBtn.classList.remove("recording");
+          showCmtAudioPreview(_cmtAudioBlob);
+        };
+        _cmtRecorder.start(); _cmtRecording = true;
+        cmtMicBtn.innerHTML = SVG_STOP; cmtMicBtn.style.color = "var(--danger)"; cmtMicBtn.classList.add("recording");
+        clearCmtAttach();
+      } catch { toast("Microphone access denied"); }
+    });
+
+    const cForm = el("form", { class: "comment-form" });
+    const cFormRow = el("div", { class: "comment-form-row" },
+      el("img", { class: "avatar xs", src: avatarFor(state.me), style: "cursor:pointer;", onclick: () => location.hash = `#profile/${state.uid}` }),
+      el("input", { type: "text", placeholder: "Add your echo…" }),
+      cmtMediaBtn,
+      cmtMicBtn,
+      el("button", { class: "icon-btn", type: "submit" }, el("i", { class: "ri-send-plane-fill" })),
+    );
+    cForm.appendChild(cFormRow);
+
+    cForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const input = cForm.querySelector("input");
+      const text = input.value.trim();
+      if (!text && !_cmtMediaFile && !_cmtAudioBlob) return;
+      const submitBtn = cForm.querySelector("button[type='submit']");
+      submitBtn.disabled = true;
+      const commentData = {
+        text: text || "", authorUid: state.uid, createdAt: serverTimestamp(), likes: [],
+        ..._replyTo ? { replyToUid: _replyTo.uid, replyToName: _replyTo.name, replyToUsername: _replyTo.username } : {},
+      };
+      try {
+        if (_cmtMediaFile) {
+          const kind = _cmtMediaFile.type.startsWith("video") ? "video" : "image";
+          const up = await uploadToCloudinary(_cmtMediaFile, kind);
+          commentData.mediaUrl = up.url; commentData.mediaType = kind;
+        } else if (_cmtAudioBlob) {
+          const audioFile = new File([_cmtAudioBlob], "voice.webm", { type: "audio/webm" });
+          const up = await uploadToCloudinary(audioFile, "video");
+          commentData.audioUrl = up.url;
+        }
+      } catch { toast("Media upload failed"); submitBtn.disabled = false; return; }
+      input.value = ""; _replyTo = null;
+      replyBanner.classList.add("hidden"); input.placeholder = "Add your echo…";
+      clearCmtAttach();
+      // Optimistic UI
+      cBox.classList.remove("hidden");
+      cBox.appendChild(el("div", { class: "comment" },
+        el("img", { class: "avatar xs", src: avatarFor(state.me), onclick: () => location.hash = `#profile/${state.uid}` }),
+        el("div", { class: "body" },
+          el("div", { class: "name" }, state.me?.name || "User"),
+          commentData.text ? el("div", { class: "text", text: commentData.text }) : null,
+        ),
+      ));
+      sfxComment();
+      submitBtn.disabled = false;
+      await addDoc(collection(db, "posts", p.id, "comments"), commentData);
+      await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
+      const notifSnippet = commentData.text ? `"${commentData.text.slice(0, 60)}"` : commentData.mediaType ? "📷 sent a photo" : "🎙️ sent a voice note";
+      if (author?.uid && author.uid !== state.uid) {
+        writeNotif(author.uid, "comment", { postId: p.id, text: `${state.me?.name || "Someone"} commented: ${notifSnippet}` }).catch(() => {});
+        const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
+        import("./notifications.js").then(({ notifyUser }) =>
+          notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
+        ).catch(() => {});
+      }
+      if (commentData.replyToUid && commentData.replyToUid !== state.uid && commentData.replyToUid !== author?.uid) {
+        writeNotif(commentData.replyToUid, "commentReply", { postId: p.id, text: `${state.me?.name || "Someone"} replied to your comment: ${notifSnippet}` }).catch(() => {});
+        import("./notifications.js").then(({ notifyUser }) =>
+          notifyUser(commentData.replyToUid, state.me?.name || "Someone", "replied to your comment", "/#post/" + p.id, state.me?.photoURL || "")
+        ).catch(() => {});
+      }
+    });
+    post.appendChild(cForm);
+
+    const renderFeedComment = (c, a) => {
+      const isLiked = (c.likes || []).includes(state.uid);
+      const likeCountEl = el("span", { text: String((c.likes || []).length || "") });
+      const likeIconEl = el("i", { class: isLiked ? "ri-heart-fill" : "ri-heart-line", style: isLiked ? "color:var(--danger);" : "" });
+      let _liked = isLiked;
+      const likeBtn = el("button", { class: "cmt-like-btn", onclick: async (e) => {
+        e.stopPropagation();
+        _liked = !_liked;
+        likeIconEl.className = _liked ? "ri-heart-fill" : "ri-heart-line";
+        likeIconEl.style.color = _liked ? "var(--danger)" : "";
+        const newCount = (c.likes?.length || 0) + (_liked ? 1 : -1);
+        likeCountEl.textContent = newCount > 0 ? String(newCount) : "";
+        await updateDoc(doc(db, "posts", p.id, "comments", c.id), {
+          likes: _liked ? arrayUnion(state.uid) : arrayRemove(state.uid),
+        }).catch(() => {});
+        if (_liked && a?.uid && a.uid !== state.uid) {
+          writeNotif(a.uid, "commentLike", { postId: p.id, text: `${state.me?.name || "Someone"} liked your comment` }).catch(() => {});
+          import("./notifications.js").then(({ notifyUser }) =>
+            notifyUser(a.uid, state.me?.name || "Someone", "liked your comment", "/#post/" + p.id, state.me?.photoURL || "")
+          ).catch(() => {});
+        }
+      }}, likeIconEl, likeCountEl);
+
+      const replyBtn = el("button", { class: "cmt-reply-btn", onclick: () => {
+        _replyTo = { uid: a?.uid, name: a?.name || "user", username: a?.username || "" };
+        replyBanner.querySelector(".reply-banner-text").textContent = `Replying to @${a?.username || a?.name || "user"}`;
+        replyBanner.classList.remove("hidden");
+        cForm.querySelector("input").placeholder = `Reply to @${a?.username || a?.name || "user"}…`;
+        cForm.querySelector("input").focus();
+      }}, "Reply");
+
+      return el("div", { class: "comment" },
+        el("img", { class: "avatar xs", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
+        el("div", { class: "body" },
+          el("div", { class: "name" }, a?.name || "User",
+            a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null),
+          (c.replyToUsername || c.replyToName) ? el("div", { class: "reply-to-label" }, el("i", { class: "ri-corner-down-right-line" }), el("a", { class: "mention", href: `#profile-u/${c.replyToUsername || c.replyToName}` }, `@${c.replyToUsername || c.replyToName}`)) : null,
+          c.text ? el("div", { class: "text", text: c.text }) : null,
+          c.mediaUrl ? el("div", { class: "cmt-media", onclick: (e) => { e.stopPropagation(); c.mediaType === "video" ? openVideoViewer([{ type: "video", url: c.mediaUrl }], 0) : openImageZoom(c.mediaUrl); }},
+            c.mediaType === "video"
+              ? el("div", { class: "cmt-media-video-wrap" },
+                  el("video", { src: c.mediaUrl, muted: "", preload: "metadata", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;" }),
+                  el("div", { class: "cmt-media-video-play", html: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>` }),
+                )
+              : el("img", { src: c.mediaUrl, loading: "lazy", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;" }),
+          ) : null,
+          c.audioUrl ? el("div", { class: "cmt-voice-note" },
+            el("span", { html: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>` }),
+            el("audio", { src: c.audioUrl, controls: true, style: "height:28px;max-width:150px;" }),
+          ) : null,
+          el("div", { class: "cmt-meta-row" }, replyBtn, likeBtn),
+        ),
+      );
+    };
+
+    onSnapshot(query(collection(db, "posts", p.id, "comments"), orderBy("createdAt", "desc"), limit(5)),
+      async (snap) => {
+        cBox.innerHTML = "";
+        if (snap.empty) { cBox.classList.add("hidden"); return; }
+        cBox.classList.remove("hidden");
+        const comments = snap.docs.map((d) => ({ id: d.id, ...d.data() })).reverse();
+        const authors = await Promise.all([...new Set(comments.map((c) => c.authorUid))].map(fetchUser));
+        const map = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
+        comments.forEach((c) => cBox.appendChild(renderFeedComment(c, map[c.authorUid])));
+      });
+
+    post._focusComment = () => cForm.querySelector("input").focus();
   }
-
-  post.appendChild(el("div", { class: "ig-timestamp" }, fmtTime(p.createdAt)));
-
   return post;
 };
 
@@ -2015,104 +2234,6 @@ const _injectTwCmtStyles = (() => {
   };
 })();
 
-// =========================================================================
-// COMMENT BOTTOM SHEET — opens over the current feed, not a new page.
-// Triggered by the comment icon on any post in the trail feed.
-// =========================================================================
-const openCommentSheet = (postId, post, me) => {
-  // Simple relative-time helper (no dependency needed)
-  const _ago = (date) => {
-    const s = Math.floor((Date.now() - date) / 1000);
-    if (s < 60) return `${s}s`;
-    if (s < 3600) return `${Math.floor(s / 60)}m`;
-    if (s < 86400) return `${Math.floor(s / 3600)}h`;
-    return `${Math.floor(s / 86400)}d`;
-  };
-
-  const overlay = el("div", { class: "comment-sheet-overlay" });
-  const sheet   = el("div", { class: "comment-sheet" });
-  overlay.appendChild(sheet);
-  document.body.appendChild(overlay);
-
-  sheet.appendChild(el("div", { class: "comment-sheet-handle" }));
-  sheet.appendChild(el("div", { class: "comment-sheet-title" }, "Comments"));
-
-  const cList = el("div", { class: "comment-list" });
-  sheet.appendChild(cList);
-
-  const _renderSheetComment = (c, a) => {
-    const timeStr = c.createdAt?.toDate ? _ago(c.createdAt.toDate()) : "";
-    const likeCount = (c.likes || []).length;
-    return el("div", { class: "comment-bubble-row" },
-      el("img", {
-        class: "comment-avatar",
-        src: avatarFor(a),
-        onclick: () => { close(); location.hash = `#profile/${a?.uid}`; },
-      }),
-      el("div", { class: "comment-bubble" },
-        el("span", { class: "comment-name" }, a?.name || "User"),
-        el("span", { class: "comment-text" }, c.text || ""),
-        el("div", { class: "comment-meta" },
-          el("span", {}, timeStr),
-          el("span", { class: "comment-like" }, `♡ ${likeCount || 0}`),
-          el("span", {}, "Reply"),
-        ),
-      ),
-    );
-  };
-
-  // Real-time listener — newest 50 comments ascending
-  const _unsub = onSnapshot(
-    query(collection(db, "posts", postId, "comments"), orderBy("createdAt", "asc"), limit(50)),
-    async (snap) => {
-      cList.innerHTML = "";
-      if (snap.empty) return;
-      const comments = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      const uids = [...new Set(comments.map((c) => c.authorUid))];
-      const authors = await Promise.all(uids.map(fetchUser));
-      const authorMap = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
-      comments.forEach((c) => cList.appendChild(_renderSheetComment(c, authorMap[c.authorUid])));
-      cList.scrollTop = cList.scrollHeight;
-    },
-  );
-
-  // Input bar — text-only, matching spec
-  const myAvatar = el("img", { class: "comment-avatar-small", src: avatarFor(me) });
-  const input    = el("input", { class: "comment-input", placeholder: "Add a comment..." });
-  const sendBtn  = el("span",  { class: "comment-send" }, "➤");
-
-  const _submit = async () => {
-    const text = input.value.trim();
-    if (!text || !state.uid) return;
-    input.value = "";
-    await addDoc(collection(db, "posts", postId, "comments"), {
-      text,
-      authorUid: state.uid,
-      createdAt: serverTimestamp(),
-      likes: [],
-    }).catch(() => {});
-    await updateDoc(doc(db, "posts", postId), { commentCount: increment(1) }).catch(() => {});
-  };
-
-  input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); _submit(); } });
-  sendBtn.addEventListener("click", _submit);
-
-  sheet.appendChild(el("div", { class: "comment-input-bar" }, myAvatar, input, sendBtn));
-
-  // Dismiss: tap overlay background
-  const close = () => { _unsub(); overlay.remove(); };
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
-
-  // Dismiss: swipe-down on the sheet
-  let _swipeStartY = 0;
-  sheet.addEventListener("touchstart", (e) => { _swipeStartY = e.touches[0].clientY; }, { passive: true });
-  sheet.addEventListener("touchend", (e) => {
-    if (e.changedTouches[0].clientY - _swipeStartY > 80) close();
-  }, { passive: true });
-
-  requestAnimationFrame(() => input.focus());
-};
-
 const renderPostDetail = async (root, postId) => {
   _injectTwCmtStyles();
   if (!postId) { location.hash = "#feed"; return; }
@@ -2142,7 +2263,7 @@ const renderPostDetail = async (root, postId) => {
   const cmtSection = el("div", { class: "detail-comments" });
   root.appendChild(cmtSection);
 
-  const cmtHead = el("div", { class: "detail-cmt-head" }, "Comments");
+  const cmtHead = el("div", { class: "detail-cmt-head" }, "Echoes");
   cmtSection.appendChild(cmtHead);
 
   const cList = el("div", { class: "detail-cmt-list" });
@@ -2163,7 +2284,7 @@ const renderPostDetail = async (root, postId) => {
     _detailReplyTo = null;
     detailReplyBanner.classList.add("hidden");
     const inp = cmtSection.querySelector("input[type='text']");
-    if (inp) { inp.placeholder = "Write a comment…"; inp.value = ""; }
+    if (inp) { inp.placeholder = "Add your echo…"; inp.value = ""; }
   }}, el("i", { class: "ri-close-line" }));
   detailReplyBanner.appendChild(_replyBannerClose);
   cmtSection.appendChild(detailReplyBanner);
@@ -2365,7 +2486,7 @@ const renderPostDetail = async (root, postId) => {
   cForm.appendChild(dCmtAttachPreview);
   const dFormRow = el("div", { class: "comment-form-row" },
     el("img", { class: "avatar xs", src: avatarFor(state.me), style: "cursor:pointer;", onclick: () => location.hash = `#profile/${state.uid}` }),
-    el("input", { type: "text", placeholder: "Write a comment…" }),
+    el("input", { type: "text", placeholder: "Add your echo…" }),
     dCmtMediaBtn,
     dCmtMicBtn,
     el("button", { class: "icon-btn", type: "submit" }, el("i", { class: "ri-send-plane-fill" })),
@@ -2395,7 +2516,7 @@ const renderPostDetail = async (root, postId) => {
       }
     } catch { toast("Media upload failed"); submitBtn.disabled = false; return; }
     input.value = ""; _detailReplyTo = null;
-    detailReplyBanner.classList.add("hidden"); input.placeholder = "Write a comment…";
+    detailReplyBanner.classList.add("hidden"); input.placeholder = "Add your echo…";
     clearDCmtAttach(); sfxComment(); submitBtn.disabled = false;
     await addDoc(collection(db, "posts", p.id, "comments"), commentData);
     await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
@@ -3040,6 +3161,7 @@ const openCompose = (which = "group") => {
 // instead of the group/build/project modal above.
 $("#composeBtn")?.addEventListener("click", () => openCreatePost());
 $("#composeBtnMobile")?.addEventListener("click", () => openCreatePost());
+$("#topbarComposeBtn")?.addEventListener("click", () => openCreatePost());
 $$(".ct").forEach((b) => b.addEventListener("click", () => openCompose(b.dataset.ctab)));
 
 document.addEventListener("click", (e) => {

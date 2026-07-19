@@ -44,7 +44,7 @@ html[data-theme="dark"] {
   --text: #f1f1f5;
   --text-dim: #a1a1ad;
   --text-mute: #6a6a78;
-  --primary: #0ea5e9;
+  --primary: #8b6cff;
   --primary-ink: #ffffff;
   --danger: #ff5c7a;
   --warn: #ffb04a;
@@ -65,7 +65,7 @@ html[data-theme="light"] {
   --text: #15151b;
   --text-dim: #5e5e6a;
   --text-mute: #9a9aa6;
-  --primary: #0284c7;
+  --primary: #6c4cff;
   --primary-ink: #ffffff;
   --danger: #e63a5f;
   --warn: #d3801a;
@@ -310,7 +310,8 @@ textarea { resize: vertical; min-height: 80px; }
   transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
   will-change: transform;
 }
-.bottomnav.bn-hidden {
+.bottomnav.bn-hidden,
+.bottomnav.detail-hidden {
   transform: translateY(100%);
 }
 .bottomnav .bn { width: 100%; height: 100%; color: var(--text-dim); display: grid; place-items: center; font-size: 22px; }
@@ -343,14 +344,18 @@ textarea { resize: vertical; min-height: 80px; }
 /* ============================================================ */
 .feed-wrap { max-width: var(--max-feed); margin: 0 auto; }
 
-.composer-stub {
-  display: flex; align-items: center; gap: 12px;
-  padding: 14px 16px; border-bottom: 1px solid var(--line);
+/* Topbar compose (feather) button */
+.topbar-compose-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; border-radius: 50%;
+  color: var(--text-dim);
+  transition: background var(--speed), color var(--speed);
 }
-.composer-stub button {
-  flex: 1; text-align: left; color: var(--text-mute); padding: 10px 14px;
-  background: var(--bg-elev-2); border-radius: var(--radius-pill);
+.topbar-compose-btn:hover {
+  background: var(--hover);
+  color: var(--primary);
 }
+.topbar-compose-btn i { font-size: 19px; }
 
 /* Trending lane (posts highlighted by Orbit reaction) */
 .trending-lane {
@@ -386,34 +391,188 @@ textarea { resize: vertical; min-height: 80px; }
 .trending-card .t-text { font-size: 14px; color: var(--text); line-height: 1.45; max-height: 4.4em; overflow: hidden; }
 .trending-card .t-meta { color: var(--text-mute); font-size: 12px; display: flex; align-items: center; gap: 6px; }
 
-/* ── X / Twitter-style post layout ── */
-.post {
-  display: flex;
-  gap: 10px;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--line);
-  position: relative;
-  align-items: flex-start;
-}
-.post.is-trending::after { display: none; }
-/* Left avatar column */
-.post-avatar-col {
-  flex-shrink: 0;
+/* ════════════════════════════════════════════════════════════════
+   SIGNAL POST LAYOUT — Zero chrome, thought-first, author chip below
+   ════════════════════════════════════════════════════════════════ */
+.post { position: relative; }
+
+/* Signal layout */
+.signal-post {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  padding-top: 2px;
+  padding: 22px 20px 18px;
+  cursor: pointer;
+  transition: background 0.12s;
 }
-.post-avatar-col .avatar { width: 36px !important; height: 36px !important; }
-/* Right body column */
-.post-body-col {
+.signal-post:active { background: rgba(255,255,255,.02); }
+
+/* ── Thought text — BIG, display font, comes first ── */
+.signal-post .post-text,
+.signal-post .post-text-wrap,
+.signal-thought {
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1.38;
+  letter-spacing: -0.022em;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-bottom: 14px;
+  order: 2;
+}
+.signal-thought.short,
+.signal-post .post-text.short { font-size: 26px; }
+
+/* ── Kind badge + feat title — before text ── */
+.signal-post .post-kind-badge { order: 0; margin-bottom: 6px; }
+.signal-post .post-feat-title {
+  order: 1;
+  font-size: 17px; font-weight: 700;
+  font-family: var(--font-display);
+  margin-bottom: 8px; cursor: pointer;
+}
+
+/* ── Location badge ── */
+.signal-post .post-location-badge { order: 3; margin: -8px 0 10px; font-size: 12px; }
+
+/* ── Media — full-bleed, edge to edge ── */
+.signal-post .post-media {
+  order: 4;
+  margin: 0 -20px 16px;
+  border-radius: 0;
+  overflow: hidden;
+  background: var(--bg-elev-2);
+  position: relative;
+}
+.signal-post .post-media img {
+  width: 100%; display: block;
+  max-height: 420px;
+  object-fit: cover;
+}
+.signal-post .post-media .vid-player { border-radius: 0; }
+.signal-post .post-media .vid-player video { max-height: 420px; object-fit: cover; display: block; }
+.signal-post .post-media.carousel { border-radius: 0; }
+.signal-post .post-media .carousel-slide img,
+.signal-post .post-media .carousel-slide video { border-radius: 0; max-height: 420px; }
+
+/* ── Author chip — small, below text ── */
+.signal-post .post-head {
+  order: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  flex-wrap: nowrap;
+}
+.signal-post .post-head .avatar {
+  width: 22px !important;
+  height: 22px !important;
+  border: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.signal-post .post-head .meta {
+  display: flex;
+  align-items: center;
+  gap: 0;
   flex: 1;
   min-width: 0;
 }
+.signal-post .post-head .name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.signal-post .post-head .name .verified { width: 13px; height: 13px; font-size: 9px; }
+.signal-post .post-head .sub {
+  font-size: 12px;
+  color: var(--text-mute);
+  display: flex;
+  gap: 3px;
+  margin-top: 0;
+  margin-left: 6px;
+  flex-wrap: nowrap;
+}
+.signal-post .post-head .sub .dot { color: var(--text-mute); }
+/* Hide follow button — follow from their profile */
+.signal-post .follow-btn { display: none; }
+/* Keep delete (more) btn but subtle */
+.signal-post .post-head .more {
+  margin-left: auto;
+  flex-shrink: 0;
+  width: 28px; height: 28px;
+  opacity: 0.45;
+}
+
+/* ── Song badge in head — keep small ── */
+.signal-post .post-head .song-badge { font-size: 11px; }
+
+/* ── Actions row — compact, after author ── */
+.signal-post .post-actions {
+  order: 6;
+  display: flex; align-items: center; gap: 2px;
+  color: var(--text-mute);
+  margin-top: 10px;
+  flex-wrap: nowrap;
+}
+.signal-post .post-actions-left {
+  display: flex; align-items: center; gap: 0;
+  min-width: 0;
+}
+.signal-post .post-actions-right {
+  display: flex; align-items: center; gap: 0;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.signal-post .post-act {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 6px 8px; border-radius: var(--radius-pill); font-size: 12px;
+  transition: background var(--speed), color var(--speed);
+  flex-shrink: 0; white-space: nowrap;
+  color: var(--text-mute);
+}
+.signal-post .post-act:hover { background: var(--hover); color: var(--text-dim); }
+.signal-post .post-act i { font-size: 15px; }
+.signal-post .post-act.orbit { color: var(--text-mute); }
+.signal-post .post-act.orbit.active {
+  color: var(--primary);
+  background: none;
+}
+.signal-post .post-act.orbit.active i { animation: pop var(--speed) var(--ease); }
+.signal-post .post-views { cursor: default; font-size: 11px; }
+.signal-post .post-views:hover { background: none; }
+
+/* ── Comments (echoes) ── */
+.signal-post .comments { order: 7; margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.signal-post .reply-banner { order: 8; }
+.signal-post .cmt-attach-preview { order: 9; }
+.signal-post input[type="file"] { order: 20; }
+
+/* ── Signal orbit-icon divider between posts ── */
+.signal-divider {
+  display: flex; align-items: center;
+  margin: 0 20px;
+}
+.signal-divider::before,
+.signal-divider::after {
+  content: ""; flex: 1; height: 1px; background: var(--line);
+}
+.signal-divider-icon {
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; color: var(--text-mute);
+}
+
+/* Fallback for non-signal posts (profile grid, detail, etc.) */
+.post-avatar-col {
+  flex-shrink: 0;
+  display: flex; flex-direction: column; align-items: center; padding-top: 2px;
+}
+.post-body-col { flex: 1; min-width: 0; }
 .post-head {
   display: flex; align-items: flex-start; gap: 6px;
-  margin-bottom: 4px;
-  flex-wrap: nowrap;
+  margin-bottom: 4px; flex-wrap: nowrap;
 }
 .post-head .meta { flex: 1; min-width: 0; cursor: pointer; }
 .post-head .name {
@@ -438,43 +597,23 @@ textarea { resize: vertical; min-height: 80px; }
 .post-views { cursor: default; }
 .post-views:hover { background: none; color: var(--text-dim); }
 .post-media {
-  margin: 8px 0;
-  border-radius: 14px;
-  overflow: hidden;
-  background: var(--bg-elev-2);
-  position: relative;
+  margin: 8px 0; border-radius: 14px; overflow: hidden;
+  background: var(--bg-elev-2); position: relative;
 }
-.post-media img {
-  width: 100%; display: block;
-  max-height: 520px;
-  object-fit: cover;
-}
-
-/* Feed video — contained, cover */
+.post-media img { width: 100%; display: block; max-height: 520px; object-fit: cover; }
 .post-media .vid-player { width: 100%; border-radius: 14px; overflow: hidden; }
 .post-media .vid-player video { width: 100%; max-height: 520px; object-fit: cover; display: block; }
-
 .post-actions {
   display: flex; align-items: center; gap: 4px;
-  color: var(--text-dim);
-  flex-wrap: nowrap;
+  color: var(--text-dim); flex-wrap: nowrap;
 }
-.post-actions-left {
-  display: flex; align-items: center; gap: 4px;
-  min-width: 0;
-  overflow: hidden;
-}
-.post-actions-right {
-  display: flex; align-items: center; gap: 2px;
-  margin-left: auto;
-  flex-shrink: 0;
-}
+.post-actions-left { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; }
+.post-actions-right { display: flex; align-items: center; gap: 2px; margin-left: auto; flex-shrink: 0; }
 .post-act {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 8px 10px; border-radius: var(--radius-pill); font-size: 13px;
   transition: background var(--speed), color var(--speed), transform var(--speed);
-  flex-shrink: 0;
-  white-space: nowrap;
+  flex-shrink: 0; white-space: nowrap;
 }
 .post-act:hover { background: var(--hover); color: var(--text); }
 .post-act i { font-size: 18px; }
@@ -486,6 +625,7 @@ textarea { resize: vertical; min-height: 80px; }
 .post-act.orbit.active i { animation: pop var(--speed) var(--ease); }
 @keyframes pop { 0% { transform: scale(.8); } 60% { transform: scale(1.25); } 100% { transform: scale(1); } }
 @media (max-width: 420px) {
+  .signal-post .post-act { padding: 6px 6px; gap: 3px; }
   .post-act { padding: 8px 7px; gap: 4px; }
   .post-views { margin-left: 2px; }
 }
@@ -599,7 +739,7 @@ textarea { resize: vertical; min-height: 80px; }
   .detail-cmt-form { left: 72px; right: 0; }
 }
 @media (max-width: 640px) {
-  .detail-cmt-form { left: 0; right: 0; bottom: var(--bottomnav-h); }
+  .detail-cmt-form { left: 0; right: 0; bottom: 0; }
 }
 
 /* ============================================================ */
@@ -2527,53 +2667,8 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .ob-next-btn:active { transform: scale(.97); }
 
 /* ============================================================ */
-/* FEED FILTER TABS — For You | Mutuals                          */
+/* MUTUALS — Daily / All-Time Mutual Cards (profile tab only)    */
 /* ============================================================ */
-.feed-filter-tabs {
-  display: flex;
-  border-bottom: 1px solid var(--line);
-  margin: 0 -1px;
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  background: var(--bg);
-}
-
-.feed-filter-tab {
-  flex: 1;
-  padding: 13px 8px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-mute);
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  cursor: pointer;
-  transition: color var(--speed), border-color var(--speed);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-
-.feed-filter-tab:hover {
-  color: var(--text);
-  background: var(--hover);
-}
-
-.feed-filter-tab.active {
-  color: var(--primary);
-  border-bottom-color: var(--primary);
-}
-
-.feed-filter-tab i { font-size: 15px; }
-
-/* ============================================================ */
-/* MUTUALS — Daily / All-Time Mutual Cards                        */
-/* ============================================================ */
-.mutuals-feed-panel {
-  padding: 4px 0;
-}
 
 .mutuals-date-badge {
   display: flex;
@@ -3061,992 +3156,4 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 
 @media (max-width: 480px) {
   .cr-stage { width: 100%; border-radius: 0; aspect-ratio: 9/16; }
-}
-
-/* ================================================================
-   ORBIT V2 — UI/UX Improvements
-   All rules in this block intentionally cascade over earlier
-   declarations. Sections map to the 9-point brief.
-   ================================================================ */
-
-/* ── 1. Accent colour already set via --primary token above.
-        Keep the purple/pink gradient ONLY for logo mark, boot
-        splash, auth background, onboarding CTAs, and the
-        trending-card border glow — everywhere else goes to
-        the electric-blue primary.                               ── */
-
-/* Restore gradient to elements that deserve it (overrides any
-   accidental cascade loss from the primary change).            */
-.boot-name,
-.auth-brand h1,
-.brand-name {
-  background: linear-gradient(135deg, var(--grad-1), var(--grad-2), var(--grad-3));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-/* Orbit logo mark stays purple/pink — it is the brand mark */
-.orbit-mark {
-  background: linear-gradient(135deg, var(--grad-1), var(--grad-2));
-}
-/* Onboarding CTA stays gradient — earned accent */
-.ob-next-btn {
-  background: linear-gradient(135deg, var(--grad-1), var(--grad-2));
-}
-/* Verified badge keeps the gradient ring */
-.verified {
-  background: linear-gradient(135deg, var(--grad-1), var(--grad-3));
-}
-/* Bottomnav compose FAB: accent blue, not purple */
-.bottomnav .compose {
-  background: var(--primary);
-  box-shadow: 0 10px 22px rgba(14, 165, 233, 0.35);
-}
-/* Notification badge stays danger red — already correct */
-
-/* ── 2. Orbit Trail Feed Layout ─────────────────────────────────
-        Replace card-box feel with a continuous threaded trail:
-        gradient line down the left, avatars as circular nodes,
-        hairline separators only, tighter vertical rhythm.       */
-
-/* Trail line — runs through the avatar column of the feed */
-.feed-list {
-  position: relative;
-}
-.feed-list::before {
-  content: "";
-  position: absolute;
-  /* 14px post padding + 18px = horizontal centre of 36px avatar */
-  left: 32px;
-  top: 44px;     /* start just below the first avatar */
-  bottom: 44px;
-  width: 1.5px;
-  background: linear-gradient(
-    to bottom,
-    transparent 0%,
-    rgba(14, 165, 233, 0.5)  12%,
-    rgba(14, 165, 233, 0.25) 50%,
-    rgba(192, 38, 211, 0.25) 80%,
-    transparent 100%
-  );
-  pointer-events: none;
-  z-index: 0;
-}
-
-/* Posts: no card box, just a hairline separator */
-.feed-list .post {
-  background: none;
-  border-radius: 0;
-  border-bottom: 1px solid var(--line-soft);
-  padding: 14px 14px 12px;
-}
-.feed-list .post:last-child {
-  border-bottom: none;
-}
-
-/* Avatar column: sits in front of the trail line */
-.feed-list .post .post-avatar-col {
-  position: relative;
-  z-index: 1;
-}
-
-/* Avatar node ring — the "stop" on the trail */
-.feed-list .post .post-avatar-col > img.avatar,
-.feed-list .post .post-avatar-col > .avatar {
-  box-shadow:
-    0 0 0 2px var(--bg),
-    0 0 0 3.5px var(--primary);
-}
-
-/* Subtle post separator in non-trail contexts (item 5 fallback) */
-.post {
-  background: var(--bg);
-}
-.post.is-trending {
-  background: var(--bg-elev) !important;
-  border-radius: var(--radius) !important;
-  border: 1px solid var(--line) !important;
-  margin: 6px 14px !important;
-}
-
-/* ── 3. Engagement badge clarity ("Orbit · N" flame pill) ───────
-        Remove the isolated pill treatment; align visually with
-        the other stat buttons. Keep the active glow, but use
-        the primary accent instead of the brand gradient.        */
-
-.post-act.orbit {
-  color: var(--text-dim);
-}
-/* On hover, show a subtle blue tint (not flame) */
-.post-act.orbit:hover {
-  background: rgba(14, 165, 233, 0.08);
-  color: var(--primary);
-}
-/* Active (you reacted) */
-.post-act.orbit.active {
-  background: rgba(14, 165, 233, 0.14);
-  color: var(--primary);
-}
-.post-act.orbit.active i {
-  color: var(--primary);
-  animation: pop var(--speed) var(--ease);
-}
-/* Orbit count reads as a plain number — no extra pill wrapping */
-.post-act.orbit span { font-weight: 600; }
-
-/* ── 4. Comments — trail-node treatment ─────────────────────────
-        Small gradient-ringed avatar nodes, tighter spacing,
-        like action heavier than reply/share.                    */
-
-/* Comment avatar: gradient ring to echo the feed trail */
-.comment img.avatar,
-.comment .avatar {
-  box-shadow:
-    0 0 0 2px var(--bg),
-    0 0 0 3px rgba(14, 165, 233, 0.35);
-  flex-shrink: 0;
-}
-/* Normalise comment avatar size */
-.comment > img.avatar,
-.comment > .avatar { width: 28px !important; height: 28px !important; }
-
-/* Comment layout tighter */
-.comment {
-  margin-bottom: 12px;
-  gap: 8px;
-}
-
-/* Like is the primary action — give it colour weight */
-.post-detail-cmts .cmt-like,
-.comments .cmt-like {
-  display: inline-flex; align-items: center; gap: 4px;
-  font-size: 13px; font-weight: 700;
-  color: var(--text-dim);
-  transition: color var(--speed);
-}
-.post-detail-cmts .cmt-like.liked,
-.comments .cmt-like.liked {
-  color: var(--danger);
-}
-.post-detail-cmts .cmt-like i,
-.comments .cmt-like i { font-size: 15px; }
-/* Reply action: visually quieter */
-.cmt-reply-btn {
-  font-size: 12px !important;
-  color: var(--text-mute) !important;
-  font-weight: 500 !important;
-}
-
-/* Twitter-style inline comments also get the node ring */
-.tw-comment-av {
-  box-shadow:
-    0 0 0 2px var(--bg),
-    0 0 0 3px rgba(14, 165, 233, 0.3);
-}
-
-/* ── 5. Post card separation — already handled above via
-        .feed-list .post (trail) and .post background token.    */
-
-/* ── 6. Topbar density — theme toggle hidden (moved to settings) */
-#themeToggle { display: none !important; }
-
-/* Slightly increase avatar-btn ring visibility */
-.avatar-btn {
-  border-color: rgba(255, 255, 255, 0.18);
-}
-html[data-theme="light"] .avatar-btn {
-  border-color: rgba(0, 0, 0, 0.12);
-}
-
-/* ── 7. Composer bar emphasis — accent border ───────────────────
-        The "What's orbiting your mind?" pill needs to
-        read as an active input invitation.                      */
-
-.composer-stub button {
-  border: 1.5px solid rgba(14, 165, 233, 0.35) !important;
-  background: var(--bg-elev) !important;
-  color: var(--text-mute);
-  transition:
-    border-color var(--speed),
-    background var(--speed),
-    color var(--speed);
-}
-.composer-stub button:hover {
-  border-color: var(--primary) !important;
-  background: var(--bg-elev-2) !important;
-  color: var(--text-dim);
-}
-
-/* ── 8. Bug fixes ───────────────────────────────────────────────*/
-
-/* 8a. Feed-filter tab underline: scoped to the tab width via
-       ::after — prevents the 1px container border bleeding
-       into a full-width active stripe.                         */
-.feed-filter-tab {
-  position: relative;
-  /* Disable the old border-bottom approach */
-  border-bottom: 2px solid transparent !important;
-  margin-bottom: 0;
-}
-.feed-filter-tab.active {
-  color: var(--primary);
-  border-bottom-color: transparent !important;
-}
-.feed-filter-tab.active::after {
-  content: "";
-  position: absolute;
-  bottom: -1px;
-  /* Inset 20% each side so the bar is clearly scoped to the tab */
-  left: 15%;
-  right: 15%;
-  height: 2px;
-  background: var(--primary);
-  border-radius: 2px 2px 0 0;
-}
-
-/* 8b. "Following" button — clearly distinguishable from disabled
-       Uses an outline style so it reads as "active/engaged"
-       not "inactive/greyed out".                               */
-.follow-btn {
-  /* Ensure base state has a border slot */
-  border: 1.5px solid transparent;
-  transition:
-    background var(--speed),
-    color var(--speed),
-    border-color var(--speed);
-}
-.follow-btn.following {
-  background: transparent;
-  border: 1.5px solid var(--primary);
-  color: var(--primary);
-}
-/* Hover: warn that clicking will unfollow */
-.follow-btn.following:hover {
-  border-color: var(--danger);
-  color: var(--danger);
-  background: rgba(255, 92, 122, 0.06);
-}
-
-/* 8c. Multi-image grid: remove the fixed 260px height so tall
-       phones don't get squashed/stretched images. Use aspect
-       ratio instead to keep proportions consistent.            */
-.post-media[style*="grid-template-columns:1fr 1fr"],
-.post-media[style*="grid-template-columns: 1fr 1fr"] {
-  height: auto !important;
-  aspect-ratio: 4 / 3;
-}
-.post-media[style*="grid-template-columns:2fr 1fr"],
-.post-media[style*="grid-template-columns: 2fr 1fr"] {
-  height: auto !important;
-  aspect-ratio: 3 / 2;
-}
-/* Grid cells: cover fill, normalised height */
-.post-media[style*="grid-template-columns"] > div {
-  height: 100% !important;
-  min-height: 0 !important;
-}
-.post-media[style*="grid-template-columns"] img,
-.post-media[style*="grid-template-columns"] video {
-  width: 100% !important;
-  height: 100% !important;
-  object-fit: cover !important;
-}
-
-/* 8d. Small avatar contrast ring in comments and suggestions */
-.avatar.xs {
-  box-shadow: 0 0 0 1px var(--line);
-}
-/* Story bubble avatars: always stand out from the background */
-.story-bubble-av {
-  border: 2px solid var(--bg) !important;
-  box-shadow: 0 0 0 2px var(--line);
-}
-
-/* ── 9. Text-only post: larger type treatment ───────────────────
-        When a post has no media or video, give the text more
-        visual presence so it feels like a statement, not a
-        caption.                                                 */
-
-/* :has() — supported in all modern browsers */
-.post-body-col:not(:has(.post-media)):not(:has(.vid-player)) > .post-text,
-.post-body-col:not(:has(.post-media)):not(:has(.vid-player)) > .post-text-wrap {
-  font-size: 16px;
-  line-height: 1.6;
-  letter-spacing: -0.01em;
-  margin-bottom: 10px;
-}
-/* Slightly larger still for very short text-only posts (≤3 lines) */
-@supports selector(:has(*)) {
-  .post-body-col:not(:has(.post-media)):not(:has(.vid-player))
-    > .post-text:not(:has(~ *)):first-child {
-    font-size: 16px;
-  }
-}
-
-/* ── Misc polish ─────────────────────────────────────────────── */
-
-/* Nav active indicator uses the new accent blue */
-.nav-item.active::before { background: var(--primary); }
-
-/* Mutual ring fill + percentage pill → accent blue */
-.mutual-ring-fill  { stroke: var(--primary); }
-.mutual-pct-label  { background: var(--primary); }
-
-/* Unread notification bg tint → accent blue */
-.notif-item.unread      { background: rgba(14, 165, 233, 0.07); }
-.notif-full-item.unread { background: rgba(14, 165, 233, 0.06); }
-
-/* Comment form focus line → accent blue (already via var(--primary) but belt+braces) */
-.comment-form input:focus { border-bottom-color: var(--primary) !important; }
-
-/* Feed filter tab hover keeps accent blue */
-.feed-filter-tab:hover { color: var(--text); }
-
-/* Onboarding active dot stays primary blue now */
-.ob-dot.active { background: var(--primary); width: 24px; }
-
-/* ================================================================
-   ORBIT TRAIL — Exact spec implementation (overrides V2 draft above)
-   ================================================================ */
-
-/* Map spec color variables to the existing token system */
-html[data-theme="dark"] {
-  --accent-a: #0ea5e9;
-  --accent-b: #38bdf8;
-  --accent-gradient: linear-gradient(180deg, #0ea5e9, #38bdf8);
-  --border-subtle: #1a1a23;   /* = --line-soft */
-}
-html[data-theme="light"] {
-  --accent-a: #0284c7;
-  --accent-b: #0ea5e9;
-  --accent-gradient: linear-gradient(180deg, #0284c7, #0ea5e9);
-  --border-subtle: #f0f0f5;   /* = --line-soft */
-}
-
-/* ── Core trail container ── */
-.trail-feed {
-  position: relative;
-  padding-left: 34px;
-}
-
-/* The continuous gradient line — rendered once for the entire feed */
-.trail-feed::before {
-  content: '';
-  position: absolute;
-  left: 15px;
-  top: 6px;
-  bottom: 6px;
-  width: 2px;
-  background: linear-gradient(180deg, var(--accent-a), var(--accent-b), transparent);
-  opacity: 0.5;
-  pointer-events: none;
-}
-
-/* ── Individual post — NO card box, NO border-radius, NO background ── */
-.trail-post {
-  position: relative;
-  padding: 14px 0;
-  /* Rule #2: no border-radius + border + background combination */
-  background: none;
-  border-radius: 0;
-  border: none;
-  margin: 0;       /* Rule #3: never use margin-bottom for spacing */
-}
-
-/* Hairline between posts — spacing comes from padding, NOT margin gaps */
-.trail-post + .trail-post {
-  border-top: 1px solid var(--border-subtle);
-}
-
-/* Override the is-trending card treatment inside a trail */
-.trail-feed .trail-post.is-trending {
-  background: none !important;
-  border-radius: 0 !important;
-  border: none !important;
-  border-top: 1px solid var(--border-subtle) !important;
-  margin: 0 !important;
-}
-
-/* ── Avatar node — sits ON the gradient line ── */
-.trail-node {
-  position: absolute;
-  left: -34px;
-  top: 14px;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  padding: 2px;
-  background: var(--accent-gradient);
-  /* Punches through the line visually */
-  z-index: 1;
-}
-
-.trail-node img {
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  object-fit: cover;
-  border: 2px solid var(--bg);
-  display: block;
-  cursor: pointer;
-}
-
-/* ── Meta row: name · handle · timestamp · follow btn ── */
-.trail-meta-row {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-bottom: 8px;
-  flex-wrap: wrap;
-}
-
-.meta-name {
-  font-weight: 700;
-  font-size: 14px;
-  color: var(--text);
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  line-height: 1.2;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.meta-sub {
-  font-size: 12px;
-  color: var(--text-mute);
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-/* Follow/more button pushed to the right */
-.trail-meta-row > .follow-btn,
-.trail-meta-row > .icon-btn {
-  margin-left: auto;
-}
-
-/* ── Post caption / text ── */
-.trail-caption {
-  font-size: 14px;
-  line-height: 1.45;
-  margin-bottom: 10px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--text);
-  cursor: pointer;
-}
-
-/* Text-only posts: larger type (no media sibling) */
-.trail-post:not(:has(.post-media)):not(:has(.vid-player)) .trail-caption {
-  font-size: 16px;
-  line-height: 1.6;
-  letter-spacing: -0.01em;
-}
-
-/* ── Actions row ── */
-.trail-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--text-dim);
-  flex-wrap: nowrap;
-  margin-top: 4px;
-}
-
-/* Reuse existing post-act button styles — they already target .post-act */
-/* No extra rules needed; .post-act class is preserved on each button   */
-
-/* ── Suppress old feed-list rules that no longer apply ── */
-.feed-list::before { display: none; }
-.feed-list .post   { all: revert; }
-
-/* ── Composer stub: sits above the trail, full width ── */
-.feed-wrap > .composer-stub {
-  margin-left: 0;
-}
-
-/* ── Location badge, kind badge, feat title inside trail ── */
-.trail-post .post-location-badge,
-.trail-post .post-kind-badge,
-.trail-post .post-feat-title {
-  margin-bottom: 6px;
-}
-
-/* ── Comments inside trail (unchanged functionally) ── */
-.trail-post .comments {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--line);
-}
-
-/* ================================================================
-   SPEC FEATURE 1 — Feed Video: no controls, autoplay on scroll
-   ================================================================ */
-.feed-video {
-  width: 100%;
-  display: block;
-  background: #000;
-  /* Prevent any aspect-ratio distortion */
-  max-height: 560px;
-  object-fit: cover;
-}
-/* Strip ALL native browser media controls */
-.feed-video::-webkit-media-controls             { display: none !important; }
-.feed-video::-webkit-media-controls-enclosure   { display: none !important; }
-.feed-video::-webkit-media-controls-panel       { display: none !important; }
-
-/* ================================================================
-   SPEC FEATURE 2 — Multi-image Carousel: scroll-snap, one-at-a-time
-   ================================================================ */
-.carousel-wrap {
-  position: relative;
-  width: 100%;
-}
-/* Override any old carousel-track rules */
-.carousel-track {
-  display: flex !important;
-  overflow-x: auto !important;
-  scroll-snap-type: x mandatory !important;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none !important;
-  /* Remove old display:none-based show/hide layout */
-  flex-direction: row !important;
-}
-.carousel-track::-webkit-scrollbar { display: none !important; }
-
-/* Spec: each slide is flex: 0 0 100% — one full-width image at a time */
-.carousel-slide {
-  flex: 0 0 100% !important;
-  width: 100% !important;
-  scroll-snap-align: center !important;
-  object-fit: cover !important;
-  display: block !important;
-  /* Prevent stale display:none from old JS */
-  visibility: visible !important;
-  max-height: 480px;
-}
-/* Video slide wrapper needs the same sizing */
-.carousel-slide.carousel-slide-video,
-.carousel-track > div.carousel-slide {
-  flex: 0 0 100% !important;
-  width: 100% !important;
-  scroll-snap-align: center !important;
-}
-.carousel-track > div.carousel-slide .feed-video {
-  max-height: 480px;
-}
-
-/* Dot indicators */
-.carousel-dots {
-  position: absolute !important;
-  bottom: 10px !important;
-  left: 50% !important;
-  transform: translateX(-50%) !important;
-  display: flex !important;
-  gap: 5px !important;
-  padding: 0 !important; /* override any old vertical padding */
-}
-.dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.4);
-  /* Reset any button styles from old carousel-dot class */
-  border: none;
-  padding: 0;
-  cursor: default;
-  flex-shrink: 0;
-}
-.dot.active { background: #fff; }
-
-/* ================================================================
-   SPEC FEATURE 3 — Comment Bottom Sheet
-   ================================================================ */
-.comment-sheet-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.55);
-  display: flex;
-  align-items: flex-end;
-  z-index: 200;
-  /* Animate in */
-  animation: csOverlayIn 0.2s ease;
-}
-@keyframes csOverlayIn {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-.comment-sheet {
-  background: var(--card, #0d0d0d);
-  width: 100%;
-  max-height: 75vh;
-  border-radius: 18px 18px 0 0;
-  display: flex;
-  flex-direction: column;
-  padding: 10px 0 0;
-  animation: csSheetIn 0.25s cubic-bezier(0.32, 0.72, 0, 1);
-}
-@keyframes csSheetIn {
-  from { transform: translateY(100%); }
-  to   { transform: translateY(0); }
-}
-.comment-sheet-handle {
-  width: 36px;
-  height: 4px;
-  background: #444;
-  border-radius: 2px;
-  margin: 0 auto 10px;
-  flex-shrink: 0;
-}
-.comment-sheet-title {
-  text-align: center;
-  font-weight: 600;
-  font-size: 14px;
-  color: var(--text);
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--border-subtle, #1c1c1c);
-  flex-shrink: 0;
-}
-.comment-list {
-  overflow-y: auto;
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  flex: 1;
-}
-.comment-bubble-row {
-  display: flex;
-  gap: 9px;
-  align-items: flex-start;
-}
-.comment-avatar {
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  object-fit: cover;
-  flex-shrink: 0;
-  cursor: pointer;
-}
-.comment-bubble {
-  background: var(--surface2, #1a1a1c);
-  border-radius: 16px;
-  padding: 9px 13px;
-  max-width: 82%;
-}
-.comment-name {
-  font-weight: 600;
-  font-size: 12.5px;
-  display: block;
-  margin-bottom: 2px;
-  color: var(--text);
-}
-.comment-text {
-  font-size: 13.5px;
-  line-height: 1.4;
-  display: block;
-  color: var(--text);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.comment-meta {
-  display: flex;
-  gap: 12px;
-  margin-top: 5px;
-  font-size: 11px;
-  color: var(--text-mute, #777);
-}
-.comment-like { cursor: pointer; }
-.comment-input-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  border-top: 1px solid var(--border-subtle, #1c1c1c);
-  flex-shrink: 0;
-  /* Lift above mobile keyboard */
-  padding-bottom: env(safe-area-inset-bottom, 10px);
-}
-.comment-avatar-small {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  object-fit: cover;
-  flex-shrink: 0;
-}
-.comment-input {
-  flex: 1;
-  background: var(--surface2, #1a1a1c);
-  border: none;
-  border-radius: 999px;
-  padding: 9px 14px;
-  color: var(--text, #eee);
-  font-size: 13.5px;
-  outline: none;
-  font-family: inherit;
-}
-.comment-input::placeholder { color: var(--text-mute, #777); }
-.comment-send {
-  color: var(--accent-a, #0ea5e9);
-  font-size: 16px;
-  cursor: pointer;
-  flex-shrink: 0;
-  padding: 4px;
-}
-
-/* ================================================================
-   FINAL SPEC — Instagram Anatomy Layout
-   Replaces all previous trail/V2/Orbit-Trail rules.
-   ================================================================ */
-
-/* Neutralise every old trail rule so nothing bleeds through */
-.trail-feed, .trail-post, .trail-node,
-.trail-meta-row, .trail-caption, .trail-actions,
-.feed-list { all: unset; display: revert; }
-.trail-feed::before { display: none !important; }
-
-/* ── Feed container ── */
-.ig-feed {
-  display: flex;
-  flex-direction: column;
-}
-
-/* ── Post wrapper ── */
-.ig-post {
-  border-bottom: 1px solid #1a1a1a;
-  padding: 12px 0;
-  /* No card-box: no border-radius, no background, no box-shadow */
-  background: none;
-  border-radius: 0;
-}
-.ig-post:last-child { border-bottom: none; }
-
-/* Trending treatment stays subtle — just a very faint left accent */
-.ig-post.is-trending {
-  border-left: 2px solid #333;
-  padding-left: 10px;
-}
-
-/* ── Header row ── */
-.ig-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 2px 10px;
-}
-
-/* Thin ring — the only brand signature, monochrome */
-.ig-avatar-ring {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  padding: 2px;
-  border: 1.5px solid #555;
-  flex-shrink: 0;
-  cursor: pointer;
-}
-.ig-avatar-ring img {
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  object-fit: cover;
-  display: block;
-}
-
-.ig-header-text {
-  flex: 1;
-  min-width: 0;
-}
-.ig-header-text .meta-name {
-  display: block;
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.ig-header-text .meta-sub {
-  display: block;
-  font-size: 11.5px;
-  color: #888;
-}
-
-.ig-menu-dot {
-  color: #777;
-  font-size: 18px;
-  padding: 4px;
-  background: none;
-  border: none;
-  cursor: pointer;
-  flex-shrink: 0;
-  font-family: inherit;
-}
-
-/* ── Location / kind badge / feat title (between header and media) ── */
-.ig-post .post-location-badge,
-.ig-post .post-kind-badge,
-.ig-post .post-feat-title {
-  margin: 0 2px 8px;
-  font-size: 12px;
-}
-
-/* ── Song badge lives inside ig-header ── */
-.ig-header .post-song-badge {
-  flex-shrink: 0;
-}
-
-/* ── Media block ── */
-.ig-media {
-  width: 100%;
-  /* Strip margin/padding that post-media adds inside */
-}
-/* All images and videos inside ig-media capped at 500px */
-.ig-media img,
-.ig-media video,
-.ig-media .feed-video,
-.ig-media .post-media img,
-.ig-media .post-media video,
-.ig-media .carousel-slide {
-  width: 100%;
-  max-height: 500px !important;
-  object-fit: cover;
-  display: block;
-  background: #0a0a0a;
-}
-/* Remove inner border-radius/margin from post-media inside ig-media */
-.ig-media .post-media,
-.ig-media .carousel-wrap {
-  border-radius: 0 !important;
-  margin: 0 !important;
-}
-.ig-media .vid-player {
-  border-radius: 0 !important;
-  max-width: none !important;
-}
-
-/* ── Icon row: orbit · comment · share · bookmark ── */
-.ig-icon-row {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 10px 2px 4px;
-  font-size: 20px;
-}
-.ig-icon-row .spacer { flex: 1; }
-
-.ig-act-btn {
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: var(--text, #eee);
-  font-size: 22px;
-  padding: 2px;
-  display: flex;
-  align-items: center;
-  transition: color 0.15s;
-  line-height: 1;
-}
-.ig-act-btn:hover { color: #fff; }
-.ig-act-btn.orbited { color: var(--danger, #e0245e); }
-
-/* ── Like count ("X orbits") ── */
-.ig-likes {
-  font-size: 13.5px;
-  font-weight: 600;
-  padding: 2px 2px 6px;
-  color: var(--text);
-}
-
-/* ── Caption: bold username inline with text ── */
-.ig-caption {
-  font-size: 13.5px;
-  line-height: 1.4;
-  padding: 0 2px 4px;
-  color: var(--text);
-  cursor: pointer;
-  word-break: break-word;
-}
-.ig-caption .meta-name {
-  font-weight: 600;
-  margin-right: 5px;
-  display: inline; /* inline, not block, so text flows after it */
-}
-/* post-text / post-text-wrap inside caption display inline-ish */
-.ig-caption .post-text,
-.ig-caption .post-text-wrap {
-  display: inline;
-}
-
-/* ── Comments link ── */
-.ig-comments-link {
-  font-size: 13px;
-  color: #777;
-  padding: 0 2px 4px;
-  cursor: pointer;
-}
-.ig-comments-link:hover { color: #aaa; }
-
-/* ── Timestamp ── */
-.ig-timestamp {
-  font-size: 10.5px;
-  color: #555;
-  text-transform: uppercase;
-  padding: 2px 2px 0;
-  letter-spacing: 0.03em;
-}
-
-/* ── Follow button inside ig-header ── */
-.ig-header .follow-btn {
-  font-size: 12px;
-  padding: 4px 10px;
-  flex-shrink: 0;
-}
-
-/* ── Avatar wrap: positions the +/✓ badge relative to the ring ── */
-.ig-avatar-wrap {
-  position: relative;
-  flex-shrink: 0;
-  width: 38px;   /* ring (34px) + badge overflow */
-  height: 38px;
-}
-
-/* Badge sits bottom-right, overlapping the ring edge */
-.ig-follow-badge {
-  position: absolute;
-  bottom: -2px;
-  right: -2px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: #fff;
-  color: #111;
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 18px;
-  text-align: center;
-  border: 1.5px solid #111;
-  cursor: pointer;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.15s, color 0.15s;
-  z-index: 1;
-}
-.ig-follow-badge.is-following {
-  background: #222;
-  color: #fff;
-  border-color: #444;
-  font-size: 10px;  /* ✓ is wider than + */
-}
-.ig-follow-badge:hover { opacity: 0.85; }
-
-/* Ensure the ring itself doesn't interfere with the badge */
-.ig-avatar-wrap .ig-avatar-ring {
-  /* ring is already 34×34 — wrap gives the extra 4px for badge overflow */
-  display: block;
 }
