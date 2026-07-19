@@ -2547,53 +2547,252 @@ const toggleSave = async (postId) => {
 // 10. GROUPS
 // =========================================================================
 const renderGroups = (root) => {
-  const head = el("div", { class: "section-head" },
-    el("h2", {}, "Groups"),
-    el("div", { class: "right" },
-      el("button", { class: "btn primary", onclick: () => openCompose("group") },
-        el("i", { class: "ri-add-line" }), "New group"),
+  const wrap = el("div", { class: "grp-wrap" });
+  root.appendChild(wrap);
+
+  // 1. Header ──────────────────────────────────────────────────────────────
+  const searchBox   = el("div", { class: "grp-search-box hidden" });
+  const searchInput = el("input", { type: "text", placeholder: "Search groups…" });
+  searchBox.appendChild(searchInput);
+
+  const searchIcon = el("span", { class: "grp-search" }, "🔍");
+  searchIcon.onclick = () => {
+    searchBox.classList.toggle("hidden");
+    if (!searchBox.classList.contains("hidden")) searchInput.focus();
+  };
+
+  wrap.appendChild(el("div", { class: "grp-header" },
+    el("span", { class: "grp-back", onclick: () => history.back() }, "←"),
+    el("h1", {}, "Groups"),
+    el("div", { style: "display:flex;align-items:center;gap:14px;" },
+      searchIcon,
+      el("button", { class: "grp-new-btn", onclick: () => openCompose("group") },
+        el("i", { class: "ri-add-line" }),
+      ),
     ),
-  );
-  root.appendChild(head);
+  ));
+  wrap.appendChild(searchBox);
 
-  const grid = el("div", { class: "group-grid" });
-  root.appendChild(grid);
+  // 2. Filter tabs ──────────────────────────────────────────────────────────
+  const GRP_CATEGORIES = ["Tech", "Gaming", "Music", "Art", "Sports", "Lifestyle", "Business", "Education", "Food", "Travel", "Science"];
+  let allGroups     = [];
+  let activeFilter  = "all";
+  let activeCategory = null;
 
-  onSnapshot(query(collection(db, "groups"), orderBy("createdAt", "desc"), limit(60)), (snap) => {
-    grid.innerHTML = "";
-    if (snap.empty) {
-      grid.appendChild(el("div", { class: "empty", style: "grid-column:1/-1;" },
+  const listContainer = el("div", { class: "grp-list-container" });
+  const catChips      = el("div", { class: "grp-cat-chips hidden" });
+
+  const getFilteredGroups = (q = "") => {
+    let groups = allGroups;
+    const lq = q.trim().toLowerCase();
+    if (lq) groups = groups.filter((g) => (g.name || "").toLowerCase().includes(lq) || (g.description || "").toLowerCase().includes(lq));
+    switch (activeFilter) {
+      case "trending":  return groups.filter((g) => g.isTrending);
+      case "categories": return activeCategory ? groups.filter((g) => (g.category || "").toLowerCase() === activeCategory.toLowerCase()) : groups;
+      case "mygroups":  return groups.filter((g) => (g.members || []).includes(state.uid));
+      default:          return groups;
+    }
+  };
+
+  const buildGroupRow = (g) => {
+    const member = (g.members || []).includes(state.uid);
+    const icon = g.iconUrl
+      ? el("img", { class: "grp-icon", src: g.iconUrl })
+      : el("div", { class: "grp-icon grp-icon-letter" }, (g.name || "?")[0].toUpperCase());
+
+    const joinBtn = el("button", {
+      class: "grp-join-btn",
+      "data-group-id": g.id,
+      "data-joined": member ? "true" : "false",
+      style: member ? "opacity:0.55;" : "",
+    }, member ? "Joined" : "Join");
+
+    joinBtn.onclick = async () => {
+      const wasMember = (g.members || []).includes(state.uid);
+      const ref = doc(db, "groups", g.id);
+      if (wasMember) {
+        g.members = (g.members || []).filter((id) => id !== state.uid);
+        joinBtn.textContent = "Join";
+        joinBtn.dataset.joined = "false";
+        joinBtn.style.opacity = "";
+        await updateDoc(ref, { members: arrayRemove(state.uid) }).catch(() => {});
+        toast("Left group");
+      } else {
+        g.members = [...(g.members || []), state.uid];
+        joinBtn.textContent = "Joined";
+        joinBtn.dataset.joined = "true";
+        joinBtn.style.opacity = "0.55";
+        await updateDoc(ref, { members: arrayUnion(state.uid) }).catch(() => {});
+        toast("Joined!");
+      }
+      countEl.textContent = `${g.members.length} member${g.members.length !== 1 ? "s" : ""}`;
+      if (activeFilter === "mygroups") renderGroupList();
+    };
+
+    const countEl = el("span", { class: "grp-members" }, `${(g.members || []).length} member${(g.members || []).length !== 1 ? "s" : ""}`);
+
+    const row = el("div", { class: "grp-row" },
+      icon,
+      el("div", { class: "grp-info" },
+        el("span", { class: "grp-name" }, g.name || "Unnamed group"),
+        countEl,
+        g.description ? el("span", { class: "grp-desc" }, g.description.slice(0, 80)) : null,
+      ),
+      el("div", { class: "grp-row-actions" },
+        joinBtn,
+        (g.members || []).includes(state.uid)
+          ? el("button", { class: "grp-open-btn", onclick: () => location.hash = `#chats/${g.id}` },
+              el("i", { class: "ri-chat-3-line" })) : null,
+      ),
+    );
+    return row;
+  };
+
+  const renderGroupList = () => {
+    const q = searchInput.value;
+    const groups = getFilteredGroups(q);
+    listContainer.innerHTML = "";
+    if (!groups.length) {
+      listContainer.appendChild(el("div", { class: "grp-empty-state" },
         el("i", { class: "ri-group-2-line" }),
-        el("div", { class: "t" }, "No groups yet"),
-        el("div", {}, "Create a group to chat with multiple people in real time."),
+        el("div", {}, activeFilter === "mygroups" ? "You haven't joined any groups yet." : "No groups here yet."),
       ));
       return;
     }
-    snap.docs.forEach((d) => {
-      const g = { id: d.id, ...d.data() };
-      const member = (g.members || []).includes(state.uid);
-      const card = el("div", { class: "group-card" },
-        el("div", { class: "group-cover", text: (g.name || "?").slice(0, 1).toUpperCase() }),
-        el("div", { class: "group-name", text: g.name }),
-        el("div", { class: "group-meta", text: `${(g.members || []).length} members${g.isPublic ? " · public" : " · private"}` }),
-        el("div", { class: "group-actions" },
-          el("button", { class: `btn ${member ? "ghost" : "primary"}`, onclick: async () => {
-            const ref = doc(db, "groups", g.id);
-            if (member) {
-              await updateDoc(ref, { members: arrayRemove(state.uid) });
-              toast("Left group");
-            } else {
-              await updateDoc(ref, { members: arrayUnion(state.uid) });
-              toast("Joined group");
-            }
-          }}, member ? "Leave" : "Join"),
-          member ? el("button", { class: "btn ghost", onclick: () => location.hash = `#chats/${g.id}` },
-            el("i", { class: "ri-chat-3-line" }), "Open") : null,
-        ),
-      );
-      grid.appendChild(card);
-    });
+
+    // If "All" or non-category filter: Popular Right Now + New & Growing split
+    if (activeFilter === "all" || activeFilter === "trending") {
+      const sorted = [...groups].sort((a, b) => (b.members?.length || 0) - (a.members?.length || 0));
+      const popular = sorted.slice(0, Math.ceil(sorted.length / 2));
+      const growing = sorted.slice(Math.ceil(sorted.length / 2));
+
+      if (popular.length) {
+        listContainer.appendChild(el("div", { class: "grp-section-header" },
+          el("h3", {}, activeFilter === "trending" ? "Trending Groups 🔥" : "Popular Right Now"),
+          el("span", { class: "grp-see-all" }, "See all"),
+        ));
+        popular.forEach((g) => listContainer.appendChild(buildGroupRow(g)));
+      }
+      if (growing.length && activeFilter !== "trending") {
+        listContainer.appendChild(el("div", { class: "grp-section-header", style: "margin-top:8px;" },
+          el("h3", {}, "New & Growing"),
+          el("span", { class: "grp-see-all" }, "See all"),
+        ));
+        growing.forEach((g) => listContainer.appendChild(buildGroupRow(g)));
+      }
+    } else {
+      // My Groups / Categories: flat list
+      const header = activeFilter === "mygroups" ? "My Groups"
+        : activeCategory ? `#${activeCategory}` : "All Categories";
+      listContainer.appendChild(el("div", { class: "grp-section-header" },
+        el("h3", {}, header),
+      ));
+      groups.forEach((g) => listContainer.appendChild(buildGroupRow(g)));
+    }
+  };
+
+  // Tab row
+  const tabDefs = [
+    { label: "All",        filter: "all" },
+    { label: "Trending",   filter: "trending" },
+    { label: "Categories", filter: "categories" },
+    { label: "My Groups",  filter: "mygroups" },
+  ];
+  const tabEls = tabDefs.map(({ label, filter }) => {
+    const tab = el("button", { class: "grp-tab" + (filter === "all" ? " active" : ""), "data-filter": filter }, label);
+    tab.onclick = () => {
+      tabEls.forEach((t) => t.classList.remove("active"));
+      tab.classList.add("active");
+      activeFilter = filter;
+      activeCategory = null;
+      if (filter === "categories") {
+        catChips.classList.remove("hidden");
+      } else {
+        catChips.classList.add("hidden");
+      }
+      renderGroupList();
+    };
+    return tab;
   });
+  const tabRow = el("div", { class: "grp-tabs" });
+  tabEls.forEach((t) => tabRow.appendChild(t));
+  wrap.appendChild(tabRow);
+
+  // Category chips (shown when "Categories" tab is active)
+  GRP_CATEGORIES.forEach((cat) => {
+    const chip = el("span", { class: "grp-cat-chip" }, cat);
+    chip.onclick = () => {
+      catChips.querySelectorAll(".grp-cat-chip").forEach((c) => c.classList.remove("active"));
+      chip.classList.add("active");
+      activeCategory = cat;
+      renderGroupList();
+    };
+    catChips.appendChild(chip);
+  });
+  wrap.appendChild(catChips);
+
+  // Search input wires to live-filter
+  let _sd = null;
+  searchInput.addEventListener("input", () => { clearTimeout(_sd); _sd = setTimeout(renderGroupList, 180); });
+
+  // 3. Hero banner ──────────────────────────────────────────────────────────
+  const heroAvatarGrid = el("div", { class: "grp-hero-avatars" });
+  const hero = el("div", { class: "grp-hero" },
+    el("div", { class: "grp-hero-text" },
+      el("h2", {}, "Find your people.\nJoin the conversation."),
+      el("p", {}, "Thousands of communities around everything you love."),
+    ),
+    heroAvatarGrid,
+  );
+  wrap.appendChild(hero);
+
+  // Pull 4 real user avatars for hero
+  getDocs(query(collection(db, "users"), limit(8))).then((snap) => {
+    snap.docs.slice(0, 4).forEach((d) => {
+      const u = { uid: d.id, ...d.data() };
+      heroAvatarGrid.appendChild(el("img", { src: avatarFor(u), alt: u.name || "user" }));
+    });
+  }).catch(() => {});
+
+  // 4 & 5. Group list ───────────────────────────────────────────────────────
+  wrap.appendChild(listContainer);
+
+  // Skeleton while loading
+  for (let i = 0; i < 5; i++) {
+    listContainer.appendChild(el("div", { class: "grp-row grp-skel-row" },
+      el("div", { class: "grp-skel-icon" }),
+      el("div", { class: "grp-skel-info" },
+        el("div", { class: "grp-skel-line w60" }),
+        el("div", { class: "grp-skel-line w40" }),
+      ),
+      el("div", { class: "grp-skel-btn" }),
+    ));
+  }
+
+  // Firestore: one-time fetch (groups don't need real-time for this page)
+  getDocs(query(collection(db, "groups"), orderBy("createdAt", "desc"), limit(80)))
+    .then((snap) => {
+      listContainer.innerHTML = "";
+      allGroups = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      // Compute isTrending: top-third by member count
+      const sorted = [...allGroups].sort((a, b) => (b.members?.length || 0) - (a.members?.length || 0));
+      const trendCutoff = sorted[Math.floor(sorted.length / 3)]?.members?.length || 1;
+      allGroups.forEach((g) => { g.isTrending = (g.members?.length || 0) >= trendCutoff; });
+      renderGroupList();
+    })
+    .catch(() => {
+      listContainer.innerHTML = "";
+      listContainer.appendChild(el("div", { class: "grp-empty-state" },
+        el("i", { class: "ri-wifi-off-line" }),
+        el("div", {}, "Could not load groups. Check your connection."),
+      ));
+    });
+
+  // FAB — create new group
+  const fab = el("button", { class: "grp-fab", onclick: () => openCompose("group") },
+    el("i", { class: "ri-add-line" }),
+  );
+  wrap.appendChild(fab);
 };
 
 // =========================================================================
@@ -3224,6 +3423,67 @@ const renderSettings = (root) => {
           e.currentTarget.classList.toggle("on");
           updateDoc(doc(db, "users", state.uid), { themePref: document.documentElement.getAttribute("data-theme") }).catch(() => {});
         }}),
+      ),
+      el("div", { class: "row" },
+        el("div", { class: "label" },
+          el("div", { class: "t" }, "Language"),
+          el("div", { class: "d" }, "Choose your preferred display language."),
+        ),
+        (() => {
+          const LANGUAGES = [
+            { code: "en",    label: "English" },
+            { code: "es",    label: "Español" },
+            { code: "fr",    label: "Français" },
+            { code: "de",    label: "Deutsch" },
+            { code: "pt",    label: "Português" },
+            { code: "it",    label: "Italiano" },
+            { code: "nl",    label: "Nederlands" },
+            { code: "ru",    label: "Русский" },
+            { code: "pl",    label: "Polski" },
+            { code: "uk",    label: "Українська" },
+            { code: "sv",    label: "Svenska" },
+            { code: "no",    label: "Norsk" },
+            { code: "da",    label: "Dansk" },
+            { code: "fi",    label: "Suomi" },
+            { code: "ro",    label: "Română" },
+            { code: "cs",    label: "Čeština" },
+            { code: "hu",    label: "Magyar" },
+            { code: "sk",    label: "Slovenčina" },
+            { code: "bg",    label: "Български" },
+            { code: "hr",    label: "Hrvatski" },
+            { code: "sr",    label: "Српски" },
+            { code: "el",    label: "Ελληνικά" },
+            { code: "tr",    label: "Türkçe" },
+            { code: "ar",    label: "العربية" },
+            { code: "he",    label: "עברית" },
+            { code: "hi",    label: "हिन्दी" },
+            { code: "bn",    label: "বাংলা" },
+            { code: "ja",    label: "日本語" },
+            { code: "ko",    label: "한국어" },
+            { code: "zh-CN", label: "中文 (简体)" },
+            { code: "zh-TW", label: "中文 (繁體)" },
+            { code: "vi",    label: "Tiếng Việt" },
+            { code: "th",    label: "ภาษาไทย" },
+            { code: "id",    label: "Bahasa Indonesia" },
+            { code: "ms",    label: "Bahasa Melayu" },
+          ];
+          const saved = state.me?.langPref || localStorage.getItem("orbit_lang") || "en";
+          const sel = el("select", { class: "settings-lang-select" });
+          LANGUAGES.forEach(({ code, label }) => {
+            const opt = el("option", { value: code }, label);
+            if (code === saved) opt.selected = true;
+            sel.appendChild(opt);
+          });
+          sel.onchange = async () => {
+            const code = sel.value;
+            localStorage.setItem("orbit_lang", code);
+            document.documentElement.setAttribute("lang", code);
+            if (state.me) state.me.langPref = code;
+            await updateDoc(doc(db, "users", state.uid), { langPref: code }).catch(() => {});
+            toast("Language updated");
+          };
+          return sel;
+        })(),
       ),
     ),
 
