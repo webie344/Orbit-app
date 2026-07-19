@@ -814,12 +814,19 @@ export const uploadToCloudinary = async (file, kind = "image") => {
 const applyTheme = (theme) => {
   document.documentElement.setAttribute("data-theme", theme);
   localStorage.setItem("orbit:theme", theme);
-  $("#themeToggle")?.querySelector("i")?.classList.toggle("ri-sun-line", theme === "dark");
-  $("#themeToggle")?.querySelector("i")?.classList.toggle("ri-moon-line", theme === "light");
+  const iconEl = $("#themeToggle")?.querySelector("i");
+  if (iconEl) {
+    iconEl.className =
+      theme === "dark"  ? "ri-sun-line"  :
+      theme === "light" ? "ri-moon-line" : "ri-drop-line";
+  }
 };
 const initTheme = () => applyTheme(localStorage.getItem("orbit:theme") || "dark");
-const toggleTheme = () =>
-  applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark");
+// Cycles: dark → light → glass → dark
+const toggleTheme = () => {
+  const cur = document.documentElement.getAttribute("data-theme");
+  applyTheme(cur === "dark" ? "light" : cur === "light" ? "glass" : "dark");
+};
 
 // =========================================================================
 // ORBIT LOADER — branded spinner shown during async auth operations
@@ -2814,7 +2821,67 @@ const renderProfile = async (root, uid) => {
   }
 
   root.appendChild(el("div", { class: "profile-head" },
-    el("img", { class: "avatar xl", src: avatarFor(u) }),
+    (() => {
+      // Build profile avatar — shows static photo first; after 3 s crossfades
+      // to the animated character if the user has a Pro animated avatar set.
+      const hasAnim = u.isPro && u.animatedAvatarId;
+      const staticImg = el("img", { class: "avatar xl", src: avatarFor(u), alt: u.name || "" });
+      if (!hasAnim) return staticImg;
+
+      const wrap = el("div", { class: "aav-wrap" });
+      const realImg = el("img", { class: "aav-real", src: avatarFor(u), alt: u.name || "" });
+
+      // Animated character via DiceBear (same seeds as avatar.js PRO_AVATARS)
+      const _AV_STYLES = {
+        "cosmic-kai":"adventurer","nova-spark":"adventurer","orbit-finn":"adventurer",
+        "lunar-mia":"adventurer","stellar-jay":"adventurer","pixel-rex":"adventurer",
+        "astro-zoe":"adventurer","comet-alex":"adventurer","nebula-sam":"adventurer",
+        "quasar-lee":"adventurer","vega-blake":"lorelei","lyra-dev":"lorelei",
+        "sirius-cj":"lorelei","altair-kim":"lorelei","rigel-nova":"lorelei",
+        "deneb-arc":"micah","spica-io":"micah","mimosa-avy":"micah",
+        "antares-max":"bottts","polaris-bot":"bottts",
+      };
+      const avStyle = _AV_STYLES[u.animatedAvatarId] || "adventurer";
+      const charImg = el("img", {
+        class: "aav-char",
+        src: `https://api.dicebear.com/7.x/${avStyle}/svg?seed=${u.animatedAvatarId}&size=200`,
+        alt: "Animated avatar",
+      });
+      const hand = el("span", { class: "aav-hand" }, "👋");
+      const confettiWrap = el("div", { class: "aav-confetti" });
+      wrap.appendChild(realImg);
+      wrap.appendChild(charImg);
+      wrap.appendChild(hand);
+      wrap.appendChild(confettiWrap);
+
+      // Crossfade after 3 s, with context-appropriate animation
+      const isCelebrating = !isMe && (state.me?.following || []).includes(u.uid);
+      const ctx = isMe ? "me" : isCelebrating ? "celebrate" : "idle";
+      const _xfTimer = setTimeout(() => {
+        if (!document.body.contains(wrap)) return;
+        realImg.classList.add("aav-fade-out");
+        charImg.classList.add("aav-fade-in");
+        wrap.classList.add("aav-active");
+        if (ctx === "celebrate") {
+          wrap.classList.add("aav-celebrate");
+          for (let _i = 0; _i < 12; _i++) {
+            const p = el("span", { class: "aav-particle" });
+            p.style.setProperty("--i", _i);
+            p.style.setProperty("--c", `hsl(${(_i * 30) % 360}, 85%, 65%)`);
+            confettiWrap.appendChild(p);
+          }
+          setTimeout(() => wrap.classList.remove("aav-celebrate"), 2800);
+        } else {
+          wrap.classList.add(ctx === "me" ? "aav-me" : "aav-idle");
+        }
+      }, 3000);
+      // Cancel timer if user navigates away
+      const _obs = new MutationObserver(() => {
+        if (!document.body.contains(wrap)) { clearTimeout(_xfTimer); _obs.disconnect(); }
+      });
+      _obs.observe(document.body, { childList: true, subtree: true });
+      return wrap;
+    })(),
     el("div", {},
       el("div", { class: "name-row" }, u.name,
         u.verified ? el("span", { class: "verified lg", title: "Location verified", html: '<i class="ri-check-line"></i>' }) : null,
@@ -3026,13 +3093,24 @@ const renderSettings = (root) => {
       el("div", { class: "row" },
         el("div", { class: "label" },
           el("div", { class: "t" }, "Theme"),
-          el("div", { class: "d" }, "Choose between light and dark — saved across devices."),
+          el("div", { class: "d" }, "Choose your visual style — saved across devices."),
         ),
-        el("div", { class: `switch ${document.documentElement.getAttribute("data-theme") === "dark" ? "on" : ""}`, onclick: (e) => {
-          toggleTheme();
-          e.currentTarget.classList.toggle("on");
-          updateDoc(doc(db, "users", state.uid), { themePref: document.documentElement.getAttribute("data-theme") }).catch(() => {});
-        }}),
+        el("div", { class: "theme-seg", id: "settingsThemeSeg" },
+          ...["dark", "light", "glass"].map((t) => {
+            const icons  = { dark: "ri-moon-line", light: "ri-sun-line", glass: "ri-drop-line" };
+            const labels = { dark: "Dark", light: "Light", glass: "Glass" };
+            return el("button", {
+              "data-tseg": t,
+              class: document.documentElement.getAttribute("data-theme") === t ? "active" : "",
+              onclick: () => {
+                applyTheme(t);
+                document.getElementById("settingsThemeSeg")?.querySelectorAll("[data-tseg]")
+                  .forEach((b) => b.classList.toggle("active", b.dataset.tseg === t));
+                updateDoc(doc(db, "users", state.uid), { themePref: t }).catch(() => {});
+              },
+            }, el("i", { class: icons[t] }), " ", labels[t]);
+          })
+        ),
       ),
     ),
 
@@ -3107,6 +3185,27 @@ const renderSettings = (root) => {
               router();
             }}, el("i", { class: "ri-vip-crown-line" }), " Activate Pro"),
       ),
+      // Animated avatar picker — Pro only
+      state.me.isPro
+        ? el("div", { class: "row" },
+            el("div", { class: "label" },
+              el("div", { class: "t" },
+                el("i", { class: "ri-user-smile-line", style: "margin-right:6px;color:var(--grad-1);" }),
+                "Animated Avatar",
+              ),
+              el("div", { class: "d" }, state.me.animatedAvatarId
+                ? "Your animated character is active on your profile."
+                : "Choose an animated character that appears on your profile."),
+            ),
+            el("button", {
+              class: "btn ghost",
+              onclick: () => import("./avatar.js").then((m) => m.openAvatarPicker()).catch(() => {}),
+            },
+              el("i", { class: state.me.animatedAvatarId ? "ri-pencil-line" : "ri-user-add-line" }),
+              state.me.animatedAvatarId ? " Change" : " Choose Avatar",
+            ),
+          )
+        : null,
     ),
 
     el("div", { class: "group" },

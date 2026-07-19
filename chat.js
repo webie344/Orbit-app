@@ -220,6 +220,7 @@ const STICKER_PACKS = [
 // 1. WALLPAPER + COLOR PRESETS
 // =========================================================================
 const WALLPAPERS = [
+  // ── Free themes (available to all users) ────────────────────────────────
   { id: "none",   name: "None",    css: null },
   { id: "aurora", name: "Aurora",  css: "linear-gradient(135deg, #7c5cff, #ff5cae, #5cd3ff)" },
   { id: "night",  name: "Night",   css: "radial-gradient(circle at 30% 20%, #1f2657 0%, #0b0b1c 70%)" },
@@ -228,6 +229,27 @@ const WALLPAPERS = [
   { id: "mint",   name: "Mint",    css: "linear-gradient(135deg, #b9f7d8, #6cd4a4)" },
   { id: "ink",    name: "Ink",     css: "radial-gradient(circle at 50% 50%, #2b2b44, #08080f)" },
   { id: "sun",    name: "Sun",     css: "linear-gradient(135deg, #ffd58a, #ff8a5a)" },
+  // ── Pro themes (require state.me.isPro === true) ─────────────────────────
+  { id: "neon-city",       name: "Neon City",       pro: true, css: "radial-gradient(circle at 20% 80%, rgba(120,0,255,.45) 0%, transparent 50%), radial-gradient(circle at 80% 20%, rgba(0,200,255,.35) 0%, transparent 50%), radial-gradient(circle at 50% 50%, rgba(255,0,150,.2) 0%, transparent 60%), #06060f" },
+  { id: "sakura",          name: "Sakura",          pro: true, css: "linear-gradient(160deg, #fce4ec 0%, #f8bbd9 40%, #ffd6e7 100%)" },
+  { id: "deep-ocean",      name: "Deep Ocean",      pro: true, css: "radial-gradient(ellipse at 20% 50%, #0d3b6e 0%, #051d40 60%), radial-gradient(ellipse at 80% 20%, #0a4a7a 0%, transparent 50%)" },
+  { id: "galaxy",          name: "Galaxy",          pro: true, css: "radial-gradient(ellipse at 50% 0%, #2d1b69 0%, #0d0d1f 60%), radial-gradient(circle at 85% 85%, #1a0533 0%, transparent 40%)" },
+  { id: "cyberpunk",       name: "Cyberpunk",       pro: true, css: "linear-gradient(135deg, #0d001a 0%, #1a0033 50%, #000d1a 100%), repeating-linear-gradient(90deg, rgba(0,255,255,.03) 0px, rgba(0,255,255,.03) 1px, transparent 1px, transparent 40px)" },
+  { id: "forest",          name: "Forest",          pro: true, css: "radial-gradient(ellipse at 50% 100%, #1a3a1a 0%, #0d1f0d 60%), radial-gradient(circle at 20% 20%, #2a5a1a 0%, transparent 50%)" },
+  { id: "sunset-coast",    name: "Sunset Coast",    pro: true, css: "linear-gradient(180deg, #ff6b35 0%, #f7c59f 35%, #ffe5b4 60%, #87ceeb 100%)" },
+  { id: "arctic",          name: "Arctic",          pro: true, css: "linear-gradient(160deg, #e8f4fd 0%, #b8d9f0 40%, #cce7f5 70%, #e0f2f7 100%)" },
+  { id: "lava",            name: "Lava",            pro: true, css: "radial-gradient(circle at 30% 70%, #8b0000 0%, #3d0000 50%), radial-gradient(circle at 80% 20%, #cc4400 0%, transparent 40%), #1a0000" },
+  { id: "northern-lights", name: "Northern Lights", pro: true, css: "radial-gradient(ellipse at 50% 0%, #0d4f2e 0%, #061a0f 50%), radial-gradient(ellipse at 20% 60%, rgba(0,255,150,.18) 0%, transparent 40%), radial-gradient(ellipse at 80% 30%, rgba(150,0,255,.12) 0%, transparent 40%)" },
+  { id: "rose-gold",       name: "Rose Gold",       pro: true, css: "linear-gradient(135deg, #b76e79 0%, #e8a0a8 40%, #f5c6cb 70%, #e8a0a8 100%)" },
+  { id: "matrix",          name: "Matrix",          pro: true, css: "repeating-linear-gradient(0deg, rgba(0,255,70,.04) 0px, rgba(0,255,70,.04) 1px, transparent 1px, transparent 20px), repeating-linear-gradient(90deg, rgba(0,255,70,.02) 0px, rgba(0,255,70,.02) 1px, transparent 1px, transparent 20px), #000a00" },
+  { id: "ocean-breeze",    name: "Ocean Breeze",    pro: true, css: "linear-gradient(160deg, #0077b6 0%, #00b4d8 40%, #90e0ef 80%, #caf0f8 100%)" },
+  { id: "volcanic",        name: "Volcanic",        pro: true, css: "radial-gradient(circle at 50% 100%, #5c1a00 0%, #2a0a00 50%), radial-gradient(circle at 50% 80%, rgba(255,100,0,.25) 0%, transparent 40%), #0d0500" },
+  { id: "snow",            name: "Snow",            pro: true, css: "radial-gradient(ellipse at 50% 0%, #ffffff 0%, #e8f4fd 60%), radial-gradient(circle at 80% 80%, #ddeeff 0%, transparent 50%)" },
+  { id: "cosmic",          name: "Cosmic",          pro: true, css: "radial-gradient(ellipse at 30% 30%, #1a004d 0%, #000511 60%), radial-gradient(circle at 70% 70%, #00004d 0%, transparent 50%)" },
+  { id: "desert",          name: "Desert Sand",     pro: true, css: "linear-gradient(160deg, #c9a96e 0%, #e8c98a 40%, #f5e0a0 70%, #d4a76a 100%)" },
+  { id: "midnight-blue",   name: "Midnight Blue",   pro: true, css: "radial-gradient(ellipse at 50% 0%, #002060 0%, #000a1f 70%)" },
+  { id: "cotton-candy",    name: "Cotton Candy",    pro: true, css: "linear-gradient(135deg, #fbc2eb 0%, #a6c1ee 40%, #ffecd2 70%, #fcb69f 100%)" },
+  { id: "holo",            name: "Holographic",     pro: true, css: "linear-gradient(135deg, rgba(255,0,128,.6) 0%, rgba(128,0,255,.6) 25%, rgba(0,200,255,.6) 50%, rgba(0,255,128,.6) 75%, rgba(255,200,0,.6) 100%), #1a1a2e" },
 ];
 const BUBBLE_COLORS = [
   "linear-gradient(135deg, #7c5cff, #ff5cae)",
@@ -1340,9 +1362,24 @@ const openCustomize = (chatId) => {
   const wpHost = $("#wallpapers");
   wpHost.innerHTML = "";
   WALLPAPERS.forEach((wp) => {
-    const tile = el("div", { class: `wallpaper wp-${wp.id} ${cust.wallpaper === wp.id ? "active" : ""}`, title: wp.name,
-      onclick: () => saveCust(chatId, { wallpaper: wp.id }) });
+    const isLocked = wp.pro && !state.me?.isPro;
+    const tile = el("div", {
+      class: `wallpaper wp-${wp.id} ${cust.wallpaper === wp.id ? "active" : ""} ${isLocked ? "wp-locked" : ""}`,
+      title: isLocked ? `${wp.name} — Pro only 👑` : wp.name,
+      onclick: () => {
+        if (isLocked) {
+          import("./features.js").then((m) => m.showGoProModal()).catch(() => {});
+          return;
+        }
+        saveCust(chatId, { wallpaper: wp.id });
+      },
+    });
     if (wp.id === "none") tile.appendChild(el("span", {}, "None"));
+    if (isLocked) {
+      const lockBadge = el("span", { class: "wp-lock-icon" });
+      lockBadge.textContent = "👑";
+      tile.appendChild(lockBadge);
+    }
     wpHost.appendChild(tile);
   });
 

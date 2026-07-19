@@ -76,6 +76,81 @@ html[data-theme="light"] {
   --shimmer: linear-gradient(90deg, #eef0f4 0%, #f7f7fb 50%, #eef0f4 100%);
 }
 
+/* ---------- Glass theme ---------- */
+html[data-theme="glass"] {
+  --bg:         rgba(9, 9, 20, 0.88);
+  --bg-elev:    rgba(255, 255, 255, 0.07);
+  --bg-elev-2:  rgba(255, 255, 255, 0.11);
+  --line:       rgba(255, 255, 255, 0.13);
+  --line-soft:  rgba(255, 255, 255, 0.07);
+  --text:       #f0f0ff;
+  --text-dim:   rgba(210, 210, 255, 0.78);
+  --text-mute:  rgba(170, 170, 220, 0.52);
+  --primary:    #a78bfa;
+  --primary-ink:#ffffff;
+  --danger:     #ff6b8a;
+  --warn:       #fbbf24;
+  --good:       #4ade80;
+  --hover:      rgba(255, 255, 255, 0.07);
+  --pressed:    rgba(255, 255, 255, 0.13);
+  --overlay:    rgba(0, 0, 0, 0.62);
+  --shimmer:    linear-gradient(90deg, rgba(255,255,255,.04) 0%, rgba(255,255,255,.11) 50%, rgba(255,255,255,.04) 100%);
+}
+/* Fixed animated orb layer behind everything */
+html[data-theme="glass"] body {
+  background: #08081a;
+}
+html[data-theme="glass"] body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 58% 42% at 18% 28%, rgba(110, 40, 255, 0.4) 0%, transparent 60%),
+    radial-gradient(ellipse 48% 38% at 82% 72%, rgba(0, 180, 255, 0.32) 0%, transparent 60%),
+    radial-gradient(ellipse 38% 32% at 62% 18%, rgba(255, 50, 160, 0.24) 0%, transparent 55%);
+  animation: glassOrbsMove 20s ease-in-out infinite alternate;
+  pointer-events: none;
+  z-index: 0;
+}
+@keyframes glassOrbsMove {
+  0%   { transform: translate(0%,   0%)  scale(1);    }
+  33%  { transform: translate(3%,  -5%)  scale(1.04); }
+  66%  { transform: translate(-2%,  4%)  scale(0.97); }
+  100% { transform: translate(5%,  -2%)  scale(1.02); }
+}
+/* Ensure app content sits above orbs */
+html[data-theme="glass"] .app,
+html[data-theme="glass"] #auth,
+html[data-theme="glass"] #onboarding,
+html[data-theme="glass"] #boot {
+  position: relative;
+  z-index: 1;
+}
+/* Frosted glass panels */
+html[data-theme="glass"] .topbar,
+html[data-theme="glass"] .sidebar,
+html[data-theme="glass"] .rightrail,
+html[data-theme="glass"] .modal-card,
+html[data-theme="glass"] .auth-card,
+html[data-theme="glass"] .rail-card,
+html[data-theme="glass"] .notif-panel,
+html[data-theme="glass"] .post-detail-modal,
+html[data-theme="glass"] .bottom-sheet,
+html[data-theme="glass"] .chat-info-sheet {
+  backdrop-filter: blur(24px) saturate(165%);
+  -webkit-backdrop-filter: blur(24px) saturate(165%);
+}
+html[data-theme="glass"] .topbar       { border-bottom-color: rgba(255,255,255,.12); }
+html[data-theme="glass"] .sidebar      { border-right-color:  rgba(255,255,255,.10); }
+html[data-theme="glass"] .auth-card    {
+  border-color: rgba(255,255,255,.18);
+  box-shadow: 0 24px 64px rgba(0,0,0,.55), inset 0 0 0 1px rgba(255,255,255,.08);
+}
+html[data-theme="glass"] .modal-card   { border-color: rgba(255,255,255,.14); }
+html[data-theme="glass"] .chat-view    { --chat-veil: rgba(0,0,0,.48); }
+html[data-theme="glass"] .chats-list   { border-right-color: rgba(255,255,255,.10); }
+html[data-theme="glass"] .post         { border-bottom-color: rgba(255,255,255,.07); }
+
 /* ---------- Reset ---------- */
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; height: 100%; }
@@ -835,7 +910,7 @@ textarea { resize: vertical; min-height: 80px; }
 .cust-section { padding: 14px 16px; border-bottom: 1px solid var(--line-soft); }
 .cust-section:last-child { border-bottom: 0; }
 .cust-label { color: var(--text-dim); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 10px; }
-.wallpapers { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+.wallpapers { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 8px; }
 .wallpaper {
   aspect-ratio: 9 / 14; border-radius: 10px; cursor: pointer;
   border: 2px solid transparent;
@@ -3061,4 +3136,197 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 
 @media (max-width: 480px) {
   .cr-stage { width: 100%; border-radius: 0; aspect-ratio: 9/16; }
+}
+
+
+/* =============================================================
+   ANIMATED PRO AVATARS  (avatar.js)
+   ============================================================= */
+
+/* Container replaces the bare <img class="avatar xl"> on profiles */
+.aav-wrap {
+  position: relative;
+  width: 110px;
+  height: 110px;
+  flex-shrink: 0;
+}
+.aav-real,
+.aav-char {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid var(--bg);
+  transition: opacity 0.65s ease;
+}
+.aav-real { opacity: 1; z-index: 2; }
+.aav-char { opacity: 0; z-index: 1; background: var(--bg-elev-2); }
+
+/* JS adds these after 3 s */
+.aav-real.aav-fade-out { opacity: 0; }
+.aav-char.aav-fade-in  { opacity: 1; }
+
+/* Wave-hand emoji overlay */
+.aav-hand {
+  position: absolute;
+  bottom: -4px;
+  right: -8px;
+  font-size: 28px;
+  z-index: 3;
+  opacity: 0;
+  pointer-events: none;
+  transform-origin: bottom center;
+  transition: opacity 0.4s ease 0.3s;
+}
+.aav-wrap.aav-active .aav-hand {
+  opacity: 1;
+  animation: aavWave 2.4s ease-in-out infinite;
+}
+@keyframes aavWave {
+  0%,55%,100% { transform: rotate(0deg); }
+  10%          { transform: rotate(20deg); }
+  20%          { transform: rotate(-10deg); }
+  30%          { transform: rotate(20deg); }
+  40%          { transform: rotate(-5deg); }
+  50%          { transform: rotate(0deg); }
+}
+
+/* Idle / breathe */
+.aav-wrap.aav-idle .aav-char,
+.aav-wrap.aav-me   .aav-char {
+  animation: aavBreathe 3.6s ease-in-out infinite;
+}
+@keyframes aavBreathe {
+  0%,100% { transform: scale(1);     }
+  50%     { transform: scale(1.035); }
+}
+
+/* Own profile: glowing ring */
+.aav-wrap.aav-me .aav-char {
+  box-shadow: 0 0 0 3px var(--primary), 0 0 20px rgba(124,92,255,.42);
+}
+
+/* Follow/celebrate: bounce */
+.aav-wrap.aav-celebrate .aav-char {
+  animation: aavCelebrate 0.52s ease-in-out 4;
+}
+@keyframes aavCelebrate {
+  0%   { transform: scale(1)    translateY(0);  }
+  30%  { transform: scale(1.14) translateY(-9px); }
+  65%  { transform: scale(0.94) translateY(2px);  }
+  100% { transform: scale(1)    translateY(0);  }
+}
+
+/* Confetti particles */
+.aav-confetti {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+  overflow: visible;
+}
+.aav-particle {
+  position: absolute;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--c, #ff5cae);
+  top: 50%; left: 50%;
+  opacity: 0;
+}
+.aav-wrap.aav-celebrate .aav-particle {
+  animation: aavParticle 1s ease-out forwards;
+  animation-delay: calc(var(--i) * 0.055s);
+}
+@keyframes aavParticle {
+  0%   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  100% {
+    opacity: 0;
+    transform:
+      translate(
+        calc(-50% + (var(--i) - 6) * 14px),
+        calc(-50% - 55px - var(--i) * 4px)
+      )
+      scale(0.4) rotate(360deg);
+  }
+}
+
+/* ── Avatar picker modal ── */
+.avp-card { max-width: 520px; width: 96%; }
+.avp-subtitle {
+  padding: 8px 20px 4px;
+  font-size: 13px;
+  color: var(--text-mute);
+  margin: 0;
+}
+.avp-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  padding: 14px 16px 20px;
+  max-height: 62vh;
+  overflow-y: auto;
+}
+@media (min-width: 440px) { .avp-grid { grid-template-columns: repeat(5, 1fr); } }
+.avp-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 6px;
+  border-radius: var(--radius);
+  border: 2px solid var(--line);
+  cursor: pointer;
+  transition: border-color var(--speed), background var(--speed), transform 0.15s;
+  text-align: center;
+}
+.avp-cell:hover { background: var(--hover); border-color: var(--primary); transform: translateY(-2px); }
+.avp-cell.active { border-color: var(--primary); background: rgba(124,92,255,.12); }
+.avp-cell img   { width: 58px; height: 58px; border-radius: 50%; object-fit: cover; background: var(--bg-elev-2); }
+.avp-cell span  { font-size: 10px; color: var(--text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; }
+
+/* ── Pro theme lock on wallpaper tiles ── */
+.wallpaper.wp-locked { position: relative; opacity: 0.55; cursor: pointer; }
+.wallpaper.wp-locked:hover { opacity: 0.82; }
+.wallpaper .wp-lock-icon {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  background: rgba(0,0,0,.3);
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+/* ── Settings: 3-way theme selector ── */
+.theme-seg {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-elev-2);
+  border-radius: var(--radius-pill);
+  padding: 4px;
+  border: 1px solid var(--line);
+}
+.theme-seg button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 12px;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-mute);
+  transition: background var(--speed), color var(--speed);
+  white-space: nowrap;
+}
+.theme-seg button.active {
+  background: var(--primary);
+  color: var(--primary-ink);
+}
+.theme-seg button:not(.active):hover {
+  background: var(--hover);
+  color: var(--text);
 }
