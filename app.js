@@ -220,7 +220,7 @@ const buildVideoPlayer = (url, opts = {}) => {
   const { song, overlays } = opts;
   const poster = _cloudPoster(url);
   // muted enables browser auto-play-on-scroll; user can unmute via the button
-  const video = el("video", { src: url, poster, preload: "none", playsinline: "", muted: "", style: "width:100%;display:block;" });
+  const video = el("video", { src: url, poster, preload: "none", playsinline: "", style: "width:100%;display:block;" });
   const playIcon  = el("i", { class: "ri-play-fill" });
   const overlay   = el("div", { class: "vp-overlay" }, el("button", { class: "vp-big-play" }, playIcon));
   const playSmI   = el("i", { class: "ri-play-fill" });
@@ -1505,7 +1505,6 @@ const _setupFeedVideoScroll = (list) => {
     entries.forEach((e) => {
       const v = e.target;
       if (e.isIntersecting) {
-        v.muted = true;
         v.play().catch(() => {});
       } else {
         v.pause();
@@ -1515,11 +1514,10 @@ const _setupFeedVideoScroll = (list) => {
   }, { threshold: 0.4 });
   _feedVidIO = io;
   // Observe all videos already in the list
-  list.querySelectorAll("video").forEach((v) => { v.muted = true; io.observe(v); });
+  list.querySelectorAll("video").forEach((v) => { io.observe(v); });
   // Watch for videos added later (lazy suggestion cards, etc.)
   const mo = new MutationObserver(() => {
     list.querySelectorAll("video:not([data-fvio])").forEach((v) => {
-      v.muted = true;
       v.setAttribute("data-fvio", "1");
       io.observe(v);
     });
@@ -2602,120 +2600,315 @@ const renderGroups = (root) => {
 // 11. EXPLORE / SAVED
 // =========================================================================
 const renderExplore = (root, hashtagFilter = null) => {
-  const title = hashtagFilter ? `#${hashtagFilter}` : "Explore";
-  const head = el("div", { class: "section-head" },
-    hashtagFilter
-      ? el("button", { class: "icon-btn", style: "margin-right:8px;", onclick: () => history.back() },
-          el("i", { class: "ri-arrow-left-line" }))
-      : null,
-    el("h2", {}, title),
-  );
-  root.appendChild(head);
+  // ── Hashtag filter view (grid) ────────────────────────────────────────────
+  if (hashtagFilter) {
+    root.appendChild(el("div", { class: "section-head" },
+      el("button", { class: "icon-btn", style: "margin-right:8px;", onclick: () => history.back() },
+        el("i", { class: "ri-arrow-left-line" })),
+      el("h2", {}, `#${hashtagFilter}`),
+    ));
+    const grid = el("div", { class: "grid-3" });
+    root.appendChild(grid);
+    onSnapshot(
+      query(collection(db, "posts"), where("hashtags", "array-contains", hashtagFilter.toLowerCase()), limit(60)),
+      (snap) => {
+        grid.innerHTML = "";
+        if (snap.empty) {
+          grid.appendChild(el("div", { class: "empty", style: "grid-column:1/-1;" },
+            el("i", { class: "ri-hashtag" }),
+            el("div", { class: "t" }, `No posts tagged #${hashtagFilter}`)));
+          return;
+        }
+        [...snap.docs]
+          .sort((a, b) => (b.data().createdAt?.seconds || 0) - (a.data().createdAt?.seconds || 0))
+          .forEach((d) => {
+            const p = { id: d.id, ...d.data() };
+            const cell = el("div", { class: "cell", onclick: () => location.hash = `#post/${p.id}` });
+            const mediaItems = Array.isArray(p.media) ? p.media : (p.media ? [p.media] : []);
+            if (mediaItems.length) {
+              const m = mediaItems[0];
+              if (m.type === "video") {
+                cell.appendChild(el("video", { src: m.url, muted: "", playsinline: "", preload: "metadata" }));
+                cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-play-fill" })));
+              } else {
+                cell.appendChild(el("img", { src: m.url, loading: "lazy" }));
+                if (mediaItems.length > 1) cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-image-2-line" })));
+              }
+            } else {
+              cell.appendChild(el("div", { class: "cell-text", text: (p.text || "").slice(0, 80) }));
+            }
+            if (p.text) cell.appendChild(el("div", { class: "cell-overlay", text: (p.text || "").slice(0, 55) }));
+            cell.appendChild(el("span", { class: "cell-views" }, el("i", { class: "ri-eye-line" }), " " + String(p.views || 0)));
+            grid.appendChild(cell);
+          });
+      }
+    );
+    return;
+  }
 
-  // ── Search bar ──────────────────────────────────────────────────────────
-  const searchWrap = el("div", { class: "explore-search-wrap" });
-  const searchInput = el("input", { type: "text", class: "explore-search-input", placeholder: "Search people, hashtags…" });
-  const searchResults = el("div", { class: "explore-search-results hidden" });
-  searchWrap.appendChild(el("div", { class: "explore-search-box" }, el("i", { class: "ri-search-line" }), searchInput));
-  searchWrap.appendChild(searchResults);
-  root.appendChild(searchWrap);
+  // ── Full Discover page ────────────────────────────────────────────────────
+  const wrap = el("div", { class: "disc-wrap" });
+  root.appendChild(wrap);
 
-  let _searchDebounce = null;
+  // 1. Header ──────────────────────────────────────────────────────────────
+  const unreadDot = el("span", { class: "disc-badge-dot", style: "display:none;" });
+  const bellIcon  = el("span", { class: "disc-icon disc-bell" }, "🔔", unreadDot);
+  bellIcon.onclick = () => { location.hash = "#notifications"; };
+  const notifPill = document.getElementById("notifPill");
+  if (notifPill && !notifPill.hidden && parseInt(notifPill.textContent || "0") > 0) {
+    unreadDot.style.display = "";
+  }
+
+  const searchBox    = el("div", { class: "disc-search-box hidden" });
+  const searchInput  = el("input", { type: "text", placeholder: "Search people, hashtags…" });
+  const searchResultsEl = el("div", { class: "explore-search-results hidden" });
+  searchBox.appendChild(searchInput);
+  searchBox.appendChild(searchResultsEl);
+
+  const searchIcon = el("span", { class: "disc-icon" }, "🔍");
+  searchIcon.onclick = () => {
+    searchBox.classList.toggle("hidden");
+    if (!searchBox.classList.contains("hidden")) searchInput.focus();
+  };
+
+  wrap.appendChild(el("div", { class: "disc-header" },
+    el("h1", {}, "Discover"),
+    el("div", { class: "disc-header-icons" }, searchIcon, bellIcon),
+  ));
+  wrap.appendChild(searchBox);
+
+  // Search logic
+  let _sd = null;
   searchInput.addEventListener("input", () => {
-    clearTimeout(_searchDebounce);
+    clearTimeout(_sd);
     const q1 = searchInput.value.trim().toLowerCase();
-    if (!q1) { searchResults.classList.add("hidden"); searchResults.innerHTML = ""; return; }
-    _searchDebounce = setTimeout(async () => {
-      searchResults.innerHTML = "";
-      searchResults.classList.remove("hidden");
+    if (!q1) { searchResultsEl.classList.add("hidden"); searchResultsEl.innerHTML = ""; return; }
+    _sd = setTimeout(async () => {
+      searchResultsEl.innerHTML = "";
+      searchResultsEl.classList.remove("hidden");
       if (q1.startsWith("#")) {
-        searchResults.appendChild(el("div", { class: "explore-search-item", onclick: () => location.hash = `#explore/${q1.slice(1)}` },
+        searchResultsEl.appendChild(el("div", { class: "explore-search-item", onclick: () => location.hash = `#explore/tag/${q1.slice(1)}` },
           el("i", { class: "ri-hashtag" }), el("span", {}, q1)));
         return;
       }
       const snap = await getDocs(query(collection(db, "users"), orderBy("username"), limit(200))).catch(() => null);
-      if (!snap) { searchResults.appendChild(el("div", { class: "explore-search-empty" }, "Search failed")); return; }
+      if (!snap) return;
       const matches = snap.docs
         .map((d) => ({ uid: d.id, ...d.data() }))
         .filter((u) => u.uid !== state.uid && ((u.name || "").toLowerCase().includes(q1) || (u.username || "").toLowerCase().includes(q1)))
         .slice(0, 12);
-      if (!matches.length) { searchResults.appendChild(el("div", { class: "explore-search-empty" }, "No matches")); return; }
-      matches.forEach((u) => {
-        searchResults.appendChild(el("div", { class: "explore-search-item", onclick: () => location.hash = `#profile/${u.uid}` },
+      if (!matches.length) { searchResultsEl.appendChild(el("div", { class: "explore-search-empty" }, "No matches")); return; }
+      matches.forEach((u) => searchResultsEl.appendChild(
+        el("div", { class: "explore-search-item", onclick: () => location.hash = `#profile/${u.uid}` },
           el("img", { class: "avatar xs", src: avatarFor(u) }),
           el("div", {}, el("div", { class: "esi-name" }, u.name || "User"), el("div", { class: "esi-sub" }, "@" + (u.username || "user"))),
-        ));
-      });
+        )
+      ));
     }, 250);
   });
   document.addEventListener("click", (e) => {
-    if (!searchWrap.contains(e.target)) { searchResults.classList.add("hidden"); }
+    if (!searchBox.contains(e.target) && e.target !== searchIcon) searchBox.classList.add("hidden");
   });
 
-  // ── Trending in Orbit ─────────────────────────────────────────────────
-  if (!hashtagFilter) {
-    const trendSection = el("div", { class: "trending-lane", style: "margin-bottom:12px;" });
-    trendSection.appendChild(el("div", { class: "trending-head" },
-      el("i", { class: "ri-fire-fill" }), "Trending in Orbit"
-    ));
-    const trendScroller = el("div", { class: "trending-scroller" });
-    trendSection.appendChild(trendScroller);
-    root.appendChild(trendSection);
-    getDocs(query(collection(db, "posts"), orderBy("orbitCount", "desc"), limit(10)))
-      .then(async (tSnap) => {
-        const tPosts = tSnap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter(p => (p.orbitCount || 0) >= 1);
-        if (!tPosts.length) { trendSection.style.display = "none"; return; }
-        const tAuthors = await Promise.all([...new Set(tPosts.map(p => p.authorUid))].map(fetchUser));
-        const tByUid = Object.fromEntries(tAuthors.filter(Boolean).map(u => [u.uid, u]));
-        tPosts.slice(0, 5).forEach(p => trendScroller.appendChild(renderTrendingCard(p, tByUid[p.authorUid])));
-      }).catch(() => { trendSection.style.display = "none"; });
-  }
+  // 2. Filter pills ─────────────────────────────────────────────────────────
+  const pillLabels  = ["For You", "Trending", "People", "Topics", "Live"];
+  let activeFilter  = "For You";
+  const pillRow     = el("div", { class: "disc-pills" });
+  const pillEls     = pillLabels.map((label) => {
+    const pill = el("span", { class: "disc-pill" + (label === activeFilter ? " active" : "") }, label);
+    pill.onclick = () => {
+      pillEls.forEach((p) => p.classList.remove("active"));
+      pill.classList.add("active");
+      activeFilter = label;
+    };
+    return pill;
+  });
+  pillEls.forEach((p) => pillRow.appendChild(p));
+  wrap.appendChild(pillRow);
 
-  const grid = el("div", { class: "grid-3" });
-  root.appendChild(grid);
+  // 3 & 4. Trending Now ─────────────────────────────────────────────────────
+  wrap.appendChild(el("div", { class: "disc-section-header" },
+    el("h2", {}, "Trending Now 🔥"),
+    el("span", { class: "disc-see-all" }, "See all"),
+  ));
+  const trendRow = el("div", { class: "disc-trend-row" });
+  wrap.appendChild(trendRow);
 
-  // No compound orderBy on hashtag queries — sort client-side to avoid composite index
-  const baseQ = hashtagFilter
-    ? query(collection(db, "posts"), where("hashtags", "array-contains", hashtagFilter.toLowerCase()), limit(60))
-    : query(collection(db, "posts"), orderBy("orbitCount", "desc"), limit(60));
-
-  onSnapshot(baseQ, (snap) => {
-    grid.innerHTML = "";
-    if (snap.empty) {
-      grid.appendChild(el("div", { class: "empty", style: "grid-column:1/-1;" },
-        el("i", { class: hashtagFilter ? "ri-hashtag" : "ri-compass-3-line" }),
-        el("div", { class: "t" }, hashtagFilter ? `No posts tagged #${hashtagFilter}` : "Nothing to explore yet")));
-      return;
-    }
-    // Client-side sort for hashtag queries (no compound index needed)
-    const docs = [...snap.docs].sort((a, b) => {
-      if (hashtagFilter) return (b.data().createdAt?.seconds || 0) - (a.data().createdAt?.seconds || 0);
-      return (b.data().orbitCount || 0) - (a.data().orbitCount || 0);
-    });
-    docs.forEach((d) => {
-      const p = { id: d.id, ...d.data() };
-      const cell = el("div", { class: "cell", onclick: () => location.hash = `#post/${p.id}` });
-      const mediaItems = Array.isArray(p.media) ? p.media : (p.media ? [p.media] : []);
-      if (mediaItems.length) {
-        const m = mediaItems[0];
-        if (m.type === "video") {
-          cell.appendChild(el("video", { src: m.url, muted: "", playsinline: "", preload: "metadata" }));
-          cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-play-fill" })));
-        } else {
-          cell.appendChild(el("img", { src: m.url, loading: "lazy" }));
-          if (mediaItems.length > 1) cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-image-2-line" })));
-        }
-      } else {
-        cell.appendChild(el("div", { class: "cell-text", text: (p.text || "").slice(0, 80) }));
+  getDocs(query(collection(db, "posts"), orderBy("orbitCount", "desc"), limit(80)))
+    .then((snap) => {
+      // Aggregate hashtags → weight + cover image
+      const tagData = {};
+      snap.docs.forEach((d) => {
+        const p = d.data();
+        const tags = p.hashtags || [];
+        const media = Array.isArray(p.media) ? p.media : (p.media ? [p.media] : []);
+        const imgUrl = media.find((m) => m.type === "image")?.url || null;
+        tags.forEach((tag) => {
+          if (!tagData[tag]) tagData[tag] = { count: 0, imageUrl: null };
+          tagData[tag].count += (p.orbitCount || 0) + 1;
+          if (!tagData[tag].imageUrl && imgUrl) tagData[tag].imageUrl = imgUrl;
+        });
+      });
+      const sorted = Object.entries(tagData).sort((a, b) => b[1].count - a[1].count).slice(0, 10);
+      const fallbackGrads = [
+        "linear-gradient(135deg,#1a1a2e,#16213e)",
+        "linear-gradient(135deg,#0f0c29,#302b63)",
+        "linear-gradient(135deg,#1a1a1a,#2d2d2d)",
+        "linear-gradient(135deg,#111827,#1f2937)",
+        "linear-gradient(135deg,#0d0d0d,#1a1a1a)",
+      ];
+      if (!sorted.length) {
+        trendRow.appendChild(el("div", { style: "padding:0 16px;color:var(--text-mute);font-size:13px;" }, "No trending topics yet"));
+        return;
       }
-      if (p.text) cell.appendChild(el("div", { class: "cell-overlay", text: (p.text || "").slice(0, 55) }));
-      cell.appendChild(el("span", { class: "cell-views" }, el("i", { class: "ri-eye-line" }), " " + String(p.views || 0)));
-      grid.appendChild(cell);
+      sorted.forEach(([tag, data], i) => {
+        const bgStyle = data.imageUrl
+          ? `background-image:url('${data.imageUrl}');background-size:cover;background-position:center;`
+          : `background:${fallbackGrads[i % fallbackGrads.length]};`;
+        const countStr = data.count > 999
+          ? (data.count / 1000).toFixed(1) + "K"
+          : String(data.count);
+        trendRow.appendChild(el("div", {
+          class: "disc-trend-card",
+          style: bgStyle,
+          onclick: () => location.hash = `#explore/tag/${tag}`,
+        },
+          el("div", { class: "disc-trend-overlay" },
+            el("span", { class: "disc-trend-title" }, `#${tag}`),
+            el("span", { class: "disc-trend-count" }, `${countStr} orbits`),
+          ),
+        ));
+      });
+    }).catch(() => {
+      trendRow.appendChild(el("div", { style: "padding:0 16px;color:var(--text-mute);font-size:13px;" }, "Could not load trends"));
     });
-  });
-};
+
+  // 5 & 6. People to Follow ─────────────────────────────────────────────────
+  wrap.appendChild(el("div", { class: "disc-section-header" },
+    el("h2", {}, "People to Follow"),
+    el("span", { class: "disc-see-all" }, "See all"),
+  ));
+  const peopleList = el("div", { class: "disc-people-list" });
+  wrap.appendChild(peopleList);
+
+  getDocs(query(collection(db, "users"), limit(40)))
+    .then((snap) => {
+      const following = state.me?.following || [];
+      const suggestions = snap.docs
+        .map((d) => ({ uid: d.id, ...d.data() }))
+        .filter((u) => u.uid !== state.uid && !following.includes(u.uid))
+        .sort((a, b) => (b.followers?.length || 0) - (a.followers?.length || 0))
+        .slice(0, 6);
+
+      if (!suggestions.length) {
+        peopleList.appendChild(el("div", { style: "color:var(--text-mute);font-size:13px;padding:0 0 8px;" },
+          "You're already following everyone — check back soon."));
+        return;
+      }
+
+      suggestions.forEach((u) => {
+        let followed = (state.me?.following || []).includes(u.uid);
+        const followBtn = el("button", {
+          class: "disc-follow-btn",
+          style: followed ? "opacity:0.5;" : "",
+        }, followed ? "Following" : "Follow");
+
+        followBtn.onclick = async () => {
+          followed = !followed;
+          followBtn.textContent = followed ? "Following" : "Follow";
+          followBtn.style.opacity = followed ? "0.5" : "";
+          const meRef  = doc(db, "users", state.uid);
+          const themRef = doc(db, "users", u.uid);
+          const batch = writeBatch(db);
+          if (followed) {
+            batch.update(meRef,  { following: arrayUnion(u.uid) });
+            batch.update(themRef, { followers: arrayUnion(state.uid) });
+            if (state.me) state.me.following = [...new Set([...(state.me.following || []), u.uid])];
+            writeNotif(u.uid, "follow", {}).catch(() => {});
+          } else {
+            batch.update(meRef,  { following: arrayRemove(u.uid) });
+            batch.update(themRef, { followers: arrayRemove(state.uid) });
+            if (state.me) state.me.following = (state.me.following || []).filter((x) => x !== u.uid);
+          }
+          await batch.commit().catch(() => {
+            toast("Failed to update");
+            followed = !followed;
+            followBtn.textContent = followed ? "Following" : "Follow";
+            followBtn.style.opacity = followed ? "0.5" : "";
+          });
+        };
+
+        const roleText = u.bio ? u.bio.slice(0, 42) : (u.verified ? "Verified member" : "Orbit member");
+        peopleList.appendChild(el("div", { class: "disc-people-row" },
+          el("img", {
+            class: "disc-people-avatar",
+            src: avatarFor(u),
+            style: "cursor:pointer;",
+            onclick: () => location.hash = `#profile/${u.uid}`,
+          }),
+          el("div", {
+            class: "disc-people-info",
+            onclick: () => location.hash = `#profile/${u.uid}`,
+          },
+            el("span", { class: "disc-people-name" },
+              u.name || "User",
+              u.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
+            ),
+            el("span", { class: "disc-people-handle" }, `@${u.username || "user"}`),
+            el("span", { class: "disc-people-role" }, roleText),
+          ),
+          followBtn,
+        ));
+      });
+    }).catch(() => {});
+
+  // 7 & 8. Popular Posts ────────────────────────────────────────────────────
+  wrap.appendChild(el("div", { class: "disc-section-header", style: "margin-top:8px;" },
+    el("h2", {}, "Popular Posts"),
+  ));
+  // NOTE: intentionally NOT "feed-wrap" — that class triggers global story/suggestion
+  // hooks from features.js/additional.js that belong only on the home feed.
+  const postsList = el("div", { class: "disc-posts-list" });
+  wrap.appendChild(postsList);
+
+  // Skeleton loading — show 4 placeholder cards while Firestore loads
+  const _makeSkeleton = () => el("div", { class: "disc-skel-post" },
+    el("div", { class: "disc-skel-head" },
+      el("div", { class: "disc-skel-avatar" }),
+      el("div", { class: "disc-skel-meta" },
+        el("div", { class: "disc-skel-line w60" }),
+        el("div", { class: "disc-skel-line w40" }),
+      ),
+    ),
+    el("div", { class: "disc-skel-line w100", style: "height:14px;margin-bottom:6px;" }),
+    el("div", { class: "disc-skel-line w80", style: "height:14px;margin-bottom:6px;" }),
+    el("div", { class: "disc-skel-media" }),
+  );
+  for (let i = 0; i < 4; i++) postsList.appendChild(_makeSkeleton());
+
+  getDocs(query(collection(db, "posts"), orderBy("orbitCount", "desc"), limit(20)))
+    .then(async (snap) => {
+      postsList.innerHTML = ""; // clear skeletons
+      if (snap.empty) {
+        postsList.appendChild(el("div", { class: "empty" },
+          el("i", { class: "ri-planet-line" }),
+          el("div", { class: "t" }, "No popular posts yet")));
+        return;
+      }
+      const posts   = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const uids    = [...new Set(posts.map((p) => p.authorUid))];
+      const authors = await Promise.all(uids.map(fetchUser));
+      const byUid   = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
+      posts.slice(0, 10).forEach((p) => {
+        postsList.appendChild(renderPost(p, byUid[p.authorUid]));
+        postsList.appendChild(el("div", {
+          class: "signal-divider",
+          html: `<div class="signal-divider-icon"><svg width="16" height="16" viewBox="0 0 26 26" fill="none"><circle cx="13" cy="13" r="4" stroke="currentColor" stroke-width="2" opacity=".3"/></svg></div>`,
+        }));
+      });
+      _setupFeedVideoScroll(postsList);
+    }).catch(() => { postsList.innerHTML = ""; });
+}
 
 const renderSaved = (root) => {
   const head = el("div", { class: "section-head" }, el("h2", {}, "Saved"));

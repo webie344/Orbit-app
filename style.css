@@ -3157,3 +3157,190 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 @media (max-width: 480px) {
   .cr-stage { width: 100%; border-radius: 0; aspect-ratio: 9/16; }
 }
+
+
+/* ==========================================================================
+   PATCH — remove browser-default text-cursor / selection highlight on posts
+   ========================================================================== */
+.signal-post,
+.signal-post * { cursor: pointer; }
+
+.signal-post .post-text,
+.signal-post .signal-thought,
+.signal-post .post-feat-title { user-select: none; }
+
+.signal-post { -webkit-tap-highlight-color: transparent; }
+
+/* Keep form controls inside posts usable */
+.signal-post input,
+.signal-post textarea { cursor: text; user-select: text; }
+
+
+/* ==========================================================================
+   DISCOVER PAGE — disc-* component styles
+   ========================================================================== */
+.disc-wrap { padding-bottom: 80px; }
+
+/* 1. Header */
+.disc-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 20px 16px 12px;
+}
+.disc-header h1 {
+  font-family: var(--font-display); font-size: 26px; font-weight: 800;
+  letter-spacing: -0.02em; margin: 0;
+}
+.disc-header-icons { display: flex; gap: 18px; font-size: 20px; }
+.disc-icon { position: relative; color: var(--text); cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.disc-badge-dot {
+  position: absolute; top: -2px; right: -2px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #e11d48; border: 2px solid var(--bg);
+}
+
+/* Search box (below header) */
+.disc-search-box { padding: 0 16px 12px; }
+.disc-search-box input {
+  width: 100%; padding: 10px 16px; border-radius: var(--radius-pill);
+  background: var(--bg-elev-2); border: 1px solid var(--line);
+  color: var(--text); outline: none; font-size: 14px;
+  transition: border var(--speed);
+}
+
+/* 2. Filter pills */
+.disc-pills {
+  display: flex; gap: 8px; padding: 0 16px 20px;
+  overflow-x: auto; scrollbar-width: none;
+}
+.disc-pills::-webkit-scrollbar { display: none; }
+.disc-pill {
+  flex-shrink: 0; padding: 8px 16px; border-radius: 999px;
+  font-size: 13px; font-weight: 600; color: var(--text-mute);
+  border: 1px solid var(--line); white-space: nowrap; cursor: pointer;
+  transition: color var(--speed), border-color var(--speed);
+  -webkit-tap-highlight-color: transparent;
+}
+.disc-pill.active { color: var(--text); border-color: var(--text-dim); }
+.disc-pill:hover { color: var(--text-dim); }
+
+/* Section headers */
+.disc-section-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 16px 12px;
+}
+.disc-section-header h2 {
+  font-family: var(--font-display); font-size: 17px; font-weight: 700; margin: 0;
+}
+.disc-see-all { font-size: 13px; color: var(--text-mute); cursor: pointer; transition: color var(--speed); }
+.disc-see-all:hover { color: var(--text-dim); }
+
+/* 3 & 4. Trending Now cards */
+.disc-trend-row {
+  display: flex; gap: 10px; padding: 0 16px 24px;
+  overflow-x: auto; scroll-snap-type: x mandatory;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch;
+}
+.disc-trend-row::-webkit-scrollbar { display: none; }
+.disc-trend-card {
+  flex: 0 0 150px; height: 190px; border-radius: 14px;
+  background-size: cover; background-position: center;
+  position: relative; scroll-snap-align: start; overflow: hidden;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+  transition: transform var(--speed) var(--ease);
+}
+.disc-trend-card:hover { transform: translateY(-2px); }
+.disc-trend-card:active { transform: scale(0.97); }
+.disc-trend-overlay {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  padding: 30px 12px 12px;
+  background: linear-gradient(180deg, transparent, rgba(0,0,0,0.88));
+  display: flex; flex-direction: column; gap: 2px;
+}
+.disc-trend-title { font-size: 14px; font-weight: 700; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.disc-trend-count { font-size: 11.5px; color: rgba(255,255,255,0.75); }
+
+/* 5 & 6. People to Follow */
+.disc-people-list { display: flex; flex-direction: column; padding: 0 16px; gap: 18px; margin-bottom: 24px; }
+.disc-people-row { display: flex; align-items: center; gap: 12px; }
+.disc-people-avatar { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; flex-shrink: 0; background: var(--bg-elev-2); }
+.disc-people-info { flex: 1; display: flex; flex-direction: column; min-width: 0; cursor: pointer; }
+.disc-people-name { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.disc-people-handle { font-size: 12px; color: var(--text-mute); }
+.disc-people-role { font-size: 12px; color: var(--text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.disc-follow-btn {
+  background: transparent; border: 1px solid var(--text-dim); color: var(--text);
+  padding: 7px 16px; border-radius: 999px; font-size: 13px; font-weight: 600;
+  cursor: pointer; flex-shrink: 0;
+  transition: background var(--speed), opacity var(--speed);
+  -webkit-tap-highlight-color: transparent;
+}
+.disc-follow-btn:hover { background: var(--hover); }
+.disc-follow-btn:active { transform: scale(0.96); }
+
+/* ==========================================================================
+   DISCOVER — disc-posts-list + skeleton loading
+   ========================================================================== */
+.disc-posts-list {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+/* Skeleton shimmer keyframe */
+@keyframes disc-shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position:  400px 0; }
+}
+.disc-skel-post {
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.disc-skel-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.disc-skel-avatar {
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: linear-gradient(90deg, var(--bg-elev-2) 25%, var(--bg-elev-3, #2a2a2a) 50%, var(--bg-elev-2) 75%);
+  background-size: 800px 100%;
+  animation: disc-shimmer 1.4s infinite linear;
+}
+.disc-skel-meta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.disc-skel-line {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--bg-elev-2) 25%, var(--bg-elev-3, #2a2a2a) 50%, var(--bg-elev-2) 75%);
+  background-size: 800px 100%;
+  animation: disc-shimmer 1.4s infinite linear;
+}
+.disc-skel-line.w100 { width: 100%; }
+.disc-skel-line.w80  { width: 80%;  }
+.disc-skel-line.w60  { width: 60%;  }
+.disc-skel-line.w40  { width: 40%;  }
+.disc-skel-media {
+  width: 100%; height: 200px;
+  border-radius: 12px;
+  margin-top: 10px;
+  background: linear-gradient(90deg, var(--bg-elev-2) 25%, var(--bg-elev-3, #2a2a2a) 50%, var(--bg-elev-2) 75%);
+  background-size: 800px 100%;
+  animation: disc-shimmer 1.4s infinite linear;
+}
+/* Stagger skeleton card animations so they don't pulse in lockstep */
+.disc-skel-post:nth-child(2) .disc-skel-avatar,
+.disc-skel-post:nth-child(2) .disc-skel-line,
+.disc-skel-post:nth-child(2) .disc-skel-media { animation-delay: 0.15s; }
+.disc-skel-post:nth-child(3) .disc-skel-avatar,
+.disc-skel-post:nth-child(3) .disc-skel-line,
+.disc-skel-post:nth-child(3) .disc-skel-media { animation-delay: 0.30s; }
+.disc-skel-post:nth-child(4) .disc-skel-avatar,
+.disc-skel-post:nth-child(4) .disc-skel-line,
+.disc-skel-post:nth-child(4) .disc-skel-media { animation-delay: 0.45s; }
