@@ -51,6 +51,7 @@ html[data-theme="dark"] {
   --good: #3fdca0;
   --hover: rgba(255, 255, 255, 0.04);
   --pressed: rgba(255, 255, 255, 0.08);
+  --skel-shine: #2a2a3a;
   --overlay: rgba(0, 0, 0, 0.6);
   --shimmer: linear-gradient(90deg, #1a1a23 0%, #23232f 50%, #1a1a23 100%);
 }
@@ -72,6 +73,7 @@ html[data-theme="light"] {
   --good: #18a673;
   --hover: rgba(0, 0, 0, 0.04);
   --pressed: rgba(0, 0, 0, 0.06);
+  --skel-shine: #dddde8;
   --overlay: rgba(15, 15, 30, 0.5);
   --shimmer: linear-gradient(90deg, #eef0f4 0%, #f7f7fb 50%, #eef0f4 100%);
 }
@@ -3305,7 +3307,7 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   width: 40px; height: 40px;
   border-radius: 50%;
   flex-shrink: 0;
-  background: linear-gradient(90deg, var(--bg-elev-2) 25%, var(--bg-elev-3, #2a2a2a) 50%, var(--bg-elev-2) 75%);
+  background: linear-gradient(90deg, var(--bg-elev-2) 25%, var(--skel-shine) 50%, var(--bg-elev-2) 75%);
   background-size: 800px 100%;
   animation: disc-shimmer 1.4s infinite linear;
 }
@@ -3318,7 +3320,7 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .disc-skel-line {
   height: 12px;
   border-radius: 6px;
-  background: linear-gradient(90deg, var(--bg-elev-2) 25%, var(--bg-elev-3, #2a2a2a) 50%, var(--bg-elev-2) 75%);
+  background: linear-gradient(90deg, var(--bg-elev-2) 25%, var(--skel-shine) 50%, var(--bg-elev-2) 75%);
   background-size: 800px 100%;
   animation: disc-shimmer 1.4s infinite linear;
 }
@@ -3330,7 +3332,7 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   width: 100%; height: 200px;
   border-radius: 12px;
   margin-top: 10px;
-  background: linear-gradient(90deg, var(--bg-elev-2) 25%, var(--bg-elev-3, #2a2a2a) 50%, var(--bg-elev-2) 75%);
+  background: linear-gradient(90deg, var(--bg-elev-2) 25%, var(--skel-shine) 50%, var(--bg-elev-2) 75%);
   background-size: 800px 100%;
   animation: disc-shimmer 1.4s infinite linear;
 }
@@ -3384,12 +3386,12 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .grp-tabs::-webkit-scrollbar { display: none; }
 .grp-tab {
   flex-shrink: 0; padding: 9px 18px; border-radius: 999px;
-  font-size: 13.5px; font-weight: 600; color: #999;
-  background: transparent; border: 1px solid #2a2a2a; cursor: pointer;
+  font-size: 13.5px; font-weight: 600; color: var(--text-mute);
+  background: transparent; border: 1px solid var(--line); cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   transition: background var(--speed), color var(--speed), border-color var(--speed);
 }
-.grp-tab.active { background: #fff; color: #000; border-color: #fff; }
+.grp-tab.active { background: var(--text); color: var(--bg); border-color: var(--text); }
 
 /* Category chips row */
 .grp-cat-chips {
@@ -3409,8 +3411,8 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 /* Hero banner */
 .grp-hero {
   margin: 0 16px 24px; padding: 22px;
-  border-radius: 18px; background: #111;
-  border: 1px solid #262626;
+  border-radius: 18px; background: var(--bg-elev);
+  border: 1px solid var(--line);
   display: flex; justify-content: space-between; align-items: center; gap: 12px;
 }
 .grp-hero-text h2 {
@@ -3458,7 +3460,7 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .grp-desc { font-size: 12px; color: #777; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .grp-row-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .grp-join-btn {
-  background: var(--bg-elev-2); border: 1px solid #333; color: #fff;
+  background: var(--bg-elev-2); border: 1px solid var(--line); color: var(--text);
   padding: 8px 18px; border-radius: 999px; font-size: 13px; font-weight: 600;
   flex-shrink: 0; cursor: pointer; -webkit-tap-highlight-color: transparent;
   transition: opacity var(--speed), background var(--speed);
@@ -3500,20 +3502,20 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .grp-skel-row { pointer-events: none; }
 .grp-skel-icon {
   width: 46px; height: 46px; border-radius: 12px; flex-shrink: 0;
-  background: linear-gradient(90deg, var(--bg-elev-2) 25%, var(--bg-elev-3,#2a2a2a) 50%, var(--bg-elev-2) 75%);
+  background: linear-gradient(90deg, var(--bg-elev-2) 25%, var(--skel-shine) 50%, var(--bg-elev-2) 75%);
   background-size: 800px 100%; animation: grp-shimmer 1.4s infinite linear;
 }
 .grp-skel-info { flex: 1; display: flex; flex-direction: column; gap: 8px; }
 .grp-skel-line {
   height: 12px; border-radius: 6px;
-  background: linear-gradient(90deg, var(--bg-elev-2) 25%, var(--bg-elev-3,#2a2a2a) 50%, var(--bg-elev-2) 75%);
+  background: linear-gradient(90deg, var(--bg-elev-2) 25%, var(--skel-shine) 50%, var(--bg-elev-2) 75%);
   background-size: 800px 100%; animation: grp-shimmer 1.4s infinite linear;
 }
 .grp-skel-line.w60 { width: 60%; }
 .grp-skel-line.w40 { width: 40%; }
 .grp-skel-btn {
   width: 70px; height: 34px; border-radius: 999px; flex-shrink: 0;
-  background: linear-gradient(90deg, var(--bg-elev-2) 25%, var(--bg-elev-3,#2a2a2a) 50%, var(--bg-elev-2) 75%);
+  background: linear-gradient(90deg, var(--bg-elev-2) 25%, var(--skel-shine) 50%, var(--bg-elev-2) 75%);
   background-size: 800px 100%; animation: grp-shimmer 1.4s infinite linear;
 }
 .grp-skel-row:nth-child(2) .grp-skel-icon,
