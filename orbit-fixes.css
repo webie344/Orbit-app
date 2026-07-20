@@ -1,0 +1,45 @@
+/* ==========================================================================
+   ORBIT FIXES — paste these rules at the very bottom of style.css
+   ========================================================================== */
+
+/* ---------- Suppress Google Translate injected UI ---------- */
+
+/* Hide the top toolbar/banner frame Google Translate injects */
+.goog-te-banner-frame,
+.goog-te-banner-frame.skiptranslate {
+  display: none !important;
+}
+
+/* Prevent Google Translate from pushing the body down by 40px */
+body {
+  top: 0 !important;
+}
+
+/* Hide the floating translation tooltip */
+#goog-gt-tt,
+.goog-te-balloon-frame,
+.goog-tooltip,
+.goog-tooltip:hover {
+  display: none !important;
+  visibility: hidden !important;
+}
+
+/* Hide the Google Feedback / "Powered by Google Translate" gadget */
+.goog-te-gadget,
+.goog-te-gadget-simple,
+.goog-logo-link,
+.goog-te-menu-value span:last-child {
+  display: none !important;
+}
+
+/* Remove highlight Google Translate puts on translated text */
+.goog-text-highlight {
+  background: none !important;
+  box-shadow: none !important;
+}
+
+/* Hide the "Original / Translated" feedback bar */
+#goog-gt- ,
+.skiptranslate {
+  display: none !important;
+}

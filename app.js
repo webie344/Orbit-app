@@ -1708,70 +1708,28 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
     return grid;
   }
 
-  // ── 4+ items: swipeable carousel ──────────────────────────────
-  let cur = 0;
-  const slides = items.map((m, i) => {
-    const slide = el("div", { class: "carousel-slide", style: i === 0 ? "" : "display:none;" });
-    if (m.type === "video") {
-      const player = buildVideoPlayer(m.url, { overlays: m.overlays });
-      // Clicking anywhere on the player navigates to the post detail
-      if (postId) {
-        const overlay = player.querySelector(".vp-overlay");
-        if (overlay) overlay.onclick = (e) => { e.stopPropagation(); location.hash = `#post/${postId}`; };
-        const fullBtn = player.querySelector(".vp-btn:last-child");
-        if (fullBtn) fullBtn.onclick = (e) => { e.stopPropagation(); location.hash = `#post/${postId}`; };
-      }
-      slide.appendChild(player);
-    } else {
-      const img = el("img", { src: m.url, loading: "lazy", style: postId ? "cursor:pointer;" : "" });
-      if (postId) img.onclick = (e) => { e.stopPropagation(); location.hash = `#post/${postId}`; };
-      slide.appendChild(img);
+  // ── 4+ items: Facebook-style 2×2 grid with "+N more" overflow ─
+  const show = items.slice(0, 4);
+  const overflow = items.length - 4;
+  const grid = el("div", {
+    class: "post-media",
+    style: "display:grid;grid-template-columns:1fr 1fr;grid-template-rows:130px 130px;gap:3px;border-radius:14px;overflow:hidden;margin:8px 0;position:relative;",
+  });
+  show.forEach((m, i) => {
+    const cell = _makeGridCell(m, false, items, i, postId);
+    if (i === 3 && overflow > 0) {
+      const moreOverlay = el("div", {
+        style: "position:absolute;inset:0;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;cursor:pointer;",
+        onclick: (e) => { e.stopPropagation(); if (postId) location.hash = `#post/${postId}`; },
+      }, el("span", {
+        style: "color:#fff;font-size:22px;font-weight:700;font-family:var(--font-display);letter-spacing:-0.02em;",
+      }, `+${overflow}`));
+      cell.appendChild(moreOverlay);
     }
-    return slide;
+    grid.appendChild(cell);
   });
-  const dotsWrap = el("div", { class: "carousel-dots" });
-  const dots = items.map((_, i) => {
-    const d = el("button", { class: `carousel-dot${i === 0 ? " active" : ""}` });
-    dotsWrap.appendChild(d);
-    return d;
-  });
-  const go = (n) => {
-    slides[cur].style.display = "none"; dots[cur].classList.remove("active");
-    cur = (n + items.length) % items.length;
-    slides[cur].style.display = ""; dots[cur].classList.add("active");
-  };
-  const wrap = el("div", { class: "post-media carousel", style: "border-radius:14px;overflow:hidden;margin:8px 0;position:relative;" }, ...slides, dotsWrap);
-  if (song) _wireStandaloneSong(wrap);
-
-  // Touch swipe support
-  let _swipeStartX = 0;
-  let _swipeStartY = 0;
-  wrap.addEventListener("touchstart", (e) => {
-    _swipeStartX = e.touches[0].clientX;
-    _swipeStartY = e.touches[0].clientY;
-  }, { passive: true });
-  wrap.addEventListener("touchend", (e) => {
-    const dx = e.changedTouches[0].clientX - _swipeStartX;
-    const dy = e.changedTouches[0].clientY - _swipeStartY;
-    if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
-      e.stopPropagation();
-      go(dx < 0 ? cur + 1 : cur - 1);
-    }
-  }, { passive: true });
-
-  // Mouse drag support (desktop)
-  let _mouseStartX = 0;
-  let _mouseDragging = false;
-  wrap.addEventListener("mousedown", (e) => { _mouseStartX = e.clientX; _mouseDragging = true; });
-  wrap.addEventListener("mouseup", (e) => {
-    if (!_mouseDragging) return;
-    _mouseDragging = false;
-    const dx = e.clientX - _mouseStartX;
-    if (Math.abs(dx) > 40) { e.stopPropagation(); go(dx < 0 ? cur + 1 : cur - 1); }
-  });
-  wrap.addEventListener("mouseleave", () => { _mouseDragging = false; });
-
-  return wrap;
+  if (song) _wireStandaloneSong(grid);
+  return grid;
 };
 
 const renderPost = (p, author, opts = {}) => {
@@ -3993,7 +3951,7 @@ function crBuildEditorStep() {
       // (via crFontPx), so the CSS transform only handles position + rotation.
       const layer = el("div", {
         class: `cr-layer ${ov.type}` + (ov.id === crState.selectedLayerId ? " selected" : ""),
-        style: `left:${ov.x}%;top:${ov.y}%;transform:translate(-50%,-50%) rotate(${ov.rotation}deg);` +
+        style: `left:${ov.x}%;top:${ov.y}%;transform:translate(-50%,-50%) rotate(${ov.rotation}deg);touch-action:none;` +
           (ov.type === "text" ? `color:${ov.color};` : ""),
       },
         ov.type === "text" ? el("span", { text: ov.text, contenteditable: false }) : ov.icon,
@@ -4009,6 +3967,7 @@ function crBuildEditorStep() {
       // the very next tap edits it. Desktop dblclick still works too.
       let dragging = false, moved = false, sx = 0, sy = 0, ox = 0, oy = 0, wasSelectedBeforeTap = false;
       layer.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
         wasSelectedBeforeTap = crState.selectedLayerId === ov.id;
         crState.selectedLayerId = ov.id;
         paintLayerControls();
@@ -4019,6 +3978,7 @@ function crBuildEditorStep() {
       });
       layer.addEventListener("pointermove", (e) => {
         if (!dragging) return;
+        e.preventDefault();
         const dx = e.clientX - sx, dy = e.clientY - sy;
         if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
         const r = rect();
@@ -4028,8 +3988,13 @@ function crBuildEditorStep() {
       });
       layer.addEventListener("pointerup", () => {
         dragging = false;
-        if (!moved && ov.type === "text" && wasSelectedBeforeTap) crEnterTextEdit(layer, ov);
+        if (!moved && ov.type === "text" && wasSelectedBeforeTap) {
+          // rAF gives the browser a frame to settle pointer capture before
+          // we call focus() — critical for reliable tap-to-edit on mobile.
+          requestAnimationFrame(() => crEnterTextEdit(layer, ov));
+        }
       });
+      layer.addEventListener("pointercancel", () => { dragging = false; });
       if (ov.type === "text") {
         layer.addEventListener("dblclick", () => crEnterTextEdit(layer, ov));
       }

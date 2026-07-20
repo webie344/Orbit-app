@@ -3613,3 +3613,52 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 }
 .settings-lang-select:focus { border-color: var(--text-dim); }
 .settings-lang-select option { background: var(--bg); color: var(--text); }
+
+
+/* ==========================================================================
+   Suppress Google Translate & Google Feedback injected UI
+   ========================================================================== */
+
+/* Hide the top toolbar / banner frame Google Translate injects */
+.goog-te-banner-frame,
+.goog-te-banner-frame.skiptranslate {
+  display: none !important;
+}
+
+/* Prevent Google Translate from shifting the page body down by 40 px */
+body {
+  top: 0 !important;
+}
+
+/* Hide the floating translation tooltip and balloon */
+#goog-gt-tt,
+.goog-te-balloon-frame,
+.goog-tooltip,
+.goog-tooltip:hover {
+  display: none !important;
+  visibility: hidden !important;
+}
+
+/* Hide the "Powered by Google Translate" gadget and feedback link */
+.goog-te-gadget,
+.goog-te-gadget-simple,
+.goog-logo-link {
+  display: none !important;
+}
+
+/* Remove the highlight Google Translate puts on translated text */
+.goog-text-highlight {
+  background: none !important;
+  box-shadow: none !important;
+}
+
+/* Hide the "Original / Translated" feedback bar */
+.skiptranslate {
+  display: none !important;
+}
+
+/* Ensure the hidden translate element stays hidden */
+#google_translate_element {
+  display: none !important;
+  visibility: hidden !important;
+}
