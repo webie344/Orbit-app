@@ -871,5 +871,19 @@
       .dl-nav-item:nth-child(9)  { animation-delay: 0.36s !important; }
       .dl-nav-item:nth-child(10) { animation-delay: 0.40s !important; }
     </style>
+
+    <!-- Google Translate engine (hidden — cookie-driven by the language picker in Settings) -->
+    <!-- The googtrans cookie is set by orbitTranslate() in app.js and read automatically here -->
+    <div id="google_translate_element" style="display:none;visibility:hidden;"></div>
+    <script>
+      function googleTranslateElementInit() {
+        new google.translate.TranslateElement({
+          pageLanguage: "en",
+          layout: google.translate.TranslateElement.InlineLayout.SIMPLE,
+          autoDisplay: false,
+        }, "google_translate_element");
+      }
+    </script>
+    <script src="//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit" async></script>
   </body>
 </html>

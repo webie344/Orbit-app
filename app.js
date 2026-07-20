@@ -44,6 +44,41 @@ export const cloudinaryConfig = {
 // =========================================================================
 // 2. INIT
 // =========================================================================
+
+// ── Translation helper ────────────────────────────────────────────────────
+// 1. Persists the language choice via the googtrans cookie (Google Translate
+//    reads this cookie automatically on every page load).
+// 2. Tries to trigger the Google Translate widget's <select> directly — with
+//    InlineLayout.SIMPLE the combo is in the page DOM, not an iframe.
+// 3. Falls back to a page reload only if the widget is not ready yet.
+const orbitTranslate = (code) => {
+  // Set / clear the persistence cookie (no domain= so it matches current host)
+  if (code === "en") {
+    document.cookie = "googtrans=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+    document.cookie = "googtrans=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=" + location.hostname;
+  } else {
+    const val = "/en/" + code;
+    document.cookie = "googtrans=" + val + "; path=/;";
+    document.cookie = "googtrans=" + val + "; path=/; domain=" + location.hostname;
+  }
+
+  // Try to drive the hidden widget select directly (no reload needed)
+  const tryDirect = (attempts = 0) => {
+    const combo = document.querySelector("#google_translate_element select");
+    if (combo) {
+      combo.value = code === "en" ? combo.options[0]?.value || "" : code;
+      combo.dispatchEvent(new Event("change"));
+    } else if (attempts < 25) {
+      // Widget still initialising — retry up to ~2.5 s
+      setTimeout(() => tryDirect(attempts + 1), 100);
+    } else {
+      // Widget never appeared — fall back to a full reload
+      location.reload();
+    }
+  };
+  tryDirect();
+};
+
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
@@ -1425,12 +1460,29 @@ const renderFeed = (root) => {
   const feedMainContent = el("div", { class: "feed-main-content" });
   wrap.appendChild(feedMainContent);
 
-  // Posts container
+  // Posts container — show shimmer skeleton cards while Firestore loads
   const list = el("div", { class: "feed-list" });
-  list.appendChild(el("div", { class: "empty" },
-    el("i", { class: "ri-loader-4-line" }),
-    el("div", { class: "t" }, "Loading your orbit"),
-  ));
+  const _makeFeedSkel = () => el("div", { class: "feed-skel-post" },
+    el("div", { class: "feed-skel-head" },
+      el("div", { class: "feed-skel-avatar" }),
+      el("div", { class: "feed-skel-meta" },
+        el("div", { class: "feed-skel-line w55" }),
+        el("div", { class: "feed-skel-line w28" }),
+      ),
+    ),
+    el("div", { class: "feed-skel-body" },
+      el("div", { class: "feed-skel-line w100" }),
+      el("div", { class: "feed-skel-line w85" }),
+      el("div", { class: "feed-skel-line w70" }),
+    ),
+    el("div", { class: "feed-skel-media" }),
+    el("div", { class: "feed-skel-actions" },
+      el("div", { class: "feed-skel-action w40", style: "width:60px;" }),
+      el("div", { class: "feed-skel-action w40", style: "width:60px;" }),
+      el("div", { class: "feed-skel-action w40", style: "width:60px;" }),
+    ),
+  );
+  [1,2,3,4].forEach(() => list.appendChild(_makeFeedSkel()));
   feedMainContent.appendChild(list);
   root.appendChild(wrap);
 
@@ -2546,203 +2598,13 @@ const toggleSave = async (postId) => {
 // =========================================================================
 // 10. GROUPS
 // =========================================================================
-// =========================================================================
-// ORBIT i18n — t(key) returns the UI string in the user's chosen language.
-// All 35 supported languages. Falls back to English for missing keys.
-// =========================================================================
-/* eslint-disable */
-const ORBIT_I18N = {
-en:{
-  "groups.title":"Groups","groups.search":"Search groups…","groups.heroTitle":"Find your people.\nJoin the conversation.","groups.heroSub":"Thousands of communities around everything you love.","groups.tabAll":"All","groups.tabTrending":"Trending","groups.tabCategories":"Categories","groups.tabMyGroups":"My Groups","groups.popularRightNow":"Popular Right Now","groups.trendingGroups":"Trending Groups 🔥","groups.newAndGrowing":"New & Growing","groups.myGroups":"My Groups","groups.allCategories":"All Categories","groups.seeAll":"See all","groups.join":"Join","groups.joined":"Joined","groups.toastJoined":"Joined!","groups.toastLeft":"Left group","groups.member":"member","groups.members":"members","groups.noGroups":"No groups here yet.","groups.noMyGroups":"You haven't joined any groups yet.","groups.connError":"Could not load groups. Check your connection.",
-  "disc.title":"Discover","disc.search":"Search people, hashtags…","disc.forYou":"For You","disc.trending":"Trending","disc.people":"People","disc.topics":"Topics","disc.live":"Live","disc.trendingNow":"Trending Now 🔥","disc.seeAll":"See all","disc.peopleToFollow":"People to Follow","disc.popularPosts":"Popular Posts","disc.follow":"Follow","disc.following":"Following","disc.noTrends":"No trending topics yet","disc.loadError":"Could not load trends","disc.noPopular":"No popular posts yet","disc.noMatches":"No matches","disc.alreadyFollowing":"You're already following everyone — check back soon.","disc.orbits":"orbits","disc.verifiedMember":"Verified member","disc.orbitMember":"Orbit member","disc.failedUpdate":"Failed to update",
-  "settings.title":"Settings","settings.appearance":"Appearance","settings.theme":"Theme","settings.themeDesc":"Choose between light and dark — saved across devices.","settings.language":"Language","settings.langDesc":"Choose your preferred display language.","settings.langUpdated":"Language updated",
-},
-es:{
-  "groups.title":"Grupos","groups.search":"Buscar grupos…","groups.heroTitle":"Encuentra tu gente.\nÚnete a la conversación.","groups.heroSub":"Miles de comunidades sobre todo lo que amas.","groups.tabAll":"Todos","groups.tabTrending":"Tendencias","groups.tabCategories":"Categorías","groups.tabMyGroups":"Mis grupos","groups.popularRightNow":"Popular ahora","groups.trendingGroups":"Grupos en tendencia 🔥","groups.newAndGrowing":"Nuevos y en auge","groups.myGroups":"Mis grupos","groups.allCategories":"Todas las categorías","groups.seeAll":"Ver todo","groups.join":"Unirse","groups.joined":"Unido","groups.toastJoined":"¡Te uniste!","groups.toastLeft":"Saliste del grupo","groups.member":"miembro","groups.members":"miembros","groups.noGroups":"Aún no hay grupos aquí.","groups.noMyGroups":"Aún no te has unido a ningún grupo.","groups.connError":"No se pudieron cargar los grupos. Revisa tu conexión.",
-  "disc.title":"Descubrir","disc.search":"Buscar personas, hashtags…","disc.forYou":"Para ti","disc.trending":"Tendencias","disc.people":"Personas","disc.topics":"Temas","disc.live":"En vivo","disc.trendingNow":"Tendencias ahora 🔥","disc.seeAll":"Ver todo","disc.peopleToFollow":"Personas a seguir","disc.popularPosts":"Posts populares","disc.follow":"Seguir","disc.following":"Siguiendo","disc.noTrends":"Aún no hay temas en tendencia","disc.loadError":"No se pudieron cargar las tendencias","disc.noPopular":"Aún no hay posts populares","disc.noMatches":"Sin resultados","disc.alreadyFollowing":"Ya sigues a todos — vuelve pronto.","disc.orbits":"orbits","disc.verifiedMember":"Miembro verificado","disc.orbitMember":"Miembro de Orbit","disc.failedUpdate":"Error al actualizar",
-  "settings.title":"Ajustes","settings.appearance":"Apariencia","settings.theme":"Tema","settings.themeDesc":"Elige entre claro y oscuro — guardado en todos tus dispositivos.","settings.language":"Idioma","settings.langDesc":"Elige tu idioma preferido.","settings.langUpdated":"Idioma actualizado",
-},
-fr:{
-  "groups.title":"Groupes","groups.search":"Rechercher des groupes…","groups.heroTitle":"Trouvez votre communauté.\nRejoignez la conversation.","groups.heroSub":"Des milliers de communautés autour de tout ce que vous aimez.","groups.tabAll":"Tous","groups.tabTrending":"Tendances","groups.tabCategories":"Catégories","groups.tabMyGroups":"Mes groupes","groups.popularRightNow":"Populaire maintenant","groups.trendingGroups":"Groupes tendance 🔥","groups.newAndGrowing":"Nouveaux et croissants","groups.myGroups":"Mes groupes","groups.allCategories":"Toutes les catégories","groups.seeAll":"Voir tout","groups.join":"Rejoindre","groups.joined":"Rejoint","groups.toastJoined":"Rejoint !","groups.toastLeft":"Groupe quitté","groups.member":"membre","groups.members":"membres","groups.noGroups":"Aucun groupe ici pour l'instant.","groups.noMyGroups":"Vous n'avez encore rejoint aucun groupe.","groups.connError":"Impossible de charger les groupes. Vérifiez votre connexion.",
-  "disc.title":"Découvrir","disc.search":"Rechercher des personnes, hashtags…","disc.forYou":"Pour vous","disc.trending":"Tendances","disc.people":"Personnes","disc.topics":"Sujets","disc.live":"En direct","disc.trendingNow":"Tendances maintenant 🔥","disc.seeAll":"Voir tout","disc.peopleToFollow":"Personnes à suivre","disc.popularPosts":"Posts populaires","disc.follow":"Suivre","disc.following":"Abonné","disc.noTrends":"Pas encore de sujets tendance","disc.loadError":"Impossible de charger les tendances","disc.noPopular":"Pas encore de posts populaires","disc.noMatches":"Aucun résultat","disc.alreadyFollowing":"Vous suivez déjà tout le monde — revenez bientôt.","disc.orbits":"orbits","disc.verifiedMember":"Membre vérifié","disc.orbitMember":"Membre Orbit","disc.failedUpdate":"Échec de la mise à jour",
-  "settings.title":"Paramètres","settings.appearance":"Apparence","settings.theme":"Thème","settings.themeDesc":"Choisissez entre clair et sombre — sauvegardé sur tous vos appareils.","settings.language":"Langue","settings.langDesc":"Choisissez votre langue préférée.","settings.langUpdated":"Langue mise à jour",
-},
-de:{
-  "groups.title":"Gruppen","groups.search":"Gruppen suchen…","groups.heroTitle":"Finde deine Community.\nMisch dich ins Gespräch.","groups.heroSub":"Tausende Communitys zu allem, was du liebst.","groups.tabAll":"Alle","groups.tabTrending":"Trends","groups.tabCategories":"Kategorien","groups.tabMyGroups":"Meine Gruppen","groups.popularRightNow":"Gerade beliebt","groups.trendingGroups":"Angesagte Gruppen 🔥","groups.newAndGrowing":"Neu und wachsend","groups.myGroups":"Meine Gruppen","groups.allCategories":"Alle Kategorien","groups.seeAll":"Alle anzeigen","groups.join":"Beitreten","groups.joined":"Beigetreten","groups.toastJoined":"Beigetreten!","groups.toastLeft":"Gruppe verlassen","groups.member":"Mitglied","groups.members":"Mitglieder","groups.noGroups":"Noch keine Gruppen hier.","groups.noMyGroups":"Du bist noch keiner Gruppe beigetreten.","groups.connError":"Gruppen konnten nicht geladen werden. Prüfe deine Verbindung.",
-  "disc.title":"Entdecken","disc.search":"Personen, Hashtags suchen…","disc.forYou":"Für dich","disc.trending":"Trends","disc.people":"Personen","disc.topics":"Themen","disc.live":"Live","disc.trendingNow":"Aktuelle Trends 🔥","disc.seeAll":"Alle anzeigen","disc.peopleToFollow":"Personen zum Folgen","disc.popularPosts":"Beliebte Beiträge","disc.follow":"Folgen","disc.following":"Gefolgt","disc.noTrends":"Noch keine Trendthemen","disc.loadError":"Trends konnten nicht geladen werden","disc.noPopular":"Noch keine beliebten Beiträge","disc.noMatches":"Keine Ergebnisse","disc.alreadyFollowing":"Du folgst bereits allen — schau später wieder vorbei.","disc.orbits":"Orbits","disc.verifiedMember":"Verifiziertes Mitglied","disc.orbitMember":"Orbit-Mitglied","disc.failedUpdate":"Aktualisierung fehlgeschlagen",
-  "settings.title":"Einstellungen","settings.appearance":"Darstellung","settings.theme":"Design","settings.themeDesc":"Wähle zwischen Hell und Dunkel — auf all deinen Geräten gespeichert.","settings.language":"Sprache","settings.langDesc":"Wähle deine bevorzugte Anzeigesprache.","settings.langUpdated":"Sprache aktualisiert",
-},
-pt:{
-  "groups.title":"Grupos","groups.search":"Pesquisar grupos…","groups.heroTitle":"Encontre sua tribo.\nEntre na conversa.","groups.heroSub":"Milhares de comunidades sobre tudo que você ama.","groups.tabAll":"Todos","groups.tabTrending":"Em alta","groups.tabCategories":"Categorias","groups.tabMyGroups":"Meus grupos","groups.popularRightNow":"Popular agora","groups.trendingGroups":"Grupos em alta 🔥","groups.newAndGrowing":"Novos e crescentes","groups.myGroups":"Meus grupos","groups.allCategories":"Todas as categorias","groups.seeAll":"Ver tudo","groups.join":"Entrar","groups.joined":"Entrou","groups.toastJoined":"Entrou!","groups.toastLeft":"Saiu do grupo","groups.member":"membro","groups.members":"membros","groups.noGroups":"Nenhum grupo aqui ainda.","groups.noMyGroups":"Você ainda não entrou em nenhum grupo.","groups.connError":"Não foi possível carregar os grupos. Verifique sua conexão.",
-  "disc.title":"Descobrir","disc.search":"Pesquisar pessoas, hashtags…","disc.forYou":"Para você","disc.trending":"Em alta","disc.people":"Pessoas","disc.topics":"Tópicos","disc.live":"Ao vivo","disc.trendingNow":"Em alta agora 🔥","disc.seeAll":"Ver tudo","disc.peopleToFollow":"Pessoas para seguir","disc.popularPosts":"Posts populares","disc.follow":"Seguir","disc.following":"Seguindo","disc.noTrends":"Nenhum tópico em alta ainda","disc.loadError":"Não foi possível carregar as tendências","disc.noPopular":"Nenhum post popular ainda","disc.noMatches":"Sem resultados","disc.alreadyFollowing":"Você já segue todos — volte em breve.","disc.orbits":"orbits","disc.verifiedMember":"Membro verificado","disc.orbitMember":"Membro Orbit","disc.failedUpdate":"Falha ao atualizar",
-  "settings.title":"Configurações","settings.appearance":"Aparência","settings.theme":"Tema","settings.themeDesc":"Escolha entre claro e escuro — salvo em todos os seus dispositivos.","settings.language":"Idioma","settings.langDesc":"Escolha seu idioma preferido.","settings.langUpdated":"Idioma atualizado",
-},
-it:{
-  "groups.title":"Gruppi","groups.search":"Cerca gruppi…","groups.heroTitle":"Trova la tua comunità.\nUnisciti alla conversazione.","groups.heroSub":"Migliaia di comunità su tutto ciò che ami.","groups.tabAll":"Tutti","groups.tabTrending":"Tendenze","groups.tabCategories":"Categorie","groups.tabMyGroups":"I miei gruppi","groups.popularRightNow":"Popolare adesso","groups.trendingGroups":"Gruppi di tendenza 🔥","groups.newAndGrowing":"Nuovi e in crescita","groups.myGroups":"I miei gruppi","groups.allCategories":"Tutte le categorie","groups.seeAll":"Vedi tutto","groups.join":"Unisciti","groups.joined":"Iscritto","groups.toastJoined":"Iscritto!","groups.toastLeft":"Gruppo lasciato","groups.member":"membro","groups.members":"membri","groups.noGroups":"Ancora nessun gruppo qui.","groups.noMyGroups":"Non hai ancora aderito a nessun gruppo.","groups.connError":"Impossibile caricare i gruppi. Controlla la connessione.",
-  "disc.title":"Scopri","disc.search":"Cerca persone, hashtag…","disc.forYou":"Per te","disc.trending":"Tendenze","disc.people":"Persone","disc.topics":"Argomenti","disc.live":"In diretta","disc.trendingNow":"Tendenze ora 🔥","disc.seeAll":"Vedi tutto","disc.peopleToFollow":"Persone da seguire","disc.popularPosts":"Post popolari","disc.follow":"Segui","disc.following":"Seguendo","disc.noTrends":"Nessun argomento di tendenza ancora","disc.loadError":"Impossibile caricare le tendenze","disc.noPopular":"Nessun post popolare ancora","disc.noMatches":"Nessun risultato","disc.alreadyFollowing":"Stai già seguendo tutti — torna presto.","disc.orbits":"orbits","disc.verifiedMember":"Membro verificato","disc.orbitMember":"Membro Orbit","disc.failedUpdate":"Aggiornamento fallito",
-  "settings.title":"Impostazioni","settings.appearance":"Aspetto","settings.theme":"Tema","settings.themeDesc":"Scegli tra chiaro e scuro — salvato su tutti i dispositivi.","settings.language":"Lingua","settings.langDesc":"Scegli la tua lingua preferita.","settings.langUpdated":"Lingua aggiornata",
-},
-nl:{
-  "groups.title":"Groepen","groups.search":"Groepen zoeken…","groups.heroTitle":"Vind je mensen.\nDoe mee aan het gesprek.","groups.heroSub":"Duizenden communities over alles wat je liefhebt.","groups.tabAll":"Alle","groups.tabTrending":"Trending","groups.tabCategories":"Categorieën","groups.tabMyGroups":"Mijn groepen","groups.popularRightNow":"Nu populair","groups.trendingGroups":"Trending groepen 🔥","groups.newAndGrowing":"Nieuw en groeiend","groups.myGroups":"Mijn groepen","groups.allCategories":"Alle categorieën","groups.seeAll":"Alles zien","groups.join":"Lid worden","groups.joined":"Lid","groups.toastJoined":"Lid geworden!","groups.toastLeft":"Groep verlaten","groups.member":"lid","groups.members":"leden","groups.noGroups":"Nog geen groepen hier.","groups.noMyGroups":"Je hebt je nog niet bij een groep aangesloten.","groups.connError":"Kon groepen niet laden. Controleer je verbinding.",
-  "disc.title":"Ontdekken","disc.search":"Zoek personen, hashtags…","disc.forYou":"Voor jou","disc.trending":"Trending","disc.people":"Mensen","disc.topics":"Onderwerpen","disc.live":"Live","disc.trendingNow":"Nu trending 🔥","disc.seeAll":"Alles zien","disc.peopleToFollow":"Mensen om te volgen","disc.popularPosts":"Populaire berichten","disc.follow":"Volgen","disc.following":"Volgend","disc.noTrends":"Nog geen trending onderwerpen","disc.loadError":"Kon trends niet laden","disc.noPopular":"Nog geen populaire berichten","disc.noMatches":"Geen resultaten","disc.alreadyFollowing":"Je volgt al iedereen — kom snel terug.","disc.orbits":"orbits","disc.verifiedMember":"Geverifieerd lid","disc.orbitMember":"Orbit-lid","disc.failedUpdate":"Bijwerken mislukt",
-  "settings.title":"Instellingen","settings.appearance":"Weergave","settings.theme":"Thema","settings.themeDesc":"Kies tussen licht en donker — opgeslagen op al je apparaten.","settings.language":"Taal","settings.langDesc":"Kies je voorkeurstaal.","settings.langUpdated":"Taal bijgewerkt",
-},
-ru:{
-  "groups.title":"Группы","groups.search":"Поиск групп…","groups.heroTitle":"Найди своих.\nПрисоединяйся к разговору.","groups.heroSub":"Тысячи сообществ обо всём, что ты любишь.","groups.tabAll":"Все","groups.tabTrending":"В тренде","groups.tabCategories":"Категории","groups.tabMyGroups":"Мои группы","groups.popularRightNow":"Популярное сейчас","groups.trendingGroups":"Популярные группы 🔥","groups.newAndGrowing":"Новые и растущие","groups.myGroups":"Мои группы","groups.allCategories":"Все категории","groups.seeAll":"Смотреть все","groups.join":"Вступить","groups.joined":"Вступил","groups.toastJoined":"Вступил!","groups.toastLeft":"Вышел из группы","groups.member":"участник","groups.members":"участников","groups.noGroups":"Пока нет групп.","groups.noMyGroups":"Ты ещё не вступил ни в одну группу.","groups.connError":"Не удалось загрузить группы. Проверь соединение.",
-  "disc.title":"Поиск","disc.search":"Поиск людей, хэштегов…","disc.forYou":"Для тебя","disc.trending":"В тренде","disc.people":"Люди","disc.topics":"Темы","disc.live":"Прямой эфир","disc.trendingNow":"В тренде сейчас 🔥","disc.seeAll":"Смотреть все","disc.peopleToFollow":"Подписаться на","disc.popularPosts":"Популярные посты","disc.follow":"Подписаться","disc.following":"Подписан","disc.noTrends":"Пока нет трендовых тем","disc.loadError":"Не удалось загрузить тренды","disc.noPopular":"Пока нет популярных постов","disc.noMatches":"Нет результатов","disc.alreadyFollowing":"Ты уже подписан на всех — загляни позже.","disc.orbits":"орбитов","disc.verifiedMember":"Верифицированный участник","disc.orbitMember":"Участник Orbit","disc.failedUpdate":"Ошибка обновления",
-  "settings.title":"Настройки","settings.appearance":"Внешний вид","settings.theme":"Тема","settings.themeDesc":"Выбери светлую или тёмную тему — сохраняется на всех устройствах.","settings.language":"Язык","settings.langDesc":"Выбери предпочитаемый язык интерфейса.","settings.langUpdated":"Язык обновлён",
-},
-pl:{
-  "groups.title":"Grupy","groups.search":"Szukaj grup…","groups.heroTitle":"Znajdź swoich ludzi.\nDołącz do rozmowy.","groups.heroSub":"Tysiące społeczności wokół wszystkiego, co kochasz.","groups.tabAll":"Wszystkie","groups.tabTrending":"Na topie","groups.tabCategories":"Kategorie","groups.tabMyGroups":"Moje grupy","groups.popularRightNow":"Popularne teraz","groups.trendingGroups":"Popularne grupy 🔥","groups.newAndGrowing":"Nowe i rosnące","groups.myGroups":"Moje grupy","groups.allCategories":"Wszystkie kategorie","groups.seeAll":"Zobacz wszystkie","groups.join":"Dołącz","groups.joined":"Dołączono","groups.toastJoined":"Dołączono!","groups.toastLeft":"Opuszczono grupę","groups.member":"członek","groups.members":"członków","groups.noGroups":"Brak grup na razie.","groups.noMyGroups":"Nie dołączyłeś jeszcze do żadnej grupy.","groups.connError":"Nie można załadować grup. Sprawdź połączenie.",
-  "disc.title":"Odkryj","disc.search":"Szukaj ludzi, hashtagów…","disc.forYou":"Dla ciebie","disc.trending":"Na topie","disc.people":"Ludzie","disc.topics":"Tematy","disc.live":"Na żywo","disc.trendingNow":"Trendy teraz 🔥","disc.seeAll":"Zobacz wszystkie","disc.peopleToFollow":"Osoby do obserwowania","disc.popularPosts":"Popularne posty","disc.follow":"Obserwuj","disc.following":"Obserwujesz","disc.noTrends":"Brak trendujących tematów","disc.loadError":"Nie można załadować trendów","disc.noPopular":"Brak popularnych postów","disc.noMatches":"Brak wyników","disc.alreadyFollowing":"Już obserwujesz wszystkich — wróć wkrótce.","disc.orbits":"orbitów","disc.verifiedMember":"Zweryfikowany członek","disc.orbitMember":"Członek Orbit","disc.failedUpdate":"Błąd aktualizacji",
-  "settings.title":"Ustawienia","settings.appearance":"Wygląd","settings.theme":"Motyw","settings.themeDesc":"Wybierz jasny lub ciemny — zapisano na wszystkich urządzeniach.","settings.language":"Język","settings.langDesc":"Wybierz preferowany język.","settings.langUpdated":"Język zaktualizowany",
-},
-uk:{
-  "groups.title":"Групи","groups.search":"Пошук груп…","groups.heroTitle":"Знайди своїх.\nПриєднуйся до розмови.","groups.heroSub":"Тисячі спільнот навколо всього, що ти любиш.","groups.tabAll":"Всі","groups.tabTrending":"У тренді","groups.tabCategories":"Категорії","groups.tabMyGroups":"Мої групи","groups.popularRightNow":"Популярне зараз","groups.trendingGroups":"Популярні групи 🔥","groups.newAndGrowing":"Нові та зростаючі","groups.myGroups":"Мої групи","groups.allCategories":"Всі категорії","groups.seeAll":"Переглянути всі","groups.join":"Вступити","groups.joined":"Вступив","groups.toastJoined":"Вступив!","groups.toastLeft":"Вийшов з групи","groups.member":"учасник","groups.members":"учасників","groups.noGroups":"Поки немає груп.","groups.noMyGroups":"Ти ще не вступив у жодну групу.","groups.connError":"Не вдалося завантажити групи. Перевір з'єднання.",
-  "disc.title":"Пошук","disc.search":"Пошук людей, хештегів…","disc.forYou":"Для тебе","disc.trending":"У тренді","disc.people":"Люди","disc.topics":"Теми","disc.live":"Пряма трансляція","disc.trendingNow":"У тренді зараз 🔥","disc.seeAll":"Переглянути всі","disc.peopleToFollow":"Підписатися на","disc.popularPosts":"Популярні пости","disc.follow":"Підписатися","disc.following":"Підписаний","disc.noTrends":"Немає трендових тем","disc.loadError":"Не вдалося завантажити тренди","disc.noPopular":"Немає популярних постів","disc.noMatches":"Немає результатів","disc.alreadyFollowing":"Ти вже підписаний на всіх — повертайся пізніше.","disc.orbits":"орбітів","disc.verifiedMember":"Верифікований учасник","disc.orbitMember":"Учасник Orbit","disc.failedUpdate":"Помилка оновлення",
-  "settings.title":"Налаштування","settings.appearance":"Зовнішній вигляд","settings.theme":"Тема","settings.themeDesc":"Виберіть світлу або темну тему — зберігається на всіх пристроях.","settings.language":"Мова","settings.langDesc":"Виберіть бажану мову інтерфейсу.","settings.langUpdated":"Мову оновлено",
-},
-sv:{
-  "groups.title":"Grupper","groups.search":"Sök grupper…","groups.heroTitle":"Hitta ditt folk.\nGå med i samtalet.","groups.heroSub":"Tusentals gemenskaper kring allt du älskar.","groups.tabAll":"Alla","groups.tabTrending":"Trender","groups.tabCategories":"Kategorier","groups.tabMyGroups":"Mina grupper","groups.popularRightNow":"Populärt just nu","groups.trendingGroups":"Trendande grupper 🔥","groups.newAndGrowing":"Nya och växande","groups.myGroups":"Mina grupper","groups.allCategories":"Alla kategorier","groups.seeAll":"Se alla","groups.join":"Gå med","groups.joined":"Gick med","groups.toastJoined":"Gick med!","groups.toastLeft":"Lämnade gruppen","groups.member":"medlem","groups.members":"medlemmar","groups.noGroups":"Inga grupper än.","groups.noMyGroups":"Du har inte gått med i någon grupp än.","groups.connError":"Kunde inte ladda grupper. Kontrollera din anslutning.",
-  "disc.title":"Utforska","disc.search":"Sök personer, hashtags…","disc.forYou":"För dig","disc.trending":"Trender","disc.people":"Människor","disc.topics":"Ämnen","disc.live":"Live","disc.trendingNow":"Trender nu 🔥","disc.seeAll":"Se alla","disc.peopleToFollow":"Att följa","disc.popularPosts":"Populära inlägg","disc.follow":"Följ","disc.following":"Följer","disc.noTrends":"Inga trendande ämnen än","disc.loadError":"Kunde inte ladda trender","disc.noPopular":"Inga populära inlägg än","disc.noMatches":"Inga resultat","disc.alreadyFollowing":"Du följer redan alla — kom tillbaka snart.","disc.orbits":"orbits","disc.verifiedMember":"Verifierad medlem","disc.orbitMember":"Orbit-medlem","disc.failedUpdate":"Uppdatering misslyckades",
-  "settings.title":"Inställningar","settings.appearance":"Utseende","settings.theme":"Tema","settings.themeDesc":"Välj mellan ljust och mörkt — sparat på alla dina enheter.","settings.language":"Språk","settings.langDesc":"Välj ditt föredragna språk.","settings.langUpdated":"Språk uppdaterat",
-},
-no:{
-  "groups.title":"Grupper","groups.search":"Søk grupper…","groups.heroTitle":"Finn dine folk.\nBli med i samtalen.","groups.heroSub":"Tusenvis av fellesskap rundt alt du elsker.","groups.tabAll":"Alle","groups.tabTrending":"Trender","groups.tabCategories":"Kategorier","groups.tabMyGroups":"Mine grupper","groups.popularRightNow":"Populært nå","groups.trendingGroups":"Trendende grupper 🔥","groups.newAndGrowing":"Nye og voksende","groups.myGroups":"Mine grupper","groups.allCategories":"Alle kategorier","groups.seeAll":"Se alle","groups.join":"Bli med","groups.joined":"Ble med","groups.toastJoined":"Ble med!","groups.toastLeft":"Forlot gruppen","groups.member":"medlem","groups.members":"medlemmer","groups.noGroups":"Ingen grupper ennå.","groups.noMyGroups":"Du har ikke blitt med i noen gruppe ennå.","groups.connError":"Kunne ikke laste grupper. Sjekk tilkoblingen.",
-  "disc.title":"Utforsk","disc.search":"Søk etter folk, hashtags…","disc.forYou":"For deg","disc.trending":"Trender","disc.people":"Folk","disc.topics":"Emner","disc.live":"Live","disc.trendingNow":"Trender nå 🔥","disc.seeAll":"Se alle","disc.peopleToFollow":"Folk å følge","disc.popularPosts":"Populære innlegg","disc.follow":"Følg","disc.following":"Følger","disc.noTrends":"Ingen trendende emner ennå","disc.loadError":"Kunne ikke laste trender","disc.noPopular":"Ingen populære innlegg ennå","disc.noMatches":"Ingen resultater","disc.alreadyFollowing":"Du følger allerede alle — kom tilbake snart.","disc.orbits":"orbits","disc.verifiedMember":"Verifisert medlem","disc.orbitMember":"Orbit-medlem","disc.failedUpdate":"Oppdatering mislyktes",
-  "settings.title":"Innstillinger","settings.appearance":"Utseende","settings.theme":"Tema","settings.themeDesc":"Velg mellom lyst og mørkt — lagret på alle enhetene dine.","settings.language":"Språk","settings.langDesc":"Velg ditt foretrukne språk.","settings.langUpdated":"Språk oppdatert",
-},
-da:{
-  "groups.title":"Grupper","groups.search":"Søg grupper…","groups.heroTitle":"Find dit folk.\nBliv en del af samtalen.","groups.heroSub":"Tusindvis af fællesskaber om alt, hvad du elsker.","groups.tabAll":"Alle","groups.tabTrending":"Trends","groups.tabCategories":"Kategorier","groups.tabMyGroups":"Mine grupper","groups.popularRightNow":"Populært nu","groups.trendingGroups":"Populære grupper 🔥","groups.newAndGrowing":"Nye og voksende","groups.myGroups":"Mine grupper","groups.allCategories":"Alle kategorier","groups.seeAll":"Se alle","groups.join":"Tilmeld","groups.joined":"Tilmeldt","groups.toastJoined":"Tilmeldt!","groups.toastLeft":"Forlod gruppen","groups.member":"medlem","groups.members":"medlemmer","groups.noGroups":"Ingen grupper endnu.","groups.noMyGroups":"Du har endnu ikke tilmeldt dig nogen gruppe.","groups.connError":"Kunne ikke indlæse grupper. Tjek din forbindelse.",
-  "disc.title":"Opdag","disc.search":"Søg folk, hashtags…","disc.forYou":"Til dig","disc.trending":"Trends","disc.people":"Folk","disc.topics":"Emner","disc.live":"Live","disc.trendingNow":"Trends nu 🔥","disc.seeAll":"Se alle","disc.peopleToFollow":"Folk at følge","disc.popularPosts":"Populære opslag","disc.follow":"Følg","disc.following":"Følger","disc.noTrends":"Ingen trending emner endnu","disc.loadError":"Kunne ikke indlæse trends","disc.noPopular":"Ingen populære opslag endnu","disc.noMatches":"Ingen resultater","disc.alreadyFollowing":"Du følger allerede alle — kom tilbage snart.","disc.orbits":"orbits","disc.verifiedMember":"Verificeret medlem","disc.orbitMember":"Orbit-medlem","disc.failedUpdate":"Opdatering mislykkedes",
-  "settings.title":"Indstillinger","settings.appearance":"Udseende","settings.theme":"Tema","settings.themeDesc":"Vælg mellem lyst og mørkt — gemt på alle dine enheder.","settings.language":"Sprog","settings.langDesc":"Vælg dit foretrukne sprog.","settings.langUpdated":"Sprog opdateret",
-},
-fi:{
-  "groups.title":"Ryhmät","groups.search":"Etsi ryhmiä…","groups.heroTitle":"Löydä oma porukkasi.\nLiity keskusteluun.","groups.heroSub":"Tuhansia yhteisöjä kaikesta mitä rakastat.","groups.tabAll":"Kaikki","groups.tabTrending":"Trendit","groups.tabCategories":"Kategoriat","groups.tabMyGroups":"Omat ryhmät","groups.popularRightNow":"Suosittua nyt","groups.trendingGroups":"Trendaavat ryhmät 🔥","groups.newAndGrowing":"Uudet ja kasvavat","groups.myGroups":"Omat ryhmät","groups.allCategories":"Kaikki kategoriat","groups.seeAll":"Näytä kaikki","groups.join":"Liity","groups.joined":"Liittynyt","groups.toastJoined":"Liittynyt!","groups.toastLeft":"Poistuit ryhmästä","groups.member":"jäsen","groups.members":"jäsentä","groups.noGroups":"Ei ryhmiä vielä.","groups.noMyGroups":"Et ole liittynyt yhteenkään ryhmään vielä.","groups.connError":"Ryhmien lataus epäonnistui. Tarkista yhteys.",
-  "disc.title":"Tutustu","disc.search":"Etsi ihmisiä, hashtageja…","disc.forYou":"Sinulle","disc.trending":"Trendit","disc.people":"Ihmiset","disc.topics":"Aiheet","disc.live":"Suorana","disc.trendingNow":"Trendit nyt 🔥","disc.seeAll":"Näytä kaikki","disc.peopleToFollow":"Seurattavia ihmisiä","disc.popularPosts":"Suosittuja julkaisuja","disc.follow":"Seuraa","disc.following":"Seuraat","disc.noTrends":"Ei trendaavia aiheita vielä","disc.loadError":"Trendien lataus epäonnistui","disc.noPopular":"Ei suosittuja julkaisuja vielä","disc.noMatches":"Ei tuloksia","disc.alreadyFollowing":"Seuraat jo kaikkia — palaa pian.","disc.orbits":"orbitia","disc.verifiedMember":"Vahvistettu jäsen","disc.orbitMember":"Orbit-jäsen","disc.failedUpdate":"Päivitys epäonnistui",
-  "settings.title":"Asetukset","settings.appearance":"Ulkoasu","settings.theme":"Teema","settings.themeDesc":"Valitse vaalea tai tumma — tallennetaan kaikille laitteillesi.","settings.language":"Kieli","settings.langDesc":"Valitse haluamasi kieli.","settings.langUpdated":"Kieli päivitetty",
-},
-ro:{
-  "groups.title":"Grupuri","groups.search":"Caută grupuri…","groups.heroTitle":"Găsește-ți oamenii.\nAlătură-te conversației.","groups.heroSub":"Mii de comunități în jurul a tot ce iubești.","groups.tabAll":"Toate","groups.tabTrending":"Tendințe","groups.tabCategories":"Categorii","groups.tabMyGroups":"Grupurile mele","groups.popularRightNow":"Popular acum","groups.trendingGroups":"Grupuri în tendință 🔥","groups.newAndGrowing":"Noi și în creștere","groups.myGroups":"Grupurile mele","groups.allCategories":"Toate categoriile","groups.seeAll":"Vezi toate","groups.join":"Alătură-te","groups.joined":"Alăturat","groups.toastJoined":"Alăturat!","groups.toastLeft":"Ai părăsit grupul","groups.member":"membru","groups.members":"membri","groups.noGroups":"Niciun grup deocamdată.","groups.noMyGroups":"Nu ai intrat în niciun grup încă.","groups.connError":"Nu s-au putut încărca grupurile. Verifică conexiunea.",
-  "disc.title":"Descoperă","disc.search":"Caută persoane, hashtag-uri…","disc.forYou":"Pentru tine","disc.trending":"Tendințe","disc.people":"Persoane","disc.topics":"Subiecte","disc.live":"Live","disc.trendingNow":"Tendințe acum 🔥","disc.seeAll":"Vezi toate","disc.peopleToFollow":"Persoane de urmărit","disc.popularPosts":"Postări populare","disc.follow":"Urmărește","disc.following":"Urmărești","disc.noTrends":"Niciun subiect în tendință","disc.loadError":"Nu s-au putut încărca tendințele","disc.noPopular":"Nicio postare populară","disc.noMatches":"Niciun rezultat","disc.alreadyFollowing":"Urmărești deja pe toți — revino curând.","disc.orbits":"orbits","disc.verifiedMember":"Membru verificat","disc.orbitMember":"Membru Orbit","disc.failedUpdate":"Actualizare eșuată",
-  "settings.title":"Setări","settings.appearance":"Aspect","settings.theme":"Temă","settings.themeDesc":"Alege între luminos și întunecat — salvat pe toate dispozitivele.","settings.language":"Limbă","settings.langDesc":"Alege limba preferată.","settings.langUpdated":"Limbă actualizată",
-},
-cs:{
-  "groups.title":"Skupiny","groups.search":"Hledat skupiny…","groups.heroTitle":"Najdi své lidi.\nPřidej se do konverzace.","groups.heroSub":"Tisíce komunit kolem všeho, co miluješ.","groups.tabAll":"Vše","groups.tabTrending":"Trendy","groups.tabCategories":"Kategorie","groups.tabMyGroups":"Moje skupiny","groups.popularRightNow":"Populární teď","groups.trendingGroups":"Trendující skupiny 🔥","groups.newAndGrowing":"Nové a rostoucí","groups.myGroups":"Moje skupiny","groups.allCategories":"Všechny kategorie","groups.seeAll":"Zobrazit vše","groups.join":"Připojit se","groups.joined":"Připojen","groups.toastJoined":"Připojen!","groups.toastLeft":"Opustil skupinu","groups.member":"člen","groups.members":"členů","groups.noGroups":"Zatím žádné skupiny.","groups.noMyGroups":"Ještě jsi se nepřipojil k žádné skupině.","groups.connError":"Skupiny nelze načíst. Zkontroluj připojení.",
-  "disc.title":"Objevit","disc.search":"Hledat lidi, hashtagy…","disc.forYou":"Pro tebe","disc.trending":"Trendy","disc.people":"Lidé","disc.topics":"Témata","disc.live":"Živě","disc.trendingNow":"Trendy teď 🔥","disc.seeAll":"Zobrazit vše","disc.peopleToFollow":"Lidé k sledování","disc.popularPosts":"Populární příspěvky","disc.follow":"Sledovat","disc.following":"Sleduješ","disc.noTrends":"Žádná trendující témata","disc.loadError":"Trendy nelze načíst","disc.noPopular":"Žádné populární příspěvky","disc.noMatches":"Žádné výsledky","disc.alreadyFollowing":"Sleduješ již všechny — vrať se brzy.","disc.orbits":"orbits","disc.verifiedMember":"Ověřený člen","disc.orbitMember":"Člen Orbit","disc.failedUpdate":"Aktualizace selhala",
-  "settings.title":"Nastavení","settings.appearance":"Vzhled","settings.theme":"Motiv","settings.themeDesc":"Vyber světlý nebo tmavý motiv — uloženo na všech zařízeních.","settings.language":"Jazyk","settings.langDesc":"Vyber preferovaný jazyk.","settings.langUpdated":"Jazyk aktualizován",
-},
-hu:{
-  "groups.title":"Csoportok","groups.search":"Csoportok keresése…","groups.heroTitle":"Találd meg az embereidet.\nCsatlakozz a beszélgetéshez.","groups.heroSub":"Ezernyi közösség mindarról, amit szeretsz.","groups.tabAll":"Mind","groups.tabTrending":"Trending","groups.tabCategories":"Kategóriák","groups.tabMyGroups":"Csoportjaim","groups.popularRightNow":"Most népszerű","groups.trendingGroups":"Népszerű csoportok 🔥","groups.newAndGrowing":"Új és növekvő","groups.myGroups":"Csoportjaim","groups.allCategories":"Összes kategória","groups.seeAll":"Összes megtekintése","groups.join":"Csatlakozás","groups.joined":"Csatlakozott","groups.toastJoined":"Csatlakozott!","groups.toastLeft":"Elhagyta a csoportot","groups.member":"tag","groups.members":"tag","groups.noGroups":"Még nincs csoport.","groups.noMyGroups":"Még nem csatlakoztál egyetlen csoporthoz sem.","groups.connError":"A csoportok nem tölthetők be. Ellenőrizd a kapcsolatot.",
-  "disc.title":"Felfedezés","disc.search":"Emberek, hashtagek keresése…","disc.forYou":"Neked","disc.trending":"Trending","disc.people":"Emberek","disc.topics":"Témák","disc.live":"Élő","disc.trendingNow":"Trending most 🔥","disc.seeAll":"Összes megtekintése","disc.peopleToFollow":"Követésre ajánlott","disc.popularPosts":"Népszerű bejegyzések","disc.follow":"Követés","disc.following":"Követed","disc.noTrends":"Még nincs trending téma","disc.loadError":"A trendek nem tölthetők be","disc.noPopular":"Még nincs népszerű bejegyzés","disc.noMatches":"Nincs találat","disc.alreadyFollowing":"Már mindenkit követsz — nézz vissza hamarosan.","disc.orbits":"orbit","disc.verifiedMember":"Ellenőrzött tag","disc.orbitMember":"Orbit-tag","disc.failedUpdate":"Frissítés sikertelen",
-  "settings.title":"Beállítások","settings.appearance":"Megjelenés","settings.theme":"Téma","settings.themeDesc":"Válassz a világos és a sötét téma között — minden eszközödön mentve.","settings.language":"Nyelv","settings.langDesc":"Válassz előnyben részesített nyelvet.","settings.langUpdated":"Nyelv frissítve",
-},
-sk:{
-  "groups.title":"Skupiny","groups.search":"Hľadať skupiny…","groups.heroTitle":"Nájdi svojich ľudí.\nPridaj sa do rozhovoru.","groups.heroSub":"Tisíce komunít okolo všetkého, čo miluješ.","groups.tabAll":"Všetky","groups.tabTrending":"Trendy","groups.tabCategories":"Kategórie","groups.tabMyGroups":"Moje skupiny","groups.popularRightNow":"Populárne teraz","groups.trendingGroups":"Trendujúce skupiny 🔥","groups.newAndGrowing":"Nové a rastúce","groups.myGroups":"Moje skupiny","groups.allCategories":"Všetky kategórie","groups.seeAll":"Zobraziť všetky","groups.join":"Pripojiť sa","groups.joined":"Pripojený","groups.toastJoined":"Pripojený!","groups.toastLeft":"Opustil skupinu","groups.member":"člen","groups.members":"členov","groups.noGroups":"Zatiaľ žiadne skupiny.","groups.noMyGroups":"Ešte si sa nepripojil k žiadnej skupine.","groups.connError":"Skupiny sa nedajú načítať. Skontroluj pripojenie.",
-  "disc.title":"Objaviť","disc.search":"Hľadať ľudí, hashtagy…","disc.forYou":"Pre teba","disc.trending":"Trendy","disc.people":"Ľudia","disc.topics":"Témy","disc.live":"Naživo","disc.trendingNow":"Trendy teraz 🔥","disc.seeAll":"Zobraziť všetky","disc.peopleToFollow":"Ľudia na sledovanie","disc.popularPosts":"Populárne príspevky","disc.follow":"Sledovať","disc.following":"Sleduješ","disc.noTrends":"Žiadne trendujúce témy","disc.loadError":"Trendy sa nedajú načítať","disc.noPopular":"Žiadne populárne príspevky","disc.noMatches":"Žiadne výsledky","disc.alreadyFollowing":"Sleduješ už všetkých — vráť sa čoskoro.","disc.orbits":"orbits","disc.verifiedMember":"Overený člen","disc.orbitMember":"Člen Orbit","disc.failedUpdate":"Aktualizácia zlyhala",
-  "settings.title":"Nastavenia","settings.appearance":"Vzhľad","settings.theme":"Motív","settings.themeDesc":"Vyber svetlý alebo tmavý motív — uložené na všetkých zariadeniach.","settings.language":"Jazyk","settings.langDesc":"Vyber preferovaný jazyk.","settings.langUpdated":"Jazyk aktualizovaný",
-},
-bg:{
-  "groups.title":"Групи","groups.search":"Търсене на групи…","groups.heroTitle":"Намери своите хора.\nПридружи се към разговора.","groups.heroSub":"Хиляди общности около всичко, което обичаш.","groups.tabAll":"Всички","groups.tabTrending":"В тренд","groups.tabCategories":"Категории","groups.tabMyGroups":"Моите групи","groups.popularRightNow":"Популярно сега","groups.trendingGroups":"Популярни групи 🔥","groups.newAndGrowing":"Нови и растящи","groups.myGroups":"Моите групи","groups.allCategories":"Всички категории","groups.seeAll":"Виж всички","groups.join":"Присъединяване","groups.joined":"Присъединен","groups.toastJoined":"Присъединен!","groups.toastLeft":"Напуснахте групата","groups.member":"член","groups.members":"члена","groups.noGroups":"Все още няма групи.","groups.noMyGroups":"Все още не сте се присъединили към никоя група.","groups.connError":"Групите не могат да се заредят. Проверете връзката.",
-  "disc.title":"Открий","disc.search":"Търсене на хора, хаштагове…","disc.forYou":"За теб","disc.trending":"В тренд","disc.people":"Хора","disc.topics":"Теми","disc.live":"На живо","disc.trendingNow":"В тренд сега 🔥","disc.seeAll":"Виж всички","disc.peopleToFollow":"Хора за следване","disc.popularPosts":"Популярни публикации","disc.follow":"Следвай","disc.following":"Следваш","disc.noTrends":"Все още няма трендинг теми","disc.loadError":"Трендовете не могат да се заредят","disc.noPopular":"Все още няма популярни публикации","disc.noMatches":"Няма резултати","disc.alreadyFollowing":"Вече следвате всички — върнете се скоро.","disc.orbits":"орбити","disc.verifiedMember":"Верифициран член","disc.orbitMember":"Член на Orbit","disc.failedUpdate":"Неуспешна актуализация",
-  "settings.title":"Настройки","settings.appearance":"Изглед","settings.theme":"Тема","settings.themeDesc":"Изберете между светло и тъмно — записано на всички устройства.","settings.language":"Език","settings.langDesc":"Изберете предпочитан език.","settings.langUpdated":"Езикът е актуализиран",
-},
-hr:{
-  "groups.title":"Grupe","groups.search":"Traži grupe…","groups.heroTitle":"Pronađi svoje ljude.\nPridruži se razgovoru.","groups.heroSub":"Tisuće zajednica oko svega što voliš.","groups.tabAll":"Sve","groups.tabTrending":"Trendovi","groups.tabCategories":"Kategorije","groups.tabMyGroups":"Moje grupe","groups.popularRightNow":"Popularno sada","groups.trendingGroups":"Grupe u trendu 🔥","groups.newAndGrowing":"Nove i rastuće","groups.myGroups":"Moje grupe","groups.allCategories":"Sve kategorije","groups.seeAll":"Vidi sve","groups.join":"Pridruži se","groups.joined":"Pridružen","groups.toastJoined":"Pridružen!","groups.toastLeft":"Napustio grupu","groups.member":"član","groups.members":"članova","groups.noGroups":"Još nema grupa.","groups.noMyGroups":"Još se nisi pridružio ni jednoj grupi.","groups.connError":"Nije moguće učitati grupe. Provjeri vezu.",
-  "disc.title":"Otkrij","disc.search":"Traži ljude, hashtagove…","disc.forYou":"Za tebe","disc.trending":"Trendovi","disc.people":"Ljudi","disc.topics":"Teme","disc.live":"Uživo","disc.trendingNow":"Trendovi sada 🔥","disc.seeAll":"Vidi sve","disc.peopleToFollow":"Osobe za praćenje","disc.popularPosts":"Popularne objave","disc.follow":"Prati","disc.following":"Pratiš","disc.noTrends":"Još nema trendingovih tema","disc.loadError":"Nije moguće učitati trendove","disc.noPopular":"Još nema popularnih objava","disc.noMatches":"Nema rezultata","disc.alreadyFollowing":"Već pratiš sve — vrati se uskoro.","disc.orbits":"orbita","disc.verifiedMember":"Verificirani član","disc.orbitMember":"Orbit član","disc.failedUpdate":"Ažuriranje nije uspjelo",
-  "settings.title":"Postavke","settings.appearance":"Izgled","settings.theme":"Tema","settings.themeDesc":"Odaberi između svjetle i tamne — pohranjeno na svim uređajima.","settings.language":"Jezik","settings.langDesc":"Odaberi željeni jezik.","settings.langUpdated":"Jezik ažuriran",
-},
-sr:{
-  "groups.title":"Групе","groups.search":"Претрага група…","groups.heroTitle":"Пронађи своје људе.\nПридружи се разговору.","groups.heroSub":"Хиљаде заједница о свему што волиш.","groups.tabAll":"Све","groups.tabTrending":"Трендови","groups.tabCategories":"Категорије","groups.tabMyGroups":"Моје групе","groups.popularRightNow":"Популарно сада","groups.trendingGroups":"Групе у тренду 🔥","groups.newAndGrowing":"Нове и растуће","groups.myGroups":"Моје групе","groups.allCategories":"Све категорије","groups.seeAll":"Погледај све","groups.join":"Придружи се","groups.joined":"Придружен","groups.toastJoined":"Придружен!","groups.toastLeft":"Напустио групу","groups.member":"члан","groups.members":"чланова","groups.noGroups":"Још нема група.","groups.noMyGroups":"Још нисте приступили ниједној групи.","groups.connError":"Није могуће учитати групе. Провери везу.",
-  "disc.title":"Открити","disc.search":"Претрага људи, хаштагова…","disc.forYou":"За тебе","disc.trending":"Трендови","disc.people":"Људи","disc.topics":"Теме","disc.live":"Уживо","disc.trendingNow":"Трендови сада 🔥","disc.seeAll":"Погледај све","disc.peopleToFollow":"Особе за праћење","disc.popularPosts":"Популарне објаве","disc.follow":"Прати","disc.following":"Прати","disc.noTrends":"Још нема трендинг тема","disc.loadError":"Трендови се не могу учитати","disc.noPopular":"Нема популарних објава","disc.noMatches":"Нема резултата","disc.alreadyFollowing":"Већ пратите све — вратите се ускоро.","disc.orbits":"орбита","disc.verifiedMember":"Верификовани члан","disc.orbitMember":"Orbit члан","disc.failedUpdate":"Ажурирање није успело",
-  "settings.title":"Подешавања","settings.appearance":"Изглед","settings.theme":"Тема","settings.themeDesc":"Бирај између светле и тамне — сачувано на свим уређајима.","settings.language":"Језик","settings.langDesc":"Одаберите жељени језик.","settings.langUpdated":"Језик је ажуриран",
-},
-el:{
-  "groups.title":"Ομάδες","groups.search":"Αναζήτηση ομάδων…","groups.heroTitle":"Βρες τους ανθρώπους σου.\nΕλάτε στη συνομιλία.","groups.heroSub":"Χιλιάδες κοινότητες για ό,τι αγαπάς.","groups.tabAll":"Όλες","groups.tabTrending":"Τάσεις","groups.tabCategories":"Κατηγορίες","groups.tabMyGroups":"Οι ομάδες μου","groups.popularRightNow":"Δημοφιλή τώρα","groups.trendingGroups":"Ομάδες σε τάση 🔥","groups.newAndGrowing":"Νέες και αναπτυσσόμενες","groups.myGroups":"Οι ομάδες μου","groups.allCategories":"Όλες οι κατηγορίες","groups.seeAll":"Δείτε όλα","groups.join":"Συμμετοχή","groups.joined":"Συμμετείχε","groups.toastJoined":"Συμμετοχή!","groups.toastLeft":"Αποχώρησε από την ομάδα","groups.member":"μέλος","groups.members":"μέλη","groups.noGroups":"Δεν υπάρχουν ακόμα ομάδες.","groups.noMyGroups":"Δεν έχεις γίνει μέλος σε καμία ομάδα ακόμα.","groups.connError":"Αδύνατη η φόρτωση ομάδων. Έλεγξε τη σύνδεσή σου.",
-  "disc.title":"Ανακάλυψη","disc.search":"Αναζήτηση ατόμων, hashtag…","disc.forYou":"Για σένα","disc.trending":"Τάσεις","disc.people":"Άτομα","disc.topics":"Θέματα","disc.live":"Ζωντανά","disc.trendingNow":"Τάσεις τώρα 🔥","disc.seeAll":"Δείτε όλα","disc.peopleToFollow":"Άτομα για ακολούθηση","disc.popularPosts":"Δημοφιλείς αναρτήσεις","disc.follow":"Ακολούθηση","disc.following":"Ακολουθείς","disc.noTrends":"Δεν υπάρχουν τάσεις ακόμα","disc.loadError":"Αδύνατη η φόρτωση τάσεων","disc.noPopular":"Δεν υπάρχουν δημοφιλείς αναρτήσεις","disc.noMatches":"Κανένα αποτέλεσμα","disc.alreadyFollowing":"Ακολουθείς ήδη όλους — επέστρεψε σύντομα.","disc.orbits":"orbits","disc.verifiedMember":"Επαληθευμένο μέλος","disc.orbitMember":"Μέλος Orbit","disc.failedUpdate":"Αποτυχία ενημέρωσης",
-  "settings.title":"Ρυθμίσεις","settings.appearance":"Εμφάνιση","settings.theme":"Θέμα","settings.themeDesc":"Επιλέξτε ανάμεσα σε ανοιχτό και σκοτεινό — αποθηκευμένο σε όλες τις συσκευές.","settings.language":"Γλώσσα","settings.langDesc":"Επιλέξτε την προτιμώμενη γλώσσα.","settings.langUpdated":"Η γλώσσα ενημερώθηκε",
-},
-tr:{
-  "groups.title":"Gruplar","groups.search":"Grup ara…","groups.heroTitle":"İnsanlarını bul.\nSohbete katıl.","groups.heroSub":"Sevdiğin her şey hakkında binlerce topluluk.","groups.tabAll":"Tümü","groups.tabTrending":"Trendler","groups.tabCategories":"Kategoriler","groups.tabMyGroups":"Gruplarım","groups.popularRightNow":"Şu an popüler","groups.trendingGroups":"Trend gruplar 🔥","groups.newAndGrowing":"Yeni ve büyüyen","groups.myGroups":"Gruplarım","groups.allCategories":"Tüm kategoriler","groups.seeAll":"Tümünü gör","groups.join":"Katıl","groups.joined":"Katıldı","groups.toastJoined":"Katıldı!","groups.toastLeft":"Gruptan ayrıldı","groups.member":"üye","groups.members":"üye","groups.noGroups":"Henüz grup yok.","groups.noMyGroups":"Henüz hiçbir gruba katılmadın.","groups.connError":"Gruplar yüklenemedi. Bağlantını kontrol et.",
-  "disc.title":"Keşfet","disc.search":"Kişi, hashtag ara…","disc.forYou":"Senin için","disc.trending":"Trendler","disc.people":"Kişiler","disc.topics":"Konular","disc.live":"Canlı","disc.trendingNow":"Şu an trend 🔥","disc.seeAll":"Tümünü gör","disc.peopleToFollow":"Takip edilecekler","disc.popularPosts":"Popüler gönderiler","disc.follow":"Takip et","disc.following":"Takip ediyorsun","disc.noTrends":"Henüz trend konu yok","disc.loadError":"Trendler yüklenemedi","disc.noPopular":"Henüz popüler gönderi yok","disc.noMatches":"Sonuç bulunamadı","disc.alreadyFollowing":"Herkesi zaten takip ediyorsun — yakında tekrar gel.","disc.orbits":"orbit","disc.verifiedMember":"Doğrulanmış üye","disc.orbitMember":"Orbit üyesi","disc.failedUpdate":"Güncelleme başarısız",
-  "settings.title":"Ayarlar","settings.appearance":"Görünüm","settings.theme":"Tema","settings.themeDesc":"Açık ve koyu arasında seçim yap — tüm cihazlarda kaydedilir.","settings.language":"Dil","settings.langDesc":"Tercih ettiğin dili seç.","settings.langUpdated":"Dil güncellendi",
-},
-ar:{
-  "groups.title":"المجموعات","groups.search":"البحث عن مجموعات…","groups.heroTitle":"اعثر على أشخاصك.\nانضم إلى المحادثة.","groups.heroSub":"آلاف المجتمعات حول كل ما تحب.","groups.tabAll":"الكل","groups.tabTrending":"الرائج","groups.tabCategories":"الفئات","groups.tabMyGroups":"مجموعاتي","groups.popularRightNow":"رائج الآن","groups.trendingGroups":"مجموعات رائجة 🔥","groups.newAndGrowing":"جديدة وناشئة","groups.myGroups":"مجموعاتي","groups.allCategories":"جميع الفئات","groups.seeAll":"عرض الكل","groups.join":"انضم","groups.joined":"منضم","groups.toastJoined":"تم الانضمام!","groups.toastLeft":"غادرت المجموعة","groups.member":"عضو","groups.members":"أعضاء","groups.noGroups":"لا توجد مجموعات بعد.","groups.noMyGroups":"لم تنضم إلى أي مجموعة بعد.","groups.connError":"تعذر تحميل المجموعات. تحقق من الاتصال.",
-  "disc.title":"اكتشاف","disc.search":"البحث عن أشخاص، هاشتاق…","disc.forYou":"لك","disc.trending":"الرائج","disc.people":"الأشخاص","disc.topics":"المواضيع","disc.live":"مباشر","disc.trendingNow":"الرائج الآن 🔥","disc.seeAll":"عرض الكل","disc.peopleToFollow":"أشخاص للمتابعة","disc.popularPosts":"المنشورات الرائجة","disc.follow":"متابعة","disc.following":"تتابع","disc.noTrends":"لا توجد مواضيع رائجة بعد","disc.loadError":"تعذر تحميل الاتجاهات","disc.noPopular":"لا توجد منشورات رائجة بعد","disc.noMatches":"لا نتائج","disc.alreadyFollowing":"أنت تتابع الجميع بالفعل — عد لاحقًا.","disc.orbits":"مدارات","disc.verifiedMember":"عضو موثق","disc.orbitMember":"عضو Orbit","disc.failedUpdate":"فشل التحديث",
-  "settings.title":"الإعدادات","settings.appearance":"المظهر","settings.theme":"السمة","settings.themeDesc":"اختر بين الفاتح والداكن — محفوظ على جميع أجهزتك.","settings.language":"اللغة","settings.langDesc":"اختر لغتك المفضلة.","settings.langUpdated":"تم تحديث اللغة",
-},
-he:{
-  "groups.title":"קבוצות","groups.search":"חיפוש קבוצות…","groups.heroTitle":"מצא את האנשים שלך.\nהצטרף לשיחה.","groups.heroSub":"אלפי קהילות סביב כל מה שאתה אוהב.","groups.tabAll":"הכל","groups.tabTrending":"טרנדים","groups.tabCategories":"קטגוריות","groups.tabMyGroups":"הקבוצות שלי","groups.popularRightNow":"פופולרי עכשיו","groups.trendingGroups":"קבוצות טרנדיות 🔥","groups.newAndGrowing":"חדשות וצומחות","groups.myGroups":"הקבוצות שלי","groups.allCategories":"כל הקטגוריות","groups.seeAll":"ראה הכל","groups.join":"הצטרף","groups.joined":"הצטרף","groups.toastJoined":"הצטרפת!","groups.toastLeft":"עזבת את הקבוצה","groups.member":"חבר","groups.members":"חברים","groups.noGroups":"עדיין אין קבוצות כאן.","groups.noMyGroups":"עדיין לא הצטרפת לאף קבוצה.","groups.connError":"לא ניתן לטעון קבוצות. בדוק את החיבור.",
-  "disc.title":"גלה","disc.search":"חפש אנשים, האשטאגים…","disc.forYou":"בשבילך","disc.trending":"טרנדים","disc.people":"אנשים","disc.topics":"נושאים","disc.live":"שידור חי","disc.trendingNow":"טרנדים עכשיו 🔥","disc.seeAll":"ראה הכל","disc.peopleToFollow":"אנשים לעקוב","disc.popularPosts":"פוסטים פופולריים","disc.follow":"עקוב","disc.following":"עוקב","disc.noTrends":"עדיין אין נושאים טרנדיים","disc.loadError":"לא ניתן לטעון טרנדים","disc.noPopular":"עדיין אין פוסטים פופולריים","disc.noMatches":"אין תוצאות","disc.alreadyFollowing":"כבר עוקב אחרי כולם — חזור בקרוב.","disc.orbits":"orbits","disc.verifiedMember":"חבר מאומת","disc.orbitMember":"חבר Orbit","disc.failedUpdate":"עדכון נכשל",
-  "settings.title":"הגדרות","settings.appearance":"מראה","settings.theme":"ערכת נושא","settings.themeDesc":"בחר בין בהיר לכהה — נשמר בכל המכשירים שלך.","settings.language":"שפה","settings.langDesc":"בחר את שפת התצוגה המועדפת.","settings.langUpdated":"השפה עודכנה",
-},
-hi:{
-  "groups.title":"समूह","groups.search":"समूह खोजें…","groups.heroTitle":"अपने लोगों को खोजें।\nबातचीत में शामिल हों।","groups.heroSub":"हर उस चीज़ के बारे में हज़ारों समुदाय जो आपको पसंद है।","groups.tabAll":"सभी","groups.tabTrending":"ट्रेंडिंग","groups.tabCategories":"श्रेणियाँ","groups.tabMyGroups":"मेरे समूह","groups.popularRightNow":"अभी लोकप्रिय","groups.trendingGroups":"ट्रेंडिंग समूह 🔥","groups.newAndGrowing":"नए और बढ़ते हुए","groups.myGroups":"मेरे समूह","groups.allCategories":"सभी श्रेणियाँ","groups.seeAll":"सभी देखें","groups.join":"शामिल हों","groups.joined":"शामिल हुए","groups.toastJoined":"शामिल हो गए!","groups.toastLeft":"समूह छोड़ दिया","groups.member":"सदस्य","groups.members":"सदस्य","groups.noGroups":"अभी कोई समूह नहीं।","groups.noMyGroups":"आप अभी तक किसी समूह में शामिल नहीं हुए।","groups.connError":"समूह लोड नहीं हो सके। कनेक्शन जाँचें।",
-  "disc.title":"खोजें","disc.search":"लोग, हैशटैग खोजें…","disc.forYou":"आपके लिए","disc.trending":"ट्रेंडिंग","disc.people":"लोग","disc.topics":"विषय","disc.live":"लाइव","disc.trendingNow":"अभी ट्रेंडिंग 🔥","disc.seeAll":"सभी देखें","disc.peopleToFollow":"फ़ॉलो करने के लिए लोग","disc.popularPosts":"लोकप्रिय पोस्ट","disc.follow":"फ़ॉलो करें","disc.following":"फ़ॉलो कर रहे हैं","disc.noTrends":"अभी कोई ट्रेंडिंग विषय नहीं","disc.loadError":"ट्रेंड लोड नहीं हो सके","disc.noPopular":"अभी कोई लोकप्रिय पोस्ट नहीं","disc.noMatches":"कोई परिणाम नहीं","disc.alreadyFollowing":"आप पहले से सभी को फ़ॉलो कर रहे हैं — जल्द वापस आएं।","disc.orbits":"ऑर्बिट्स","disc.verifiedMember":"सत्यापित सदस्य","disc.orbitMember":"Orbit सदस्य","disc.failedUpdate":"अपडेट विफल",
-  "settings.title":"सेटिंग्स","settings.appearance":"रूप","settings.theme":"थीम","settings.themeDesc":"लाइट और डार्क के बीच चुनें — सभी डिवाइस पर सहेजा जाता है।","settings.language":"भाषा","settings.langDesc":"अपनी पसंदीदा भाषा चुनें।","settings.langUpdated":"भाषा अपडेट की गई",
-},
-bn:{
-  "groups.title":"গ্রুপ","groups.search":"গ্রুপ খুঁজুন…","groups.heroTitle":"আপনার মানুষ খুঁজুন।\nকথোপকথনে যোগ দিন।","groups.heroSub":"আপনার পছন্দের সবকিছু নিয়ে হাজারো কমিউনিটি।","groups.tabAll":"সব","groups.tabTrending":"ট্রেন্ডিং","groups.tabCategories":"বিভাগ","groups.tabMyGroups":"আমার গ্রুপ","groups.popularRightNow":"এখন জনপ্রিয়","groups.trendingGroups":"ট্রেন্ডিং গ্রুপ 🔥","groups.newAndGrowing":"নতুন ও বাড়ছে","groups.myGroups":"আমার গ্রুপ","groups.allCategories":"সব বিভাগ","groups.seeAll":"সব দেখুন","groups.join":"যোগ দিন","groups.joined":"যোগ দিয়েছেন","groups.toastJoined":"যোগ দেওয়া হয়েছে!","groups.toastLeft":"গ্রুপ ছেড়েছেন","groups.member":"সদস্য","groups.members":"সদস্য","groups.noGroups":"এখনো কোনো গ্রুপ নেই।","groups.noMyGroups":"আপনি এখনো কোনো গ্রুপে যোগ দেননি।","groups.connError":"গ্রুপ লোড করা যায়নি। সংযোগ পরীক্ষা করুন।",
-  "disc.title":"আবিষ্কার করুন","disc.search":"মানুষ, হ্যাশট্যাগ খুঁজুন…","disc.forYou":"আপনার জন্য","disc.trending":"ট্রেন্ডিং","disc.people":"মানুষ","disc.topics":"বিষয়","disc.live":"লাইভ","disc.trendingNow":"এখন ট্রেন্ডিং 🔥","disc.seeAll":"সব দেখুন","disc.peopleToFollow":"অনুসরণ করার মানুষ","disc.popularPosts":"জনপ্রিয় পোস্ট","disc.follow":"অনুসরণ করুন","disc.following":"অনুসরণ করছেন","disc.noTrends":"এখনো কোনো ট্রেন্ডিং বিষয় নেই","disc.loadError":"ট্রেন্ড লোড করা যায়নি","disc.noPopular":"এখনো কোনো জনপ্রিয় পোস্ট নেই","disc.noMatches":"কোনো ফলাফল নেই","disc.alreadyFollowing":"আপনি ইতিমধ্যে সবাইকে অনুসরণ করছেন — শীঘ্রই ফিরে আসুন।","disc.orbits":"অরবিট","disc.verifiedMember":"যাচাইকৃত সদস্য","disc.orbitMember":"Orbit সদস্য","disc.failedUpdate":"আপডেট ব্যর্থ",
-  "settings.title":"সেটিংস","settings.appearance":"চেহারা","settings.theme":"থিম","settings.themeDesc":"হালকা এবং গাঢ়ের মধ্যে বেছে নিন — সব ডিভাইসে সংরক্ষিত।","settings.language":"ভাষা","settings.langDesc":"আপনার পছন্দের ভাষা বেছে নিন।","settings.langUpdated":"ভাষা আপডেট হয়েছে",
-},
-ja:{
-  "groups.title":"グループ","groups.search":"グループを検索…","groups.heroTitle":"仲間を見つけよう。\n会話に参加しよう。","groups.heroSub":"あなたが好きなすべてについての何千ものコミュニティ。","groups.tabAll":"すべて","groups.tabTrending":"トレンド","groups.tabCategories":"カテゴリ","groups.tabMyGroups":"マイグループ","groups.popularRightNow":"今人気","groups.trendingGroups":"トレンドグループ 🔥","groups.newAndGrowing":"新しくて成長中","groups.myGroups":"マイグループ","groups.allCategories":"すべてのカテゴリ","groups.seeAll":"すべて見る","groups.join":"参加","groups.joined":"参加済み","groups.toastJoined":"参加しました！","groups.toastLeft":"グループを退出しました","groups.member":"メンバー","groups.members":"メンバー","groups.noGroups":"グループはまだありません。","groups.noMyGroups":"まだグループに参加していません。","groups.connError":"グループを読み込めません。接続を確認してください。",
-  "disc.title":"発見","disc.search":"ユーザー、ハッシュタグを検索…","disc.forYou":"おすすめ","disc.trending":"トレンド","disc.people":"ユーザー","disc.topics":"トピック","disc.live":"ライブ","disc.trendingNow":"今トレンド 🔥","disc.seeAll":"すべて見る","disc.peopleToFollow":"フォロー候補","disc.popularPosts":"人気の投稿","disc.follow":"フォロー","disc.following":"フォロー中","disc.noTrends":"トレンドトピックはまだありません","disc.loadError":"トレンドを読み込めませんでした","disc.noPopular":"人気の投稿はまだありません","disc.noMatches":"結果なし","disc.alreadyFollowing":"すでに全員フォロー中 — また後で確認してください。","disc.orbits":"オービット","disc.verifiedMember":"認証済みメンバー","disc.orbitMember":"Orbit メンバー","disc.failedUpdate":"更新に失敗しました",
-  "settings.title":"設定","settings.appearance":"外観","settings.theme":"テーマ","settings.themeDesc":"ライトとダークから選択 — すべてのデバイスで保存されます。","settings.language":"言語","settings.langDesc":"表示言語を選択してください。","settings.langUpdated":"言語が更新されました",
-},
-ko:{
-  "groups.title":"그룹","groups.search":"그룹 검색…","groups.heroTitle":"내 사람들을 찾아보세요.\n대화에 참여하세요.","groups.heroSub":"당신이 좋아하는 모든 것에 관한 수천 개의 커뮤니티.","groups.tabAll":"전체","groups.tabTrending":"트렌딩","groups.tabCategories":"카테고리","groups.tabMyGroups":"내 그룹","groups.popularRightNow":"지금 인기","groups.trendingGroups":"트렌딩 그룹 🔥","groups.newAndGrowing":"새롭고 성장하는","groups.myGroups":"내 그룹","groups.allCategories":"모든 카테고리","groups.seeAll":"모두 보기","groups.join":"참여","groups.joined":"참여함","groups.toastJoined":"참여했습니다!","groups.toastLeft":"그룹을 떠났습니다","groups.member":"멤버","groups.members":"멤버","groups.noGroups":"그룹이 아직 없습니다.","groups.noMyGroups":"아직 참여한 그룹이 없습니다.","groups.connError":"그룹을 불러올 수 없습니다. 연결을 확인하세요.",
-  "disc.title":"탐색","disc.search":"사람, 해시태그 검색…","disc.forYou":"추천","disc.trending":"트렌딩","disc.people":"사람들","disc.topics":"주제","disc.live":"라이브","disc.trendingNow":"지금 트렌딩 🔥","disc.seeAll":"모두 보기","disc.peopleToFollow":"팔로우할 사람들","disc.popularPosts":"인기 게시물","disc.follow":"팔로우","disc.following":"팔로잉","disc.noTrends":"트렌딩 주제가 아직 없습니다","disc.loadError":"트렌드를 불러올 수 없습니다","disc.noPopular":"인기 게시물이 아직 없습니다","disc.noMatches":"결과 없음","disc.alreadyFollowing":"이미 모두 팔로우하고 있습니다 — 나중에 다시 확인하세요.","disc.orbits":"오빗","disc.verifiedMember":"인증된 멤버","disc.orbitMember":"Orbit 멤버","disc.failedUpdate":"업데이트 실패",
-  "settings.title":"설정","settings.appearance":"외관","settings.theme":"테마","settings.themeDesc":"라이트와 다크 중 선택 — 모든 기기에 저장됩니다.","settings.language":"언어","settings.langDesc":"원하는 표시 언어를 선택하세요.","settings.langUpdated":"언어가 업데이트되었습니다",
-},
-"zh-CN":{
-  "groups.title":"群组","groups.search":"搜索群组…","groups.heroTitle":"找到你的同伴。\n加入对话。","groups.heroSub":"数千个围绕你所爱一切的社区。","groups.tabAll":"全部","groups.tabTrending":"热门","groups.tabCategories":"分类","groups.tabMyGroups":"我的群组","groups.popularRightNow":"现在流行","groups.trendingGroups":"热门群组 🔥","groups.newAndGrowing":"新兴群组","groups.myGroups":"我的群组","groups.allCategories":"所有分类","groups.seeAll":"查看全部","groups.join":"加入","groups.joined":"已加入","groups.toastJoined":"已加入！","groups.toastLeft":"已退出群组","groups.member":"成员","groups.members":"成员","groups.noGroups":"暂无群组。","groups.noMyGroups":"你还没有加入任何群组。","groups.connError":"无法加载群组。请检查网络连接。",
-  "disc.title":"探索","disc.search":"搜索用户、话题…","disc.forYou":"推荐","disc.trending":"热门","disc.people":"用户","disc.topics":"话题","disc.live":"直播","disc.trendingNow":"热门趋势 🔥","disc.seeAll":"查看全部","disc.peopleToFollow":"推荐关注","disc.popularPosts":"热门帖子","disc.follow":"关注","disc.following":"已关注","disc.noTrends":"暂无热门话题","disc.loadError":"无法加载趋势","disc.noPopular":"暂无热门帖子","disc.noMatches":"无结果","disc.alreadyFollowing":"你已关注所有人 — 稍后再来看看。","disc.orbits":"轨道","disc.verifiedMember":"已认证成员","disc.orbitMember":"Orbit 成员","disc.failedUpdate":"更新失败",
-  "settings.title":"设置","settings.appearance":"外观","settings.theme":"主题","settings.themeDesc":"在浅色和深色之间选择 — 在所有设备上保存。","settings.language":"语言","settings.langDesc":"选择您的首选显示语言。","settings.langUpdated":"语言已更新",
-},
-"zh-TW":{
-  "groups.title":"群組","groups.search":"搜尋群組…","groups.heroTitle":"找到你的同伴。\n加入對話。","groups.heroSub":"數千個圍繞你所愛一切的社群。","groups.tabAll":"全部","groups.tabTrending":"熱門","groups.tabCategories":"分類","groups.tabMyGroups":"我的群組","groups.popularRightNow":"現在流行","groups.trendingGroups":"熱門群組 🔥","groups.newAndGrowing":"新興群組","groups.myGroups":"我的群組","groups.allCategories":"所有分類","groups.seeAll":"查看全部","groups.join":"加入","groups.joined":"已加入","groups.toastJoined":"已加入！","groups.toastLeft":"已退出群組","groups.member":"成員","groups.members":"成員","groups.noGroups":"暫無群組。","groups.noMyGroups":"你還沒有加入任何群組。","groups.connError":"無法載入群組。請檢查網路連線。",
-  "disc.title":"探索","disc.search":"搜尋用戶、話題…","disc.forYou":"推薦","disc.trending":"熱門","disc.people":"用戶","disc.topics":"話題","disc.live":"直播","disc.trendingNow":"熱門趨勢 🔥","disc.seeAll":"查看全部","disc.peopleToFollow":"推薦關注","disc.popularPosts":"熱門貼文","disc.follow":"關注","disc.following":"已關注","disc.noTrends":"暫無熱門話題","disc.loadError":"無法載入趨勢","disc.noPopular":"暫無熱門貼文","disc.noMatches":"無結果","disc.alreadyFollowing":"你已關注所有人 — 稍後再來看看。","disc.orbits":"軌道","disc.verifiedMember":"已認證成員","disc.orbitMember":"Orbit 成員","disc.failedUpdate":"更新失敗",
-  "settings.title":"設定","settings.appearance":"外觀","settings.theme":"主題","settings.themeDesc":"在淺色和深色之間選擇 — 在所有裝置上儲存。","settings.language":"語言","settings.langDesc":"選擇您偏好的顯示語言。","settings.langUpdated":"語言已更新",
-},
-vi:{
-  "groups.title":"Nhóm","groups.search":"Tìm kiếm nhóm…","groups.heroTitle":"Tìm những người của bạn.\nTham gia cuộc trò chuyện.","groups.heroSub":"Hàng nghìn cộng đồng về mọi thứ bạn yêu thích.","groups.tabAll":"Tất cả","groups.tabTrending":"Xu hướng","groups.tabCategories":"Danh mục","groups.tabMyGroups":"Nhóm của tôi","groups.popularRightNow":"Phổ biến ngay bây giờ","groups.trendingGroups":"Nhóm thịnh hành 🔥","groups.newAndGrowing":"Mới và phát triển","groups.myGroups":"Nhóm của tôi","groups.allCategories":"Tất cả danh mục","groups.seeAll":"Xem tất cả","groups.join":"Tham gia","groups.joined":"Đã tham gia","groups.toastJoined":"Đã tham gia!","groups.toastLeft":"Đã rời nhóm","groups.member":"thành viên","groups.members":"thành viên","groups.noGroups":"Chưa có nhóm nào.","groups.noMyGroups":"Bạn chưa tham gia nhóm nào.","groups.connError":"Không thể tải nhóm. Kiểm tra kết nối.",
-  "disc.title":"Khám phá","disc.search":"Tìm người, hashtag…","disc.forYou":"Dành cho bạn","disc.trending":"Xu hướng","disc.people":"Người","disc.topics":"Chủ đề","disc.live":"Trực tiếp","disc.trendingNow":"Xu hướng ngay bây giờ 🔥","disc.seeAll":"Xem tất cả","disc.peopleToFollow":"Người để theo dõi","disc.popularPosts":"Bài đăng phổ biến","disc.follow":"Theo dõi","disc.following":"Đang theo dõi","disc.noTrends":"Chưa có chủ đề xu hướng","disc.loadError":"Không thể tải xu hướng","disc.noPopular":"Chưa có bài đăng phổ biến","disc.noMatches":"Không có kết quả","disc.alreadyFollowing":"Bạn đã theo dõi tất cả — quay lại sau nhé.","disc.orbits":"orbits","disc.verifiedMember":"Thành viên đã xác minh","disc.orbitMember":"Thành viên Orbit","disc.failedUpdate":"Cập nhật thất bại",
-  "settings.title":"Cài đặt","settings.appearance":"Giao diện","settings.theme":"Chủ đề","settings.themeDesc":"Chọn giữa sáng và tối — được lưu trên tất cả thiết bị.","settings.language":"Ngôn ngữ","settings.langDesc":"Chọn ngôn ngữ hiển thị ưa thích.","settings.langUpdated":"Đã cập nhật ngôn ngữ",
-},
-th:{
-  "groups.title":"กลุ่ม","groups.search":"ค้นหากลุ่ม…","groups.heroTitle":"ค้นหาผู้คนของคุณ\nเข้าร่วมการสนทนา","groups.heroSub":"ชุมชนหลายพันแห่งสำหรับทุกสิ่งที่คุณรัก","groups.tabAll":"ทั้งหมด","groups.tabTrending":"กำลังมาแรง","groups.tabCategories":"หมวดหมู่","groups.tabMyGroups":"กลุ่มของฉัน","groups.popularRightNow":"ยอดนิยมตอนนี้","groups.trendingGroups":"กลุ่มกำลังมาแรง 🔥","groups.newAndGrowing":"ใหม่และกำลังเติบโต","groups.myGroups":"กลุ่มของฉัน","groups.allCategories":"ทุกหมวดหมู่","groups.seeAll":"ดูทั้งหมด","groups.join":"เข้าร่วม","groups.joined":"เข้าร่วมแล้ว","groups.toastJoined":"เข้าร่วมแล้ว!","groups.toastLeft":"ออกจากกลุ่มแล้ว","groups.member":"สมาชิก","groups.members":"สมาชิก","groups.noGroups":"ยังไม่มีกลุ่ม","groups.noMyGroups":"คุณยังไม่ได้เข้าร่วมกลุ่มใด","groups.connError":"ไม่สามารถโหลดกลุ่มได้ ตรวจสอบการเชื่อมต่อ",
-  "disc.title":"ค้นพบ","disc.search":"ค้นหาคน แฮชแท็ก…","disc.forYou":"สำหรับคุณ","disc.trending":"กำลังมาแรง","disc.people":"ผู้คน","disc.topics":"หัวข้อ","disc.live":"ถ่ายทอดสด","disc.trendingNow":"กำลังมาแรงตอนนี้ 🔥","disc.seeAll":"ดูทั้งหมด","disc.peopleToFollow":"คนที่ควรติดตาม","disc.popularPosts":"โพสต์ยอดนิยม","disc.follow":"ติดตาม","disc.following":"กำลังติดตาม","disc.noTrends":"ยังไม่มีหัวข้อมาแรง","disc.loadError":"ไม่สามารถโหลดเทรนด์ได้","disc.noPopular":"ยังไม่มีโพสต์ยอดนิยม","disc.noMatches":"ไม่พบผลลัพธ์","disc.alreadyFollowing":"คุณติดตามทุกคนแล้ว — กลับมาดูเร็วๆ นี้","disc.orbits":"ออร์บิต","disc.verifiedMember":"สมาชิกที่ยืนยันแล้ว","disc.orbitMember":"สมาชิก Orbit","disc.failedUpdate":"อัปเดตล้มเหลว",
-  "settings.title":"การตั้งค่า","settings.appearance":"ลักษณะ","settings.theme":"ธีม","settings.themeDesc":"เลือกระหว่างสว่างและมืด — บันทึกในทุกอุปกรณ์","settings.language":"ภาษา","settings.langDesc":"เลือกภาษาที่คุณต้องการ","settings.langUpdated":"อัปเดตภาษาแล้ว",
-},
-id:{
-  "groups.title":"Grup","groups.search":"Cari grup…","groups.heroTitle":"Temukan orang-orangmu.\nGabung dalam percakapan.","groups.heroSub":"Ribuan komunitas tentang semua yang kamu cintai.","groups.tabAll":"Semua","groups.tabTrending":"Tren","groups.tabCategories":"Kategori","groups.tabMyGroups":"Grup saya","groups.popularRightNow":"Populer sekarang","groups.trendingGroups":"Grup tren 🔥","groups.newAndGrowing":"Baru dan berkembang","groups.myGroups":"Grup saya","groups.allCategories":"Semua kategori","groups.seeAll":"Lihat semua","groups.join":"Bergabung","groups.joined":"Bergabung","groups.toastJoined":"Bergabung!","groups.toastLeft":"Keluar dari grup","groups.member":"anggota","groups.members":"anggota","groups.noGroups":"Belum ada grup.","groups.noMyGroups":"Kamu belum bergabung ke grup mana pun.","groups.connError":"Grup tidak bisa dimuat. Periksa koneksi.",
-  "disc.title":"Jelajahi","disc.search":"Cari orang, hashtag…","disc.forYou":"Untukmu","disc.trending":"Tren","disc.people":"Orang","disc.topics":"Topik","disc.live":"Langsung","disc.trendingNow":"Tren sekarang 🔥","disc.seeAll":"Lihat semua","disc.peopleToFollow":"Orang untuk diikuti","disc.popularPosts":"Postingan populer","disc.follow":"Ikuti","disc.following":"Mengikuti","disc.noTrends":"Belum ada topik tren","disc.loadError":"Tren tidak bisa dimuat","disc.noPopular":"Belum ada postingan populer","disc.noMatches":"Tidak ada hasil","disc.alreadyFollowing":"Kamu sudah mengikuti semua orang — kembali lagi nanti.","disc.orbits":"orbit","disc.verifiedMember":"Anggota terverifikasi","disc.orbitMember":"Anggota Orbit","disc.failedUpdate":"Pembaruan gagal",
-  "settings.title":"Pengaturan","settings.appearance":"Tampilan","settings.theme":"Tema","settings.themeDesc":"Pilih antara terang dan gelap — disimpan di semua perangkat.","settings.language":"Bahasa","settings.langDesc":"Pilih bahasa tampilan yang kamu inginkan.","settings.langUpdated":"Bahasa diperbarui",
-},
-ms:{
-  "groups.title":"Kumpulan","groups.search":"Cari kumpulan…","groups.heroTitle":"Cari orang-orangmu.\nSertai perbualan.","groups.heroSub":"Ribuan komuniti tentang semua yang kamu cintai.","groups.tabAll":"Semua","groups.tabTrending":"Tren","groups.tabCategories":"Kategori","groups.tabMyGroups":"Kumpulan saya","groups.popularRightNow":"Popular sekarang","groups.trendingGroups":"Kumpulan tren 🔥","groups.newAndGrowing":"Baharu dan berkembang","groups.myGroups":"Kumpulan saya","groups.allCategories":"Semua kategori","groups.seeAll":"Lihat semua","groups.join":"Sertai","groups.joined":"Disertai","groups.toastJoined":"Disertai!","groups.toastLeft":"Keluar dari kumpulan","groups.member":"ahli","groups.members":"ahli","groups.noGroups":"Tiada kumpulan lagi.","groups.noMyGroups":"Anda belum menyertai mana-mana kumpulan.","groups.connError":"Kumpulan tidak dapat dimuatkan. Semak sambungan.",
-  "disc.title":"Terokai","disc.search":"Cari orang, hashtag…","disc.forYou":"Untuk anda","disc.trending":"Tren","disc.people":"Orang","disc.topics":"Topik","disc.live":"Langsung","disc.trendingNow":"Tren sekarang 🔥","disc.seeAll":"Lihat semua","disc.peopleToFollow":"Orang untuk diikuti","disc.popularPosts":"Siaran popular","disc.follow":"Ikut","disc.following":"Mengikut","disc.noTrends":"Tiada topik tren lagi","disc.loadError":"Tren tidak dapat dimuatkan","disc.noPopular":"Tiada siaran popular lagi","disc.noMatches":"Tiada hasil","disc.alreadyFollowing":"Anda sudah mengikut semua orang — kembali semula tidak lama lagi.","disc.orbits":"orbit","disc.verifiedMember":"Ahli yang disahkan","disc.orbitMember":"Ahli Orbit","disc.failedUpdate":"Kemas kini gagal",
-  "settings.title":"Tetapan","settings.appearance":"Penampilan","settings.theme":"Tema","settings.themeDesc":"Pilih antara cerah dan gelap — disimpan di semua peranti.","settings.language":"Bahasa","settings.langDesc":"Pilih bahasa paparan pilihan anda.","settings.langUpdated":"Bahasa dikemas kini",
-},
-};
-/* eslint-enable */
-/** Returns the translated string for `key` in the current language (falls back to English). */
-const t = (key) => {
-  const lang = localStorage.getItem("orbit_lang") || "en";
-  const d = ORBIT_I18N[lang] || ORBIT_I18N.en;
-  return d[key] ?? ORBIT_I18N.en[key] ?? key;
-};
-
 const renderGroups = (root) => {
   const wrap = el("div", { class: "grp-wrap" });
   root.appendChild(wrap);
 
   // 1. Header ──────────────────────────────────────────────────────────────
   const searchBox   = el("div", { class: "grp-search-box hidden" });
-  const searchInput = el("input", { type: "text", placeholder: t("groups.search") });
+  const searchInput = el("input", { type: "text", placeholder: "Search groups…" });
   searchBox.appendChild(searchInput);
 
   const searchIcon = el("span", { class: "grp-search" }, "🔍");
@@ -2753,7 +2615,7 @@ const renderGroups = (root) => {
 
   wrap.appendChild(el("div", { class: "grp-header" },
     el("span", { class: "grp-back", onclick: () => history.back() }, "←"),
-    el("h1", {}, t("groups.title")),
+    el("h1", {}, "Groups"),
     el("div", { style: "display:flex;align-items:center;gap:14px;" },
       searchIcon,
       el("button", { class: "grp-new-btn", onclick: () => openCompose("group") },
@@ -2795,31 +2657,31 @@ const renderGroups = (root) => {
       "data-group-id": g.id,
       "data-joined": member ? "true" : "false",
       style: member ? "opacity:0.55;" : "",
-    }, member ? t("groups.joined") : t("groups.join"));
+    }, member ? "Joined" : "Join");
 
     joinBtn.onclick = async () => {
       const wasMember = (g.members || []).includes(state.uid);
       const ref = doc(db, "groups", g.id);
       if (wasMember) {
         g.members = (g.members || []).filter((id) => id !== state.uid);
-        joinBtn.textContent = t("groups.join");
+        joinBtn.textContent = "Join";
         joinBtn.dataset.joined = "false";
         joinBtn.style.opacity = "";
         await updateDoc(ref, { members: arrayRemove(state.uid) }).catch(() => {});
-        toast(t("groups.toastLeft"));
+        toast("Left group");
       } else {
         g.members = [...(g.members || []), state.uid];
-        joinBtn.textContent = t("groups.joined");
+        joinBtn.textContent = "Joined";
         joinBtn.dataset.joined = "true";
         joinBtn.style.opacity = "0.55";
         await updateDoc(ref, { members: arrayUnion(state.uid) }).catch(() => {});
-        toast(t("groups.toastJoined"));
+        toast("Joined!");
       }
-      countEl.textContent = `${g.members.length} ${g.members.length !== 1 ? t("groups.members") : t("groups.member")}`;
+      countEl.textContent = `${g.members.length} member${g.members.length !== 1 ? "s" : ""}`;
       if (activeFilter === "mygroups") renderGroupList();
     };
 
-    const countEl = el("span", { class: "grp-members" }, `${(g.members || []).length} ${(g.members || []).length !== 1 ? t("groups.members") : t("groups.member")}`);
+    const countEl = el("span", { class: "grp-members" }, `${(g.members || []).length} member${(g.members || []).length !== 1 ? "s" : ""}`);
 
     const row = el("div", { class: "grp-row" },
       icon,
@@ -2845,7 +2707,7 @@ const renderGroups = (root) => {
     if (!groups.length) {
       listContainer.appendChild(el("div", { class: "grp-empty-state" },
         el("i", { class: "ri-group-2-line" }),
-        el("div", {}, activeFilter === "mygroups" ? t("groups.noMyGroups") : t("groups.noGroups")),
+        el("div", {}, activeFilter === "mygroups" ? "You haven't joined any groups yet." : "No groups here yet."),
       ));
       return;
     }
@@ -2858,22 +2720,22 @@ const renderGroups = (root) => {
 
       if (popular.length) {
         listContainer.appendChild(el("div", { class: "grp-section-header" },
-          el("h3", {}, activeFilter === "trending" ? t("groups.trendingGroups") : t("groups.popularRightNow")),
-          el("span", { class: "grp-see-all" }, t("groups.seeAll")),
+          el("h3", {}, activeFilter === "trending" ? "Trending Groups 🔥" : "Popular Right Now"),
+          el("span", { class: "grp-see-all" }, "See all"),
         ));
         popular.forEach((g) => listContainer.appendChild(buildGroupRow(g)));
       }
       if (growing.length && activeFilter !== "trending") {
         listContainer.appendChild(el("div", { class: "grp-section-header", style: "margin-top:8px;" },
-          el("h3", {}, t("groups.newAndGrowing")),
-          el("span", { class: "grp-see-all" }, t("groups.seeAll")),
+          el("h3", {}, "New & Growing"),
+          el("span", { class: "grp-see-all" }, "See all"),
         ));
         growing.forEach((g) => listContainer.appendChild(buildGroupRow(g)));
       }
     } else {
       // My Groups / Categories: flat list
-      const header = activeFilter === "mygroups" ? t("groups.myGroups")
-        : activeCategory ? `#${activeCategory}` : t("groups.allCategories");
+      const header = activeFilter === "mygroups" ? "My Groups"
+        : activeCategory ? `#${activeCategory}` : "All Categories";
       listContainer.appendChild(el("div", { class: "grp-section-header" },
         el("h3", {}, header),
       ));
@@ -2883,10 +2745,10 @@ const renderGroups = (root) => {
 
   // Tab row
   const tabDefs = [
-    { label: t("groups.tabAll"),        filter: "all" },
-    { label: t("groups.tabTrending"),   filter: "trending" },
-    { label: t("groups.tabCategories"), filter: "categories" },
-    { label: t("groups.tabMyGroups"),   filter: "mygroups" },
+    { label: "All",        filter: "all" },
+    { label: "Trending",   filter: "trending" },
+    { label: "Categories", filter: "categories" },
+    { label: "My Groups",  filter: "mygroups" },
   ];
   const tabEls = tabDefs.map(({ label, filter }) => {
     const tab = el("button", { class: "grp-tab" + (filter === "all" ? " active" : ""), "data-filter": filter }, label);
@@ -2929,8 +2791,8 @@ const renderGroups = (root) => {
   const heroAvatarGrid = el("div", { class: "grp-hero-avatars" });
   const hero = el("div", { class: "grp-hero" },
     el("div", { class: "grp-hero-text" },
-      el("h2", {}, t("groups.heroTitle")),
-      el("p", {}, t("groups.heroSub")),
+      el("h2", {}, "Find your people.\nJoin the conversation."),
+      el("p", {}, "Thousands of communities around everything you love."),
     ),
     heroAvatarGrid,
   );
@@ -2974,7 +2836,7 @@ const renderGroups = (root) => {
       listContainer.innerHTML = "";
       listContainer.appendChild(el("div", { class: "grp-empty-state" },
         el("i", { class: "ri-wifi-off-line" }),
-        el("div", {}, t("groups.connError")),
+        el("div", {}, "Could not load groups. Check your connection."),
       ));
     });
 
@@ -3049,7 +2911,7 @@ const renderExplore = (root, hashtagFilter = null) => {
   }
 
   const searchBox    = el("div", { class: "disc-search-box hidden" });
-  const searchInput  = el("input", { type: "text", placeholder: t("disc.search") });
+  const searchInput  = el("input", { type: "text", placeholder: "Search people, hashtags…" });
   const searchResultsEl = el("div", { class: "explore-search-results hidden" });
   searchBox.appendChild(searchInput);
   searchBox.appendChild(searchResultsEl);
@@ -3061,7 +2923,7 @@ const renderExplore = (root, hashtagFilter = null) => {
   };
 
   wrap.appendChild(el("div", { class: "disc-header" },
-    el("h1", {}, t("disc.title")),
+    el("h1", {}, "Discover"),
     el("div", { class: "disc-header-icons" }, searchIcon, bellIcon),
   ));
   wrap.appendChild(searchBox);
@@ -3086,7 +2948,7 @@ const renderExplore = (root, hashtagFilter = null) => {
         .map((d) => ({ uid: d.id, ...d.data() }))
         .filter((u) => u.uid !== state.uid && ((u.name || "").toLowerCase().includes(q1) || (u.username || "").toLowerCase().includes(q1)))
         .slice(0, 12);
-      if (!matches.length) { searchResultsEl.appendChild(el("div", { class: "explore-search-empty" }, t("disc.noMatches"))); return; }
+      if (!matches.length) { searchResultsEl.appendChild(el("div", { class: "explore-search-empty" }, "No matches")); return; }
       matches.forEach((u) => searchResultsEl.appendChild(
         el("div", { class: "explore-search-item", onclick: () => location.hash = `#profile/${u.uid}` },
           el("img", { class: "avatar xs", src: avatarFor(u) }),
@@ -3100,8 +2962,8 @@ const renderExplore = (root, hashtagFilter = null) => {
   });
 
   // 2. Filter pills ─────────────────────────────────────────────────────────
-  const pillLabels  = [t("disc.forYou"), t("disc.trending"), t("disc.people"), t("disc.topics"), t("disc.live")];
-  let activeFilter  = t("disc.forYou");
+  const pillLabels  = ["For You", "Trending", "People", "Topics", "Live"];
+  let activeFilter  = "For You";
   const pillRow     = el("div", { class: "disc-pills" });
   const pillEls     = pillLabels.map((label) => {
     const pill = el("span", { class: "disc-pill" + (label === activeFilter ? " active" : "") }, label);
@@ -3117,8 +2979,8 @@ const renderExplore = (root, hashtagFilter = null) => {
 
   // 3 & 4. Trending Now ─────────────────────────────────────────────────────
   wrap.appendChild(el("div", { class: "disc-section-header" },
-    el("h2", {}, t("disc.trendingNow")),
-    el("span", { class: "disc-see-all" }, t("disc.seeAll")),
+    el("h2", {}, "Trending Now 🔥"),
+    el("span", { class: "disc-see-all" }, "See all"),
   ));
   const trendRow = el("div", { class: "disc-trend-row" });
   wrap.appendChild(trendRow);
@@ -3147,7 +3009,7 @@ const renderExplore = (root, hashtagFilter = null) => {
         "linear-gradient(135deg,#0d0d0d,#1a1a1a)",
       ];
       if (!sorted.length) {
-        trendRow.appendChild(el("div", { style: "padding:0 16px;color:var(--text-mute);font-size:13px;" }, t("disc.noTrends")));
+        trendRow.appendChild(el("div", { style: "padding:0 16px;color:var(--text-mute);font-size:13px;" }, "No trending topics yet"));
         return;
       }
       sorted.forEach(([tag, data], i) => {
@@ -3164,18 +3026,18 @@ const renderExplore = (root, hashtagFilter = null) => {
         },
           el("div", { class: "disc-trend-overlay" },
             el("span", { class: "disc-trend-title" }, `#${tag}`),
-            el("span", { class: "disc-trend-count" }, `${countStr} ${t("disc.orbits")}`),
+            el("span", { class: "disc-trend-count" }, `${countStr} orbits`),
           ),
         ));
       });
     }).catch(() => {
-      trendRow.appendChild(el("div", { style: "padding:0 16px;color:var(--text-mute);font-size:13px;" }, t("disc.loadError")));
+      trendRow.appendChild(el("div", { style: "padding:0 16px;color:var(--text-mute);font-size:13px;" }, "Could not load trends"));
     });
 
   // 5 & 6. People to Follow ─────────────────────────────────────────────────
   wrap.appendChild(el("div", { class: "disc-section-header" },
-    el("h2", {}, t("disc.peopleToFollow")),
-    el("span", { class: "disc-see-all" }, t("disc.seeAll")),
+    el("h2", {}, "People to Follow"),
+    el("span", { class: "disc-see-all" }, "See all"),
   ));
   const peopleList = el("div", { class: "disc-people-list" });
   wrap.appendChild(peopleList);
@@ -3191,7 +3053,7 @@ const renderExplore = (root, hashtagFilter = null) => {
 
       if (!suggestions.length) {
         peopleList.appendChild(el("div", { style: "color:var(--text-mute);font-size:13px;padding:0 0 8px;" },
-          t("disc.alreadyFollowing")));
+          "You're already following everyone — check back soon."));
         return;
       }
 
@@ -3200,11 +3062,11 @@ const renderExplore = (root, hashtagFilter = null) => {
         const followBtn = el("button", {
           class: "disc-follow-btn",
           style: followed ? "opacity:0.5;" : "",
-        }, followed ? t("disc.following") : t("disc.follow"));
+        }, followed ? "Following" : "Follow");
 
         followBtn.onclick = async () => {
           followed = !followed;
-          followBtn.textContent = followed ? t("disc.following") : t("disc.follow");
+          followBtn.textContent = followed ? "Following" : "Follow";
           followBtn.style.opacity = followed ? "0.5" : "";
           const meRef  = doc(db, "users", state.uid);
           const themRef = doc(db, "users", u.uid);
@@ -3220,14 +3082,14 @@ const renderExplore = (root, hashtagFilter = null) => {
             if (state.me) state.me.following = (state.me.following || []).filter((x) => x !== u.uid);
           }
           await batch.commit().catch(() => {
-            toast(t("disc.failedUpdate"));
+            toast("Failed to update");
             followed = !followed;
-            followBtn.textContent = followed ? t("disc.following") : t("disc.follow");
+            followBtn.textContent = followed ? "Following" : "Follow";
             followBtn.style.opacity = followed ? "0.5" : "";
           });
         };
 
-        const roleText = u.bio ? u.bio.slice(0, 42) : (u.verified ? t("disc.verifiedMember") : t("disc.orbitMember"));
+        const roleText = u.bio ? u.bio.slice(0, 42) : (u.verified ? "Verified member" : "Orbit member");
         peopleList.appendChild(el("div", { class: "disc-people-row" },
           el("img", {
             class: "disc-people-avatar",
@@ -3253,7 +3115,7 @@ const renderExplore = (root, hashtagFilter = null) => {
 
   // 7 & 8. Popular Posts ────────────────────────────────────────────────────
   wrap.appendChild(el("div", { class: "disc-section-header", style: "margin-top:8px;" },
-    el("h2", {}, t("disc.popularPosts")),
+    el("h2", {}, "Popular Posts"),
   ));
   // NOTE: intentionally NOT "feed-wrap" — that class triggers global story/suggestion
   // hooks from features.js/additional.js that belong only on the home feed.
@@ -3281,7 +3143,7 @@ const renderExplore = (root, hashtagFilter = null) => {
       if (snap.empty) {
         postsList.appendChild(el("div", { class: "empty" },
           el("i", { class: "ri-planet-line" }),
-          el("div", { class: "t" }, t("disc.noPopular"))));
+          el("div", { class: "t" }, "No popular posts yet")));
         return;
       }
       const posts   = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -3599,14 +3461,14 @@ const renderProfileByUsername = async (root, username) => {
 // =========================================================================
 const renderSettings = (root) => {
   const wrap = el("div", { class: "settings" },
-    el("h2", { style: "margin-top:0;font-family:var(--font-display);" }, t("settings.title")),
+    el("h2", { style: "margin-top:0;font-family:var(--font-display);" }, "Settings"),
 
     el("div", { class: "group" },
-      el("h3", {}, t("settings.appearance")),
+      el("h3", {}, "Appearance"),
       el("div", { class: "row" },
         el("div", { class: "label" },
-          el("div", { class: "t" }, t("settings.theme")),
-          el("div", { class: "d" }, t("settings.themeDesc")),
+          el("div", { class: "t" }, "Theme"),
+          el("div", { class: "d" }, "Choose between light and dark — saved across devices."),
         ),
         el("div", { class: `switch ${document.documentElement.getAttribute("data-theme") === "dark" ? "on" : ""}`, onclick: (e) => {
           toggleTheme();
@@ -3616,8 +3478,8 @@ const renderSettings = (root) => {
       ),
       el("div", { class: "row" },
         el("div", { class: "label" },
-          el("div", { class: "t" }, t("settings.language")),
-          el("div", { class: "d" }, t("settings.langDesc")),
+          el("div", { class: "t" }, "Language"),
+          el("div", { class: "d" }, "Choose your preferred display language."),
         ),
         (() => {
           const LANGUAGES = [
@@ -3667,11 +3529,10 @@ const renderSettings = (root) => {
           sel.onchange = async () => {
             const code = sel.value;
             localStorage.setItem("orbit_lang", code);
-            document.documentElement.setAttribute("lang", code);
             if (state.me) state.me.langPref = code;
             await updateDoc(doc(db, "users", state.uid), { langPref: code }).catch(() => {});
-            toast(t("settings.langUpdated"));
-            router(); // re-render current page in new language
+            toast("Language updated — reloading…");
+            setTimeout(() => orbitTranslate(code), 600);
           };
           return sel;
         })(),
