@@ -1014,10 +1014,14 @@ onAuthStateChanged(auth, async (user) => {
     if (!localStorage.getItem("orbit_onboarded")) { showOnboarding(); } else { showAuth(); }
     return;
   }
+  // Show a branded loader while we fetch/create the user doc so the
+  // screen is never blank between the boot screen disappearing and
+  // the feed skeleton appearing (covers both first load and PWA reopen).
+  showOrbitLoader("Loading Orbit…");
   state.uid = user.uid;
   state.me = await ensureUserDoc(user);
   $("#meAvatar").src = avatarFor(state.me);
-  showApp();
+  showApp(); // calls hideOrbitLoader() internally
   startMyProfileListener();
   startNotifListener();
   startSuggestions();
@@ -1488,12 +1492,16 @@ const renderFeed = (root) => {
 
   const q = query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(50));
   let _lastPostIds = "";
+  let _renderSeq = 0; // incremented on every snapshot; lets stale async renders self-abort
   const unsub = onSnapshot(q, async (snap) => {
     const _newIds = snap.docs.map(d => d.id).join(",");
     if (_newIds === _lastPostIds && list.children.length > 0) return;
     _lastPostIds = _newIds;
-    list.innerHTML = "";
+    const seq = ++_renderSeq; // claim this render slot
+
+    // Handle empty immediately — no data to await
     if (snap.empty) {
+      list.innerHTML = "";
       list.appendChild(el("div", { class: "empty" },
         el("i", { class: "ri-planet-line" }),
         el("div", { class: "t" }, "Your orbit is quiet"),
@@ -1503,9 +1511,17 @@ const renderFeed = (root) => {
     }
 
     const posts = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    // resolve authors
+    // resolve authors — keep skeleton/previous posts visible during the await
+    // so there is never a blank feed while waiting on Firestore user docs
     const authors = await Promise.all([...new Set(posts.map((p) => p.authorUid))].map(fetchUser));
+
+    // A newer snapshot fired while we were awaiting — discard this stale render
+    // to prevent a double clear+reshuffle which causes the visible blank flash
+    if (seq !== _renderSeq) return;
+
     const byUid = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
+    // Only clear the list now that real content is ready to paint
+    list.innerHTML = "";
 
     // Algorithm: score posts by affinity (following > hashtag match > engagement > recency)
     // A random component (+0–15) shuffles the feed differently on each fresh load
@@ -3870,7 +3886,7 @@ function crFontPx(ov, stageWidth) { return stageWidth * ((ov.sizePct * ov.scale)
 
 function crBuildEditorStep() {
   const stage = el("div", { class: "cr-stage" });
-  const overlayLayer = el("div", { class: "cr-overlay-layer" });
+  const overlayLayer = el("div", { class: "cr-overlay-layer", style: "touch-action:none;" });
   const dotsNav = el("div", { class: "cr-slides-nav" });
   const thumbstrip = el("div", { class: "cr-stage-thumbstrip" });
   const layerControls = el("div", { class: "cr-layer-controls" });
@@ -3971,27 +3987,28 @@ function crBuildEditorStep() {
         wasSelectedBeforeTap = crState.selectedLayerId === ov.id;
         crState.selectedLayerId = ov.id;
         paintLayerControls();
-        $(".cr-layer", overlayLayer).forEach((l) => l.classList.remove("selected"));
+        $$(".cr-layer", overlayLayer).forEach((l) => l.classList.remove("selected"));
         layer.classList.add("selected");
         dragging = true; moved = false; sx = e.clientX; sy = e.clientY; ox = ov.x; oy = ov.y;
         layer.setPointerCapture(e.pointerId);
-      });
+      }, { passive: false });
       layer.addEventListener("pointermove", (e) => {
         if (!dragging) return;
-        e.preventDefault();
+        e.preventDefault(); // must be non-passive or mobile browsers ignore this
         const dx = e.clientX - sx, dy = e.clientY - sy;
         if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
         const r = rect();
         ov.x = Math.min(96, Math.max(4, ox + (dx / r.width) * 100));
         ov.y = Math.min(96, Math.max(4, oy + (dy / r.height) * 100));
         layer.style.left = ov.x + "%"; layer.style.top = ov.y + "%";
-      });
+      }, { passive: false });
       layer.addEventListener("pointerup", () => {
         dragging = false;
         if (!moved && ov.type === "text" && wasSelectedBeforeTap) {
-          // rAF gives the browser a frame to settle pointer capture before
-          // we call focus() — critical for reliable tap-to-edit on mobile.
-          requestAnimationFrame(() => crEnterTextEdit(layer, ov));
+          // Call directly (no rAF) — iOS Safari only allows focus() inside a
+          // synchronous user-gesture handler; delaying via rAF exits that
+          // stack and iOS silently ignores the focus() call.
+          crEnterTextEdit(layer, ov);
         }
       });
       layer.addEventListener("pointercancel", () => { dragging = false; });

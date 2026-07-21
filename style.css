@@ -589,6 +589,7 @@ textarea { resize: vertical; min-height: 80px; }
 .post-text {
   font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
   margin-bottom: 8px;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
 }
 .see-more-btn {
   color: var(--primary); font-weight: 600; cursor: pointer; white-space: nowrap;
@@ -3058,7 +3059,7 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .cr-slide-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line); }
 .cr-slide-dot.active { background: var(--primary); width: 18px; border-radius: 4px; }
 
-.cr-stage-wrap { flex: 1; display: flex; align-items: center; justify-content: center; padding: 8px 12px; min-height: 0; }
+.cr-stage-wrap { flex: 1; display: flex; align-items: center; justify-content: center; padding: 8px 12px; min-height: 0; touch-action: none; }
 .cr-stage {
   position: relative; max-width: 100%; max-height: 100%;
   aspect-ratio: 9 / 16; width: min(360px, 100%);
@@ -3072,7 +3073,7 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .cr-stage-thumb.active { border-color: var(--primary); }
 .cr-stage-thumb-add { width: 52px; height: 52px; border-radius: 10px; border: 1px dashed var(--line); display: flex; align-items: center; justify-content: center; color: var(--text-mute); flex-shrink: 0; }
 
-.cr-overlay-layer { position: absolute; inset: 0; }
+.cr-overlay-layer { position: absolute; inset: 0; touch-action: none; }
 .cr-layer {
   position: absolute; left: 0; top: 0; cursor: grab;
   user-select: none; -webkit-user-select: none;
@@ -3661,4 +3662,24 @@ body {
 #google_translate_element {
   display: none !important;
   visibility: hidden !important;
+}
+
+/* Hide the "Translating…" progress spinner/bar Google injects during page translation */
+.goog-te-spinner,
+.goog-te-spinner-pos,
+.goog-te-progress,
+.goog-te-ftab-float,
+iframe.goog-te-menu-frame,
+iframe[id^="goog-"],
+iframe[class^="goog-"] {
+  display: none !important;
+  visibility: hidden !important;
+}
+
+/* Some Google Translate builds inject a top-bar inside the <body> directly;
+   this catches it regardless of the internal class name */
+body > font,
+body > [id^="goog"],
+body > [class^="goog"] {
+  display: none !important;
 }
