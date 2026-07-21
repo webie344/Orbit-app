@@ -1471,7 +1471,7 @@ const renderFeed = (root) => {
   wrap.appendChild(feedMainContent);
 
   // Posts container — show shimmer skeleton cards while Firestore loads
-  const list = el("div", { class: "feed-list" });
+  const list = el("div", { class: "tfb-feed feed-list" });
   const _makeFeedSkel = () => el("div", { class: "feed-skel-post" },
     el("div", { class: "feed-skel-head" },
       el("div", { class: "feed-skel-avatar" }),
@@ -1548,7 +1548,7 @@ const renderFeed = (root) => {
     _scored.forEach(({ p }, idx) => {
       list.appendChild(renderPost(p, byUid[p.authorUid], { hideComments: true }));
       // Signal orbit-icon divider between posts
-      list.appendChild(el("div", { class: "signal-divider", html: `<div class="signal-divider-icon"><svg width="16" height="16" viewBox="0 0 26 26" fill="none"><circle cx="13" cy="13" r="4" stroke="currentColor" stroke-width="2" opacity=".3"/><path d="M13 4 A9 9 0 0 1 22 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".3"/><path d="M13 22 A9 9 0 0 1 4 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".15"/></svg></div>` }));
+      list.appendChild(el("div", { class: "tfb-divider" }));
       // Suggestion card at post 4, then every 7 after that
       if (idx === 4 || (idx > 4 && (idx - 4) % 7 === 0)) {
         const type = _suggTypes[_suggShown % 3];
@@ -1757,7 +1757,6 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
 const renderPost = (p, author, opts = {}) => {
   const iOrbited = (p.orbits || []).includes(state.uid);
   const isMine = p.authorUid === state.uid;
-  const trending = (p.orbitCount || 0) >= 3;
   const { hideComments = false, detailView: _detailView = false } = opts;
 
   // View-count tracking: count once per session per post (skip own posts)
@@ -1769,189 +1768,174 @@ const renderPost = (p, author, opts = {}) => {
     }
   }
 
-  const post = el("article", { class: `post signal-post${trending ? " is-trending" : ""}` });
+  const post = el("article", { class: "tfb-post" });
 
-  // Thought-tail wrap: avatar → small curved tail (only when caption exists) → caption text.
-  // The tail is a fixed-size decorative element — it never stretches regardless of caption length.
-  const thoughtWrap = el("div", { class: "post-thought-wrap" });
-  thoughtWrap.appendChild(el("img", { class: "post-avatar", src: avatarFor(author), onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${author?.uid}`; } }));
-  if (p.text) thoughtWrap.appendChild(el("div", { class: "post-tail" }));
-  post.appendChild(thoughtWrap);
-
-  const head = el("div", { class: "post-head" },
-    el("div", { class: "meta", style: "cursor:pointer;", onclick: () => location.hash = `#post/${p.id}` },
-      el("div", { class: "name" },
-        author?.name || "User",
-        author?.verified ? el("span", { class: "verified", title: "Location verified", html: '<i class="ri-check-line"></i>' }) : null,
-      ),
-      el("div", { class: "sub" },
-        `@${author?.username || "user"}`,
-        el("span", { class: "dot" }, "·"),
-        fmtTime(p.createdAt),
-      )
-    ),
-    _songHeaderBadge(p.song),
-    !isMine ? (() => {
-      let _isFollowing = (state.me?.following || []).includes(author?.uid);
-      const fbtn = el("button", { class: `follow-btn${_isFollowing ? " following" : ""}` },
-        _isFollowing ? "Following" : "Follow");
-      fbtn.addEventListener("click", async (e) => {
+  // ── Header: avatar ring + name + timestamp + menu ────────────────
+  const menuBtn = isMine
+    ? el("button", { class: "icon-btn tfb-menu", onclick: async (e) => {
         e.stopPropagation();
-        _isFollowing = !_isFollowing;
-        fbtn.textContent = _isFollowing ? "Following" : "Follow";
-        fbtn.classList.toggle("following", _isFollowing);
-        await updateDoc(doc(db, "users", state.uid), {
-          following: _isFollowing ? arrayUnion(author.uid) : arrayRemove(author.uid),
-        }).catch(() => {});
-        await updateDoc(doc(db, "users", author.uid), {
-          followers: _isFollowing ? arrayUnion(state.uid) : arrayRemove(state.uid),
-        }).catch(() => {});
-        // Keep caches for both profiles fresh so follower/following counts
-        // update immediately anywhere they're rendered without a full reload.
-        state.cache.users.delete(author.uid);
-        state.cache.users.delete(state.uid);
-        if (_isFollowing) {
-          writeNotif(author.uid, "follow", {}).catch(() => {});
-          import("./notifications.js").then(({ notifyUser }) =>
-            notifyUser(author.uid, state.me?.name || "Someone", "started following you", "/#profile/" + state.uid, state.me?.photoURL || "")
-          ).catch(() => {});
+        if (confirm("Delete this post?")) {
+          await deleteDoc(doc(db, "posts", p.id));
+          toast("Post deleted");
         }
-        if (state.me) { state.me.following = _isFollowing ? [...(state.me.following||[]), author.uid] : (state.me.following||[]).filter((x)=>x!==author.uid); }
-      });
-      return fbtn;
-    })() : el("button", { class: "icon-btn more", onclick: async (e) => {
-      e.stopPropagation();
-      if (confirm("Delete this post?")) {
-        await deleteDoc(doc(db, "posts", p.id));
-        toast("Post deleted");
-      }
-    }}, el("i", { class: "ri-more-2-line" })),
+      }}, el("i", { class: "ri-more-2-line" }))
+    : el("button", { class: "icon-btn tfb-menu", onclick: (e) => e.stopPropagation() },
+        el("i", { class: "ri-more-2-line" }));
+
+  const header = el("div", { class: "tfb-header" },
+    el("div", {
+      class: "tfb-avatar-ring",
+      onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${author?.uid}`; },
+    },
+      el("img", { src: avatarFor(author) }),
+    ),
+    el("div", { class: "tfb-header-text" },
+      el("span", { class: "tfb-name" },
+        author?.name || "User",
+        author?.verified
+          ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' })
+          : null,
+      ),
+      el("span", { class: "tfb-sub" }, `@${author?.username || "user"} · ${fmtTime(p.createdAt)}`),
+    ),
+    menuBtn,
+    el("div", { class: "tfb-tail" }),
   );
-  post.appendChild(head);
+  post.appendChild(header);
 
-  if (p.location?.city || p.location?.lat) { post.appendChild(el("div", { class: "post-location-badge" }, el("i", { class: "ri-map-pin-fill" }), " " + (p.location.city || p.location.lat + ", " + p.location.lng))); }
-
-  // Feature: kind badge + title for build/project posts
+  // ── Kind badge for build / project posts ─────────────────────────
   if (p.kind === "build" || p.kind === "project") {
     const icons  = { build: "ri-hammer-line", project: "ri-folder-5-line" };
-    const labels = { build: "Build in Public",  project: "Project Showcase" };
+    const labels = { build: "Build in Public", project: "Project Showcase" };
     post.appendChild(el("div", { class: `post-kind-badge post-kind-${p.kind}` },
       el("i", { class: icons[p.kind] }), " " + labels[p.kind]));
-  }
-  if (p.title) {
-    post.appendChild(el("div", { class: "post-feat-title", onclick: () => location.hash = `#post/${p.id}` }, p.title));
+    if (p.title) {
+      post.appendChild(el("div", { class: "post-feat-title", onclick: () => location.hash = `#post/${p.id}` }, p.title));
+    }
   }
 
+  // ── Location badge ───────────────────────────────────────────────
+  if (p.location?.city || p.location?.lat) {
+    post.appendChild(el("div", { class: "post-location-badge" },
+      el("i", { class: "ri-map-pin-fill" }),
+      " " + (p.location.city || `${p.location.lat}, ${p.location.lng}`),
+    ));
+  }
+
+  // ── Caption ──────────────────────────────────────────────────────
   if (p.text) {
+    const caption = el("div", { class: "tfb-caption" });
     if (p.text.includes("```")) {
-      const body = el("div", { class: "post-text-wrap signal-thought", onclick: (e) => { if (!e.target.closest("button,a")) location.hash = `#post/${p.id}`; } });
-      import("./features.js").then((m) => body.appendChild(m.renderTextWithCode(p.text))).catch(() => {
-        body.innerHTML = linkify(p.text);
-      });
-      thoughtWrap.appendChild(body);
+      import("./features.js")
+        .then((m) => caption.appendChild(m.renderTextWithCode(p.text)))
+        .catch(() => { caption.innerHTML = linkify(p.text); });
     } else {
-      const isShortThought = p.text.length < 40;
-      const body = el("div", { class: `post-text signal-thought${isShortThought ? " short" : ""}` });
       const TRUNC_LEN = 280;
       if (!_detailView && p.text.length > TRUNC_LEN) {
         let expanded = false;
         const shortText = p.text.slice(0, TRUNC_LEN).trim();
         const paint = () => {
-          body.innerHTML = linkify(expanded ? p.text : shortText + "… ");
+          caption.innerHTML = linkify(expanded ? p.text : shortText + "… ");
           const moreBtn = el("span", { class: "see-more-btn", text: expanded ? "See less" : "See more" });
           moreBtn.addEventListener("click", (e) => { e.stopPropagation(); expanded = !expanded; paint(); });
-          body.appendChild(moreBtn);
+          caption.appendChild(moreBtn);
         };
         paint();
       } else {
-        body.innerHTML = linkify(p.text);
-        body.onclick = () => location.hash = `#post/${p.id}`;
+        caption.innerHTML = linkify(p.text);
+        caption.onclick = (e) => {
+          if (!e.target.closest("button,a")) location.hash = `#post/${p.id}`;
+        };
       }
-      thoughtWrap.appendChild(body);
     }
+    post.appendChild(caption);
   }
 
-  // Media (single, grid, or carousel)
-  const carousel = renderMediaCarousel(p.media, p.id, { detailView: _detailView, song: p.song });
-  if (carousel) post.appendChild(carousel);
+  // ── Media ────────────────────────────────────────────────────────
+  const mediaNode = renderMediaCarousel(p.media, p.id, { detailView: _detailView, song: p.song });
+  if (mediaNode) {
+    // Swap post-media class for tfb-media
+    mediaNode.classList.remove("post-media");
+    mediaNode.classList.add("tfb-media");
+    post.appendChild(mediaNode);
+  }
 
-  // Feature: extra detail block for build/project posts (stage, progress, tags, links)
+  // ── Build / project extra detail block ───────────────────────────
   if (p.kind === "build" || p.kind === "project") {
     import("./features.js").then((m) => {
       const extra = p.kind === "build" ? m.renderBuildExtra(p) : m.renderProjectExtra(p);
-      const actions = post.querySelector(".post-actions");
+      const actions = post.querySelector(".tfb-actions");
       if (actions) post.insertBefore(extra, actions); else post.appendChild(extra);
     }).catch(() => {});
   }
 
-  // Actions row
-  const orbitIcon = el("i", { class: iOrbited ? "ri-fire-fill" : "ri-fire-line" });
+  // ── Actions row ──────────────────────────────────────────────────
+  const orbitIcon  = el("i", { class: iOrbited ? "ri-fire-fill" : "ri-fire-line" });
   const orbitCount = el("span", { text: String(p.orbitCount || 0) });
   let _iOrbited = iOrbited;
-  const orbitBtn = el("button", { class: `post-act orbit${iOrbited ? " active" : ""}`, onclick: async (e) => {
-    e.stopPropagation();
-    _iOrbited = !_iOrbited;
-    if (_iOrbited) sfxOrbit();
-    orbitIcon.className = _iOrbited ? "ri-fire-fill" : "ri-fire-line";
-    orbitCount.textContent = String((p.orbitCount || 0) + (_iOrbited ? 1 : -1));
-    orbitBtn.classList.toggle("active", _iOrbited);
-    await updateDoc(doc(db, "posts", p.id), {
-      orbits: _iOrbited ? arrayUnion(state.uid) : arrayRemove(state.uid),
-      orbitCount: increment(_iOrbited ? 1 : -1),
-    }).catch(() => {});
-    // Send notification to post author when orbiting (not for own posts)
-    if (_iOrbited && author?.uid && author.uid !== state.uid) {
-      writeNotif(author.uid, "orbit", {
-        postId: p.id,
-        text: `${state.me?.name || "Someone"} orbited your post`,
+
+  const orbitBtn = el("button", {
+    class: `tfb-badge${iOrbited ? " active" : ""}`,
+    onclick: async (e) => {
+      e.stopPropagation();
+      _iOrbited = !_iOrbited;
+      if (_iOrbited) sfxOrbit();
+      orbitIcon.className   = _iOrbited ? "ri-fire-fill" : "ri-fire-line";
+      orbitCount.textContent = String((p.orbitCount || 0) + (_iOrbited ? 1 : -1));
+      orbitBtn.classList.toggle("active", _iOrbited);
+      await updateDoc(doc(db, "posts", p.id), {
+        orbits:     _iOrbited ? arrayUnion(state.uid)   : arrayRemove(state.uid),
+        orbitCount: increment(_iOrbited ? 1 : -1),
       }).catch(() => {});
-      const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
-      import("./notifications.js").then(({ notifyUser }) =>
-        notifyUser(author.uid, state.me?.name || "Someone", "orbited your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
-      ).catch(() => {});
-    }
-  }}, orbitIcon, el("span", {}, "Orbit · "), orbitCount);
+      if (_iOrbited && author?.uid && author.uid !== state.uid) {
+        writeNotif(author.uid, "orbit", {
+          postId: p.id,
+          text: `${state.me?.name || "Someone"} orbited your post`,
+        }).catch(() => {});
+        const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
+        import("./notifications.js").then(({ notifyUser }) =>
+          notifyUser(author.uid, state.me?.name || "Someone", "orbited your post",
+            "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
+        ).catch(() => {});
+      }
+    },
+  }, orbitIcon, orbitCount);
 
   const saveIcon = (state.me?.saved || []).includes(p.id) ? "ri-bookmark-fill" : "ri-bookmark-line";
 
-  const viewsBadge = el("span", { class: "post-act post-views", title: "Views" },
-    el("i", { class: "ri-eye-line" }),
-    " " + String(p.views || 0),
-  );
-
-  const actions = el("div", { class: "post-actions" },
-    el("div", { class: "post-actions-left" },
-      el("button", { class: "post-act", onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; }},
-        el("i", { class: "ri-chat-1-line" }),
-        String(p.commentCount || 0),
-      ),
-      el("button", { class: "post-act", onclick: async (e) => {
+  const actions = el("div", { class: "tfb-actions" },
+    el("button", { class: "tfb-act", onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; } },
+      el("i", { class: "ri-chat-1-line" }),
+      " " + String(p.commentCount || 0),
+    ),
+    el("button", {
+      class: "tfb-act",
+      onclick: async (e) => {
         e.stopPropagation();
         const url = `${location.origin}${location.pathname}#post/${p.id}`;
         try { await navigator.share?.({ title: "Orbit", text: p.text || "Check this out", url }); }
         catch { await navigator.clipboard.writeText(url); toast("Link copied"); }
-      }},
-        el("i", { class: "ri-share-forward-line" }),
-        "Share",
-      ),
-      el("button", { class: "post-act", onclick: (e) => { e.stopPropagation(); toggleSave(p.id); } },
-        el("i", { class: saveIcon }),
-      ),
+      },
+    },
+      el("i", { class: "ri-share-forward-line" }), " Share",
     ),
-    el("div", { class: "post-actions-right" },
-      viewsBadge,
-      orbitBtn,
+    el("button", { class: "tfb-act", onclick: (e) => { e.stopPropagation(); toggleSave(p.id); } },
+      el("i", { class: saveIcon }),
     ),
+    el("span", { class: "spacer" }),
+    el("span", { class: "tfb-act", style: "cursor:default;pointer-events:none;" },
+      el("i", { class: "ri-eye-line" }), " " + String(p.views || 0),
+    ),
+    orbitBtn,
   );
   post.appendChild(actions);
 
+  // ── Comments (feed preview — top 5) ─────────────────────────────
   if (!hideComments) {
-    // Comments preview (top 5)
     const cBox = el("div", { class: "comments hidden" });
     post.appendChild(cBox);
 
-    // Track reply state
-    let _replyTo = null; // { uid, name }
+    let _replyTo = null;
 
     const replyBanner = el("div", { class: "reply-banner hidden" },
       el("span", { class: "reply-banner-text" }, ""),
@@ -1964,7 +1948,6 @@ const renderPost = (p, author, opts = {}) => {
     );
     post.appendChild(replyBanner);
 
-    // ── Comment media + voice-note state ────────────────────────
     let _cmtMediaFile = null;
     let _cmtAudioBlob = null;
     let _cmtRecorder  = null;
@@ -1988,7 +1971,7 @@ const renderPost = (p, author, opts = {}) => {
       const url = URL.createObjectURL(file);
       const thumb = isVideo
         ? el("video", { src: url, muted: "", preload: "metadata", style: "width:72px;height:72px;object-fit:cover;border-radius:10px;display:block;" })
-        : el("img",  { src: url, style: "width:72px;height:72px;object-fit:cover;border-radius:10px;display:block;" });
+        : el("img",   { src: url, style: "width:72px;height:72px;object-fit:cover;border-radius:10px;display:block;" });
       const rmBtn = el("button", { type: "button", class: "cmt-attach-remove",
         html: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` });
       rmBtn.addEventListener("click", clearCmtAttach);
@@ -2011,14 +1994,12 @@ const renderPost = (p, author, opts = {}) => {
       showCmtMediaPreview(file); cmtMediaInput.value = "";
     });
 
-    // Media button (image/video)
     const cmtMediaBtn = el("button", {
       type: "button", class: "icon-btn cmt-icon-btn", title: "Add photo or video",
       html: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`,
     });
     cmtMediaBtn.addEventListener("click", (e) => { e.stopPropagation(); cmtMediaInput.click(); });
 
-    // Mic button (voice note)
     const SVG_MIC  = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`;
     const SVG_STOP = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>`;
     const cmtMicBtn = el("button", { type: "button", class: "icon-btn cmt-icon-btn", title: "Record voice note", html: SVG_MIC });
@@ -2078,7 +2059,6 @@ const renderPost = (p, author, opts = {}) => {
       input.value = ""; _replyTo = null;
       replyBanner.classList.add("hidden"); input.placeholder = "Add your echo…";
       clearCmtAttach();
-      // Optimistic UI
       cBox.classList.remove("hidden");
       cBox.appendChild(el("div", { class: "comment" },
         el("img", { class: "avatar xs", src: avatarFor(state.me), onclick: () => location.hash = `#profile/${state.uid}` }),
@@ -2091,7 +2071,9 @@ const renderPost = (p, author, opts = {}) => {
       submitBtn.disabled = false;
       await addDoc(collection(db, "posts", p.id, "comments"), commentData);
       await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
-      const notifSnippet = commentData.text ? `"${commentData.text.slice(0, 60)}"` : commentData.mediaType ? "📷 sent a photo" : "🎙️ sent a voice note";
+      const notifSnippet = commentData.text
+        ? `"${commentData.text.slice(0, 60)}"`
+        : commentData.mediaType ? "📷 sent a photo" : "🎙️ sent a voice note";
       if (author?.uid && author.uid !== state.uid) {
         writeNotif(author.uid, "comment", { postId: p.id, text: `${state.me?.name || "Someone"} commented: ${notifSnippet}` }).catch(() => {});
         const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
@@ -2111,12 +2093,12 @@ const renderPost = (p, author, opts = {}) => {
     const renderFeedComment = (c, a) => {
       const isLiked = (c.likes || []).includes(state.uid);
       const likeCountEl = el("span", { text: String((c.likes || []).length || "") });
-      const likeIconEl = el("i", { class: isLiked ? "ri-heart-fill" : "ri-heart-line", style: isLiked ? "color:var(--danger);" : "" });
+      const likeIconEl  = el("i", { class: isLiked ? "ri-heart-fill" : "ri-heart-line", style: isLiked ? "color:var(--danger);" : "" });
       let _liked = isLiked;
       const likeBtn = el("button", { class: "cmt-like-btn", onclick: async (e) => {
         e.stopPropagation();
         _liked = !_liked;
-        likeIconEl.className = _liked ? "ri-heart-fill" : "ri-heart-line";
+        likeIconEl.className   = _liked ? "ri-heart-fill" : "ri-heart-line";
         likeIconEl.style.color = _liked ? "var(--danger)" : "";
         const newCount = (c.likes?.length || 0) + (_liked ? 1 : -1);
         likeCountEl.textContent = newCount > 0 ? String(newCount) : "";
@@ -2144,9 +2126,19 @@ const renderPost = (p, author, opts = {}) => {
         el("div", { class: "body" },
           el("div", { class: "name" }, a?.name || "User",
             a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null),
-          (c.replyToUsername || c.replyToName) ? el("div", { class: "reply-to-label" }, el("i", { class: "ri-corner-down-right-line" }), el("a", { class: "mention", href: `#profile-u/${c.replyToUsername || c.replyToName}` }, `@${c.replyToUsername || c.replyToName}`)) : null,
-          c.text ? el("div", { class: "text", text: c.text }) : null,
-          c.mediaUrl ? el("div", { class: "cmt-media", onclick: (e) => { e.stopPropagation(); c.mediaType === "video" ? openVideoViewer([{ type: "video", url: c.mediaUrl }], 0) : openImageZoom(c.mediaUrl); }},
+          (c.replyToUsername || c.replyToName)
+            ? el("div", { class: "reply-to-label" },
+                el("i", { class: "ri-corner-down-right-line" }),
+                el("a", { class: "mention", href: `#profile-u/${c.replyToUsername || c.replyToName}` },
+                  `@${c.replyToUsername || c.replyToName}`))
+            : null,
+          c.text  ? el("div", { class: "text", text: c.text }) : null,
+          c.mediaUrl ? el("div", { class: "cmt-media", onclick: (e) => {
+            e.stopPropagation();
+            c.mediaType === "video"
+              ? openVideoViewer([{ type: "video", url: c.mediaUrl }], 0)
+              : openImageZoom(c.mediaUrl);
+          }},
             c.mediaType === "video"
               ? el("div", { class: "cmt-media-video-wrap" },
                   el("video", { src: c.mediaUrl, muted: "", preload: "metadata", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;" }),
@@ -2163,21 +2155,23 @@ const renderPost = (p, author, opts = {}) => {
       );
     };
 
-    onSnapshot(query(collection(db, "posts", p.id, "comments"), orderBy("createdAt", "desc"), limit(5)),
+    onSnapshot(
+      query(collection(db, "posts", p.id, "comments"), orderBy("createdAt", "desc"), limit(5)),
       async (snap) => {
         cBox.innerHTML = "";
         if (snap.empty) { cBox.classList.add("hidden"); return; }
         cBox.classList.remove("hidden");
         const comments = snap.docs.map((d) => ({ id: d.id, ...d.data() })).reverse();
-        const authors = await Promise.all([...new Set(comments.map((c) => c.authorUid))].map(fetchUser));
-        const map = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
+        const authors  = await Promise.all([...new Set(comments.map((c) => c.authorUid))].map(fetchUser));
+        const map      = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
         comments.forEach((c) => cBox.appendChild(renderFeedComment(c, map[c.authorUid])));
-      });
+      },
+    );
 
     post._focusComment = () => cForm.querySelector("input").focus();
   }
   return post;
-};
+}
 
 // =========================================================================
 // 8b. POST DETAIL — full single post with all comments + back button
@@ -3146,10 +3140,7 @@ const renderExplore = (root, hashtagFilter = null) => {
       const byUid   = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
       posts.slice(0, 10).forEach((p) => {
         postsList.appendChild(renderPost(p, byUid[p.authorUid]));
-        postsList.appendChild(el("div", {
-          class: "signal-divider",
-          html: `<div class="signal-divider-icon"><svg width="16" height="16" viewBox="0 0 26 26" fill="none"><circle cx="13" cy="13" r="4" stroke="currentColor" stroke-width="2" opacity=".3"/></svg></div>`,
-        }));
+        postsList.appendChild(el("div", { class: "tfb-divider" }));
       });
       _setupFeedVideoScroll(postsList);
     }).catch(() => { postsList.innerHTML = ""; });

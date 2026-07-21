@@ -1357,6 +1357,17 @@ const openCustomize = (chatId) => {
   const drawer = $("#chatCustomize");
   drawer.classList.remove("hidden");
 
+  // Ensure the drawer body scrolls regardless of how many themes are listed
+  const drawerBody = drawer.querySelector(".cc-body, .customize-body, .chat-customize-body");
+  if (drawerBody) {
+    drawerBody.style.overflowY = "auto";
+    drawerBody.style.webkitOverflowScrolling = "touch";
+  } else {
+    // Fallback: make the drawer itself scroll
+    drawer.style.overflowY = "auto";
+    drawer.style.webkitOverflowScrolling = "touch";
+  }
+
   // Populate
   const cust = (state.me.chatCustomization || {})[chatId] || {};
   const wpHost = $("#wallpapers");
@@ -1374,6 +1385,10 @@ const openCustomize = (chatId) => {
         saveCust(chatId, { wallpaper: wp.id });
       },
     });
+    // Apply the gradient/color inline so every theme renders its preview
+    // without needing a matching .wp-<id> CSS rule in the stylesheet.
+    // This is the fix for newly-added themes showing as blank tiles.
+    if (wp.css) tile.style.background = wp.css;
     if (wp.id === "none") tile.appendChild(el("span", {}, "None"));
     if (isLocked) {
       const lockBadge = el("span", { class: "wp-lock-icon" });

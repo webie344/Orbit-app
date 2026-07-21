@@ -32,6 +32,7 @@
   --grad-1: #7c5cff;
   --grad-2: #ff5cae;
   --grad-3: #5cd3ff;
+  --accent-color: #e8a33d; /* amber — hashtags + orbit badge only */
 }
 
 /* Dark theme */
@@ -107,7 +108,7 @@ html[data-theme="glass"] .topbar,
 html[data-theme="glass"] .sidebar,
 html[data-theme="glass"] .right-rail,
 html[data-theme="glass"] .chat-sidebar,
-html[data-theme="glass"] .signal-post,
+html[data-theme="glass"] .tfb-post,
 html[data-theme="glass"] .modal-backdrop > div,
 html[data-theme="glass"] .sheet,
 html[data-theme="glass"] .compose-modal .modal-box,
@@ -121,11 +122,11 @@ html[data-theme="glass"] .topbar {
 html[data-theme="glass"] .sidebar {
   border-right-color: var(--line);
 }
-html[data-theme="glass"] .signal-post {
+html[data-theme="glass"] .tfb-post {
   border-bottom: 1px solid var(--line);
 }
 /* Subtle iridescent glow on the brand gradient for glass mode */
-html[data-theme="glass"] .signal-post.is-trending {
+html[data-theme="glass"] .tfb-post.is-trending {
   box-shadow: inset 0 0 0 1px rgba(180, 159, 255, 0.18);
 }
 
@@ -473,222 +474,198 @@ textarea { resize: vertical; min-height: 80px; }
 .trending-card .t-meta { color: var(--text-mute); font-size: 12px; display: flex; align-items: center; gap: 6px; }
 
 /* ════════════════════════════════════════════════════════════════
-   SIGNAL POST LAYOUT — Zero chrome, thought-first, author chip below
+   TFB FEED — X/FB-order post layout (Final Approved Spec)
    ════════════════════════════════════════════════════════════════ */
-.post { position: relative; }
 
-/* Signal layout */
-.signal-post {
+/* Feed container */
+.tfb-feed { display: flex; flex-direction: column; }
+
+/* Post wrapper */
+.tfb-post { padding: 16px 16px 0; }
+
+/* ── Header ── */
+.tfb-header {
   display: flex;
-  flex-direction: column;
-  padding: 22px 20px 18px;
-  cursor: pointer;
-  transition: background 0.12s;
+  align-items: center;
+  gap: 10px;
+  position: relative;
+  margin-bottom: 0;
 }
-.signal-post:active { background: rgba(255,255,255,.02); }
-
-/* ── Thought text — BIG, display font, comes first ── */
-.signal-post .post-text,
-.signal-post .post-text-wrap,
-.signal-thought {
-  font-family: var(--font-display);
-  font-size: 17px;
+.tfb-avatar-ring {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  padding: 2px;
+  border: 1.5px solid var(--line);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.tfb-avatar-ring img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+.tfb-header-text { flex: 1; min-width: 0; }
+.tfb-name {
+  font-size: 14px;
   font-weight: 700;
-  line-height: 1.35;
-  letter-spacing: -0.022em;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text);
+}
+.tfb-sub { font-size: 12px; color: var(--text-mute); display: block; margin-top: 1px; }
+.tfb-menu {
+  color: var(--text-mute);
+  font-size: 18px;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background var(--speed);
+}
+.tfb-menu:hover { background: var(--hover); color: var(--text); }
+
+/* Short fixed-size tail — drops from avatar into caption start */
+.tfb-tail {
+  position: absolute;
+  left: 18px;
+  top: 40px;
+  width: 2px;
+  height: 12px;
+  background: var(--line);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+/* ── Caption ── */
+.tfb-caption {
+  font-size: 14.5px;
+  line-height: 1.45;
+  padding: 10px 0 10px 48px; /* clears avatar column */
   color: var(--text);
   white-space: pre-wrap;
   word-break: break-word;
-  margin-bottom: 14px;
-  order: 2;
 }
-.signal-thought.short,
-.signal-post .post-text.short { font-size: 20px; }
-
-/* ── Kind badge + feat title — before text ── */
-.signal-post .post-kind-badge { order: 0; margin-bottom: 6px; }
-.signal-post .post-feat-title {
-  order: 1;
-  font-size: 17px; font-weight: 700;
-  font-family: var(--font-display);
-  margin-bottom: 8px; cursor: pointer;
+.tfb-caption .tag {
+  color: var(--accent-color);
+  font-weight: 600;
 }
 
-/* ── Location badge ── */
-.signal-post .post-location-badge { order: 3; margin: -8px 0 10px; font-size: 12px; }
-
-/* ── Media — full-bleed, edge to edge ── */
-.signal-post .post-media {
-  order: 4;
-  margin: 0 -20px 16px;
-  border-radius: 0;
+/* ── Media — capped at 360 px, rounded corners ── */
+.tfb-media {
+  width: 100%;
+  margin: 0 0 10px;
+  border-radius: 10px;
   overflow: hidden;
   background: var(--bg-elev-2);
   position: relative;
 }
-.signal-post .post-media img {
-  width: 100%; display: block;
-  max-height: 420px;
+.tfb-media img,
+.tfb-media video {
+  width: 100%;
+  max-height: 360px;
   object-fit: cover;
-}
-.signal-post .post-media .vid-player { border-radius: 0; }
-.signal-post .post-media .vid-player video { max-height: 420px; object-fit: cover; display: block; }
-.signal-post .post-media.carousel { border-radius: 0; }
-.signal-post .post-media .carousel-slide img,
-.signal-post .post-media .carousel-slide video { border-radius: 0; max-height: 420px; }
-
-/* ── Author chip — small, below text ── */
-.signal-post .post-head {
-  order: 5;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
-  flex-wrap: nowrap;
-}
-.signal-post .post-head .avatar {
-  width: 22px !important;
-  height: 22px !important;
-  border: 1px solid var(--line);
-  flex-shrink: 0;
-}
-.signal-post .post-head .meta {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  flex: 1;
-  min-width: 0;
-}
-.signal-post .post-head .name {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-dim);
-  white-space: nowrap;
-}
-.signal-post .post-head .name .verified { width: 13px; height: 13px; font-size: 9px; }
-.signal-post .post-head .sub {
-  font-size: 12px;
-  color: var(--text-mute);
-  display: flex;
-  gap: 3px;
-  margin-top: 0;
-  margin-left: 6px;
-  flex-wrap: nowrap;
-}
-.signal-post .post-head .sub .dot { color: var(--text-mute); }
-/* Hide follow button — follow from their profile */
-.signal-post .follow-btn { display: none; }
-/* Keep delete (more) btn but subtle */
-.signal-post .post-head .more {
-  margin-left: auto;
-  flex-shrink: 0;
-  width: 28px; height: 28px;
-  opacity: 0.45;
-}
-
-/* ── Song badge in head — keep small ── */
-.signal-post .post-head .song-badge { font-size: 11px; }
-
-/* ── Actions row — compact, after author ── */
-.signal-post .post-actions {
-  order: 6;
-  display: flex; align-items: center; gap: 2px;
-  color: var(--text-mute);
-  margin-top: 10px;
-  flex-wrap: nowrap;
-}
-.signal-post .post-actions-left {
-  display: flex; align-items: center; gap: 0;
-  min-width: 0;
-}
-.signal-post .post-actions-right {
-  display: flex; align-items: center; gap: 0;
-  margin-left: auto;
-  flex-shrink: 0;
-}
-.signal-post .post-act {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 6px 8px; border-radius: var(--radius-pill); font-size: 12px;
-  transition: background var(--speed), color var(--speed);
-  flex-shrink: 0; white-space: nowrap;
-  color: var(--text-mute);
-}
-.signal-post .post-act:hover { background: var(--hover); color: var(--text-dim); }
-.signal-post .post-act i { font-size: 15px; }
-.signal-post .post-act.orbit { color: var(--text-mute); }
-.signal-post .post-act.orbit.active {
-  color: var(--primary);
-  background: none;
-}
-.signal-post .post-act.orbit.active i { animation: pop var(--speed) var(--ease); }
-.signal-post .post-views { cursor: default; font-size: 11px; }
-.signal-post .post-views:hover { background: none; }
-
-/* ── Comments (echoes) ── */
-.signal-post .comments { order: 7; margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
-.signal-post .reply-banner { order: 8; }
-.signal-post .cmt-attach-preview { order: 9; }
-.signal-post input[type="file"] { order: 20; }
-
-/* ── Thought-tail connector: avatar → curved tail → caption ─────────────────
-   The wrap lives at order:2 in the signal-post flex column, replacing the
-   old bare .signal-thought placement. The tail is a fixed-size decorative
-   element — it NEVER stretches based on caption length. Posts with no text
-   render no .post-tail at all (the element is omitted in JS).
-   ───────────────────────────────────────────────────────────────────────── */
-.signal-post .post-thought-wrap {
-  order: 2;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  margin-bottom: 14px;
-}
-
-.post-avatar {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  object-fit: cover;
+  border-radius: 10px;
   display: block;
-  margin-bottom: 6px;
+}
+/* Carousel inside tfb-media inherits the border-radius */
+.tfb-media .carousel-slide img,
+.tfb-media .carousel-slide video {
+  border-radius: 0;
+  max-height: 360px;
+}
+/* Video player inside tfb-media */
+.tfb-media .vid-player { border-radius: 10px; overflow: hidden; }
+.tfb-media .vid-player video { max-height: 360px; }
+
+/* ── Actions row ── */
+.tfb-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0 14px 48px;
+  font-size: 13px;
+  color: var(--text-mute);
+}
+.tfb-actions .spacer { flex: 1; }
+.tfb-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 8px;
+  border-radius: var(--radius-pill);
+  transition: background var(--speed), color var(--speed);
+  flex-shrink: 0;
+  white-space: nowrap;
+  color: var(--text-mute);
+  font-size: 13px;
+}
+.tfb-act:hover { background: var(--hover); color: var(--text-dim); }
+.tfb-act i { font-size: 16px; }
+
+/* Orbit reaction badge — accent color only */
+.tfb-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border-radius: var(--radius-pill);
+  color: var(--text-mute);
+  font-size: 13px;
+  font-weight: 600;
+  transition: background var(--speed), color var(--speed);
   cursor: pointer;
   flex-shrink: 0;
-  border: 1px solid var(--line);
 }
+.tfb-badge:hover { background: var(--hover); }
+.tfb-badge.active {
+  color: var(--accent-color);
+}
+.tfb-badge.active i { animation: pop var(--speed) var(--ease); }
+.tfb-badge i { font-size: 16px; }
 
-/* Fixed-size curved tail — sits right below the avatar and curves into the
-   caption's top-left corner, like a comic speech-bubble pointer. */
-.post-tail {
+@keyframes pop { 0% { transform: scale(.8); } 60% { transform: scale(1.25); } 100% { transform: scale(1); } }
+
+/* ── Divider between posts — hairline + centered orbit swirl ── */
+.tfb-divider {
+  position: relative;
+  height: 1px;
+  background: var(--line);
+  margin: 4px 0;
+}
+.tfb-divider::before {
+  content: '';
   position: absolute;
-  left: 15px;
-  top: 30px;
-  width: 14px;
-  height: 14px;
-  border-left: 2px solid var(--line);
-  border-bottom: 2px solid var(--line);
-  border-radius: 0 0 0 10px;
-  pointer-events: none;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--bg);
+}
+.tfb-divider::after {
+  content: '';
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  border: 1px solid var(--text-mute);
 }
 
-/* Caption text inside the wrap gets left padding so it clears the tail */
-.post-thought-wrap .signal-thought,
-.post-thought-wrap .post-text-wrap {
-  padding-left: 18px;
-}
+/* ── Avatar ring reused everywhere (comments, story bar, profile) ── */
+.tfb-avatar-ring.sm { width: 28px; height: 28px; }
 
-/* ── Signal orbit-icon divider between posts ── */
-.signal-divider {
-  display: flex; align-items: center;
-  margin: 0 20px;
-}
-.signal-divider::before,
-.signal-divider::after {
-  content: ""; flex: 1; height: 1px; background: var(--line);
-}
-.signal-divider-icon {
-  width: 28px; height: 28px;
-  display: flex; align-items: center; justify-content: center;
-  flex-shrink: 0; color: var(--text-mute);
+/* ── Mobile tweaks ── */
+@media (max-width: 420px) {
+  .tfb-caption { padding-left: 44px; }
+  .tfb-actions  { padding-left: 44px; }
+  .tfb-act { padding: 5px 6px; gap: 3px; }
 }
 
 /* Fallback for non-signal posts (profile grid, detail, etc.) */
@@ -753,7 +730,7 @@ textarea { resize: vertical; min-height: 80px; }
 .post-act.orbit.active i { animation: pop var(--speed) var(--ease); }
 @keyframes pop { 0% { transform: scale(.8); } 60% { transform: scale(1.25); } 100% { transform: scale(1); } }
 @media (max-width: 420px) {
-  .signal-post .post-act { padding: 6px 6px; gap: 3px; }
+  .tfb-act { padding: 5px 6px; gap: 3px; }
   .post-act { padding: 8px 7px; gap: 4px; }
   .post-views { margin-left: 2px; }
 }
@@ -3290,18 +3267,17 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 /* ==========================================================================
    PATCH — remove browser-default text-cursor / selection highlight on posts
    ========================================================================== */
-.signal-post,
-.signal-post * { cursor: pointer; }
+.tfb-post,
+.tfb-post * { cursor: pointer; }
 
-.signal-post .post-text,
-.signal-post .signal-thought,
-.signal-post .post-feat-title { user-select: none; }
+.tfb-caption,
+.tfb-post .post-feat-title { user-select: none; }
 
-.signal-post { -webkit-tap-highlight-color: transparent; }
+.tfb-post { -webkit-tap-highlight-color: transparent; }
 
 /* Keep form controls inside posts usable */
-.signal-post input,
-.signal-post textarea { cursor: text; user-select: text; }
+.tfb-post input,
+.tfb-post textarea { cursor: text; user-select: text; }
 
 
 /* ==========================================================================
