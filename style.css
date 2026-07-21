@@ -76,6 +76,87 @@ html[data-theme="light"] {
   --shimmer: linear-gradient(90deg, #eef0f4 0%, #f7f7fb 50%, #eef0f4 100%);
 }
 
+/* Liquid Glass theme */
+html[data-theme="glass"] {
+  --bg: #09071a;
+  --bg-elev: rgba(255, 255, 255, 0.06);
+  --bg-elev-2: rgba(255, 255, 255, 0.10);
+  --line: rgba(255, 255, 255, 0.12);
+  --line-soft: rgba(255, 255, 255, 0.06);
+  --text: #f0eeff;
+  --text-dim: rgba(240, 238, 255, 0.70);
+  --text-mute: rgba(240, 238, 255, 0.38);
+  --primary: #b49fff;
+  --primary-ink: #ffffff;
+  --danger: #ff7a96;
+  --warn: #ffcb6b;
+  --good: #6ef0ba;
+  --hover: rgba(255, 255, 255, 0.08);
+  --pressed: rgba(255, 255, 255, 0.14);
+  --overlay: rgba(0, 0, 20, 0.65);
+  --shimmer: linear-gradient(90deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.10) 50%, rgba(255,255,255,0.04) 100%);
+}
+
+/* Glass theme — vivid gradient base + frosted-glass panels */
+html[data-theme="glass"] body {
+  background: linear-gradient(135deg, #0f0824 0%, #1a0838 30%, #0b1630 65%, #0e081f 100%);
+  background-attachment: fixed;
+  min-height: 100vh;
+}
+html[data-theme="glass"] .topbar,
+html[data-theme="glass"] .sidebar,
+html[data-theme="glass"] .right-rail,
+html[data-theme="glass"] .chat-sidebar,
+html[data-theme="glass"] .signal-post,
+html[data-theme="glass"] .modal-backdrop > div,
+html[data-theme="glass"] .sheet,
+html[data-theme="glass"] .compose-modal .modal-box,
+html[data-theme="glass"] .cr-root {
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+}
+html[data-theme="glass"] .topbar {
+  border-bottom-color: var(--line);
+}
+html[data-theme="glass"] .sidebar {
+  border-right-color: var(--line);
+}
+html[data-theme="glass"] .signal-post {
+  border-bottom: 1px solid var(--line);
+}
+/* Subtle iridescent glow on the brand gradient for glass mode */
+html[data-theme="glass"] .signal-post.is-trending {
+  box-shadow: inset 0 0 0 1px rgba(180, 159, 255, 0.18);
+}
+
+/* ── Theme picker (3-way: Dark / Light / Glass) ── */
+.theme-picker {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.theme-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 13px;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  font-weight: 600;
+  border: 1.5px solid var(--line);
+  color: var(--text-dim);
+  background: var(--bg-elev);
+  transition: all var(--speed) var(--ease);
+  white-space: nowrap;
+}
+.theme-opt:hover { background: var(--hover); color: var(--text); }
+.theme-opt.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-ink);
+}
+.theme-opt i { font-size: 14px; }
+
 /* ---------- Reset ---------- */
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; height: 100%; }
@@ -411,9 +492,9 @@ textarea { resize: vertical; min-height: 80px; }
 .signal-post .post-text-wrap,
 .signal-thought {
   font-family: var(--font-display);
-  font-size: 21px;
+  font-size: 17px;
   font-weight: 700;
-  line-height: 1.38;
+  line-height: 1.35;
   letter-spacing: -0.022em;
   color: var(--text);
   white-space: pre-wrap;
@@ -422,7 +503,7 @@ textarea { resize: vertical; min-height: 80px; }
   order: 2;
 }
 .signal-thought.short,
-.signal-post .post-text.short { font-size: 26px; }
+.signal-post .post-text.short { font-size: 20px; }
 
 /* ── Kind badge + feat title — before text ── */
 .signal-post .post-kind-badge { order: 0; margin-bottom: 6px; }
@@ -548,6 +629,52 @@ textarea { resize: vertical; min-height: 80px; }
 .signal-post .reply-banner { order: 8; }
 .signal-post .cmt-attach-preview { order: 9; }
 .signal-post input[type="file"] { order: 20; }
+
+/* ── Thought-tail connector: avatar → curved tail → caption ─────────────────
+   The wrap lives at order:2 in the signal-post flex column, replacing the
+   old bare .signal-thought placement. The tail is a fixed-size decorative
+   element — it NEVER stretches based on caption length. Posts with no text
+   render no .post-tail at all (the element is omitted in JS).
+   ───────────────────────────────────────────────────────────────────────── */
+.signal-post .post-thought-wrap {
+  order: 2;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 14px;
+}
+
+.post-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+  margin-bottom: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+}
+
+/* Fixed-size curved tail — sits right below the avatar and curves into the
+   caption's top-left corner, like a comic speech-bubble pointer. */
+.post-tail {
+  position: absolute;
+  left: 15px;
+  top: 30px;
+  width: 14px;
+  height: 14px;
+  border-left: 2px solid var(--line);
+  border-bottom: 2px solid var(--line);
+  border-radius: 0 0 0 10px;
+  pointer-events: none;
+}
+
+/* Caption text inside the wrap gets left padding so it clears the tail */
+.post-thought-wrap .signal-thought,
+.post-thought-wrap .post-text-wrap {
+  padding-left: 18px;
+}
 
 /* ── Signal orbit-icon divider between posts ── */
 .signal-divider {

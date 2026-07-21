@@ -849,12 +849,18 @@ export const uploadToCloudinary = async (file, kind = "image") => {
 const applyTheme = (theme) => {
   document.documentElement.setAttribute("data-theme", theme);
   localStorage.setItem("orbit:theme", theme);
-  $("#themeToggle")?.querySelector("i")?.classList.toggle("ri-sun-line", theme === "dark");
-  $("#themeToggle")?.querySelector("i")?.classList.toggle("ri-moon-line", theme === "light");
+  const icon = $("#themeToggle")?.querySelector("i");
+  if (icon) {
+    icon.className = theme === "dark" ? "ri-sun-line"
+                   : theme === "light" ? "ri-moon-line"
+                   : "ri-contrast-2-line"; // glass
+  }
 };
 const initTheme = () => applyTheme(localStorage.getItem("orbit:theme") || "dark");
-const toggleTheme = () =>
-  applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark");
+const toggleTheme = () => {
+  const cur = document.documentElement.getAttribute("data-theme") || "dark";
+  applyTheme(cur === "dark" ? "light" : cur === "light" ? "glass" : "dark");
+};
 
 // =========================================================================
 // ORBIT LOADER — branded spinner shown during async auth operations
@@ -1765,8 +1771,14 @@ const renderPost = (p, author, opts = {}) => {
 
   const post = el("article", { class: `post signal-post${trending ? " is-trending" : ""}` });
 
+  // Thought-tail wrap: avatar → small curved tail (only when caption exists) → caption text.
+  // The tail is a fixed-size decorative element — it never stretches regardless of caption length.
+  const thoughtWrap = el("div", { class: "post-thought-wrap" });
+  thoughtWrap.appendChild(el("img", { class: "post-avatar", src: avatarFor(author), onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${author?.uid}`; } }));
+  if (p.text) thoughtWrap.appendChild(el("div", { class: "post-tail" }));
+  post.appendChild(thoughtWrap);
+
   const head = el("div", { class: "post-head" },
-    el("img", { class: "avatar md", src: avatarFor(author), onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${author?.uid}`; } }),
     el("div", { class: "meta", style: "cursor:pointer;", onclick: () => location.hash = `#post/${p.id}` },
       el("div", { class: "name" },
         author?.name || "User",
@@ -1836,9 +1848,9 @@ const renderPost = (p, author, opts = {}) => {
       import("./features.js").then((m) => body.appendChild(m.renderTextWithCode(p.text))).catch(() => {
         body.innerHTML = linkify(p.text);
       });
-      post.appendChild(body);
+      thoughtWrap.appendChild(body);
     } else {
-      const isShortThought = p.text.length < 120;
+      const isShortThought = p.text.length < 40;
       const body = el("div", { class: `post-text signal-thought${isShortThought ? " short" : ""}` });
       const TRUNC_LEN = 280;
       if (!_detailView && p.text.length > TRUNC_LEN) {
@@ -1855,7 +1867,7 @@ const renderPost = (p, author, opts = {}) => {
         body.innerHTML = linkify(p.text);
         body.onclick = () => location.hash = `#post/${p.id}`;
       }
-      post.appendChild(body);
+      thoughtWrap.appendChild(body);
     }
   }
 
@@ -2636,11 +2648,13 @@ const renderGroups = (root) => {
     joinBtn.onclick = async () => {
       const wasMember = (g.members || []).includes(state.uid);
       const ref = doc(db, "groups", g.id);
+      const actionsDiv = joinBtn.parentElement;
       if (wasMember) {
         g.members = (g.members || []).filter((id) => id !== state.uid);
         joinBtn.textContent = "Join";
         joinBtn.dataset.joined = "false";
         joinBtn.style.opacity = "";
+        actionsDiv.querySelector(".grp-open-btn")?.remove();
         await updateDoc(ref, { members: arrayRemove(state.uid) }).catch(() => {});
         toast("Left group");
       } else {
@@ -2648,6 +2662,12 @@ const renderGroups = (root) => {
         joinBtn.textContent = "Joined";
         joinBtn.dataset.joined = "true";
         joinBtn.style.opacity = "0.55";
+        if (!actionsDiv.querySelector(".grp-open-btn")) {
+          actionsDiv.appendChild(el("button", {
+            class: "grp-open-btn",
+            onclick: () => location.hash = `#chats/${g.id}`,
+          }, el("i", { class: "ri-chat-3-line" })));
+        }
         await updateDoc(ref, { members: arrayUnion(state.uid) }).catch(() => {});
         toast("Joined!");
       }
@@ -3154,6 +3174,7 @@ const renderSaved = (root) => {
     const authors = await Promise.all([...new Set(posts.map((p) => p.authorUid))].map(fetchUser));
     const map = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
     posts.forEach((p) => list.appendChild(renderPost(p, map[p.authorUid], { hideComments: true })));
+    _setupFeedVideoScroll(list);
   });
 };
 
@@ -3322,6 +3343,7 @@ const renderProfile = async (root, uid) => {
               _postEls.set(p.id, card);
               _profFeed.appendChild(card);
             });
+            _setupFeedVideoScroll(_profFeed);
             return;
           }
 
@@ -3442,13 +3464,29 @@ const renderSettings = (root) => {
       el("div", { class: "row" },
         el("div", { class: "label" },
           el("div", { class: "t" }, "Theme"),
-          el("div", { class: "d" }, "Choose between light and dark — saved across devices."),
+          el("div", { class: "d" }, "Choose your visual style — saved across devices."),
         ),
-        el("div", { class: `switch ${document.documentElement.getAttribute("data-theme") === "dark" ? "on" : ""}`, onclick: (e) => {
-          toggleTheme();
-          e.currentTarget.classList.toggle("on");
-          updateDoc(doc(db, "users", state.uid), { themePref: document.documentElement.getAttribute("data-theme") }).catch(() => {});
-        }}),
+        (() => {
+          const _themes = [
+            { id: "dark",  label: "Dark",  icon: "ri-moon-line" },
+            { id: "light", label: "Light", icon: "ri-sun-line" },
+            { id: "glass", label: "Glass", icon: "ri-contrast-2-line" },
+          ];
+          const _cur = document.documentElement.getAttribute("data-theme") || "dark";
+          const picker = el("div", { class: "theme-picker" });
+          _themes.forEach(({ id, label, icon }) => {
+            const btn = el("button", { class: `theme-opt${_cur === id ? " active" : ""}` },
+              el("i", { class: icon }), label);
+            btn.addEventListener("click", () => {
+              applyTheme(id);
+              picker.querySelectorAll(".theme-opt").forEach((b) => b.classList.remove("active"));
+              btn.classList.add("active");
+              updateDoc(doc(db, "users", state.uid), { themePref: id }).catch(() => {});
+            });
+            picker.appendChild(btn);
+          });
+          return picker;
+        })(),
       ),
       el("div", { class: "row" },
         el("div", { class: "label" },
