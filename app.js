@@ -15,7 +15,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
 import {
   getFirestore, doc, setDoc, getDoc, updateDoc, addDoc, deleteDoc,
-  collection, query, where, orderBy, limit, onSnapshot, getDocs,
+  collection, query, where, orderBy, limit, startAfter, onSnapshot, getDocs,
   serverTimestamp, increment, arrayUnion, arrayRemove, writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 
@@ -1461,8 +1461,12 @@ const renderMutuals = async (container, dayOnly = true) => {
 // =========================================================================
 // 8. FEED — flat IG/FB style with separator lines + Trending lane
 // Videos posted are regular posts — no separate Reels section.
-// Feed shuffles on every fresh visit via scored + random jitter sort.
+// Infinite scroll: first page via onSnapshot (live), subsequent pages via
+// getDocs + startAfter cursor — loads more as you reach the bottom, just
+// like X / Instagram / Facebook.
 // =========================================================================
+const FEED_PAGE_SIZE = 20;
+
 const renderFeed = (root) => {
   const wrap = el("div", { class: "feed-wrap" });
 
@@ -1496,16 +1500,133 @@ const renderFeed = (root) => {
   feedMainContent.appendChild(list);
   root.appendChild(wrap);
 
-  const q = query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(50));
+  // ── Pagination state ────────────────────────────────────────────────────
+  let _lastDoc      = null;        // Firestore cursor: last doc of previous page
+  let _loadingMore  = false;       // prevents concurrent fetches
+  let _allLoaded    = false;       // true when a page returns < PAGE_SIZE docs
+  let _renderedIds  = new Set();   // deduplicates posts across pages
+  let _suggShown    = 0;           // keeps suggestion-card counter continuous
+
+  const _suggTypes  = ["people", "groups", "spaces"];
+  const _following  = state.me?.following  || [];
+  const _interests  = state.me?.interests  || [];
+
+  // ── Sentinel element observed by IntersectionObserver ──────────────────
+  // Sits at the very bottom of the list; when it enters the viewport we
+  // fire the next page fetch automatically — no "load more" button needed.
+  const sentinel = el("div", { class: "feed-sentinel",
+    style: "height:56px;display:flex;align-items:center;justify-content:center;padding:8px 0;" });
+
+  // ── Score a single post (called once per post before sorting) ──────────
+  const _scorePost = (p) => {
+    let s = 0;
+    if (_following.includes(p.authorUid)) s += 50;
+    if (_interests.some((tag) => (p.hashtags || []).includes(tag))) s += 30;
+    s += Math.min((p.orbitCount || 0) * 2 + (p.commentCount || 0), 30);
+    s += Math.max(0, 20 - Math.floor(((Date.now() - (p.createdAt?.toMillis?.() || Date.now())) / 3600000)));
+    s += Math.random() * 15; // jitter — scored once so sort is stable
+    return s;
+  };
+
+  // ── Append a batch of posts into the list (before the sentinel) ─────────
+  const _appendPosts = (posts, byUid) => {
+    // Deduplicate, score once each, then sort
+    const fresh = posts.filter((p) => !_renderedIds.has(p.id));
+    const scored = fresh.map((p) => ({ p, score: _scorePost(p) }));
+    scored.sort((a, b) => b.score - a.score);
+
+    scored.forEach(({ p }) => {
+      const globalIdx = _renderedIds.size; // index before adding this post
+      _renderedIds.add(p.id);
+
+      const postEl = renderPost(p, byUid[p.authorUid], { hideComments: true });
+      const divEl  = el("div", { class: "tfb-divider" });
+
+      // Insert before sentinel so it stays at the bottom
+      if (sentinel.parentNode === list) {
+        list.insertBefore(postEl, sentinel);
+        list.insertBefore(divEl,  sentinel);
+      } else {
+        list.appendChild(postEl);
+        list.appendChild(divEl);
+      }
+
+      // Suggestion card at position 4, then every 7 posts after that
+      if (globalIdx === 4 || (globalIdx > 4 && (globalIdx - 4) % 7 === 0)) {
+        const type   = _suggTypes[_suggShown % 3];
+        _suggShown++;
+        const suggEl = type === "people" ? renderInlinePeopleSuggestion()
+                     : type === "groups" ? renderInlineGroupSuggestion()
+                     :                     renderInlineSpaceSuggestion();
+        if (sentinel.parentNode === list) list.insertBefore(suggEl, sentinel);
+        else                              list.appendChild(suggEl);
+      }
+    });
+
+    _setupFeedVideoScroll(list);
+  };
+
+  // ── Load next page via cursor ───────────────────────────────────────────
+  const _loadMore = async () => {
+    if (_loadingMore || _allLoaded || !_lastDoc) return;
+    _loadingMore = true;
+
+    // Show spinner inside sentinel while fetching
+    sentinel.innerHTML = "";
+    sentinel.appendChild(el("div", { class: "feed-skel-line",
+      style: "width:32px;height:32px;border-radius:50%;" }));
+
+    try {
+      const moreSnap = await getDocs(
+        query(collection(db, "posts"), orderBy("createdAt", "desc"),
+              startAfter(_lastDoc), limit(FEED_PAGE_SIZE))
+      );
+
+      if (moreSnap.empty || moreSnap.docs.length < FEED_PAGE_SIZE) {
+        _allLoaded = true;
+      }
+
+      if (!moreSnap.empty) {
+        _lastDoc = moreSnap.docs[moreSnap.docs.length - 1];
+        const posts   = moreSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        const uids    = [...new Set(posts.map((p) => p.authorUid))];
+        const authors = await Promise.all(uids.map(fetchUser));
+        const byUid   = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
+        _appendPosts(posts, byUid);
+      }
+    } catch (_) {
+      // Network hiccup — sentinel stays, observer will retry on next scroll
+    }
+
+    _loadingMore = false;
+    sentinel.innerHTML = "";
+
+    if (_allLoaded) {
+      // "All caught up" message — disconnect observer so we stop watching
+      sentinel.appendChild(el("div", {
+        style: "color:var(--muted,#888);font-size:13px;padding:12px 0;text-align:center;",
+      }, "You're all caught up"));
+      _sentinelIO.disconnect();
+    }
+  };
+
+  // ── IntersectionObserver fires _loadMore as sentinel enters viewport ────
+  const _sentinelIO = new IntersectionObserver(
+    (entries) => { if (entries[0].isIntersecting) _loadMore(); },
+    { rootMargin: "300px" } // start fetching 300px before user hits the bottom
+  );
+
+  // ── First page — live onSnapshot so new posts appear in real time ───────
+  const q = query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(FEED_PAGE_SIZE));
   let _lastPostIds = "";
-  let _renderSeq = 0; // incremented on every snapshot; lets stale async renders self-abort
+  let _renderSeq   = 0;
+
   const unsub = onSnapshot(q, async (snap) => {
-    const _newIds = snap.docs.map(d => d.id).join(",");
+    const _newIds = snap.docs.map((d) => d.id).join(",");
     if (_newIds === _lastPostIds && list.children.length > 0) return;
     _lastPostIds = _newIds;
-    const seq = ++_renderSeq; // claim this render slot
+    const seq = ++_renderSeq;
 
-    // Handle empty immediately — no data to await
     if (snap.empty) {
       list.innerHTML = "";
       list.appendChild(el("div", { class: "empty" },
@@ -1516,56 +1637,33 @@ const renderFeed = (root) => {
       return;
     }
 
-    const posts = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    // resolve authors — keep skeleton/previous posts visible during the await
-    // so there is never a blank feed while waiting on Firestore user docs
+    const posts   = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     const authors = await Promise.all([...new Set(posts.map((p) => p.authorUid))].map(fetchUser));
-
-    // A newer snapshot fired while we were awaiting — discard this stale render
-    // to prevent a double clear+reshuffle which causes the visible blank flash
-    if (seq !== _renderSeq) return;
+    if (seq !== _renderSeq) return; // newer snapshot fired; discard stale render
 
     const byUid = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
-    // Only clear the list now that real content is ready to paint
-    list.innerHTML = "";
 
-    // Algorithm: score posts by affinity (following > hashtag match > engagement > recency)
-    // A random component (+0–15) shuffles the feed differently on each fresh load
-    const _following = state.me?.following || [];
-    const _interests = state.me?.interests || [];
-    const _scored = posts.map((p) => {
-      let score = 0;
-      if (_following.includes(p.authorUid)) score += 50;
-      if (_interests.some((tag) => (p.hashtags || []).includes(tag))) score += 30;
-      score += Math.min((p.orbitCount || 0) * 2 + (p.commentCount || 0), 30);
-      score += Math.max(0, 20 - Math.floor(((Date.now() - (p.createdAt?.toMillis?.() || Date.now())) / 3600000)));
-      score += Math.random() * 15; // freshness jitter — varies order each fresh load
-      return { p, score };
-    });
-    _scored.sort((a, b) => b.score - a.score);
-    const _suggTypes = ["people", "groups", "spaces"];
-    let _suggShown = 0;
-    _scored.forEach(({ p }, idx) => {
-      list.appendChild(renderPost(p, byUid[p.authorUid], { hideComments: true }));
-      // Signal orbit-icon divider between posts
-      list.appendChild(el("div", { class: "tfb-divider" }));
-      // Suggestion card at post 4, then every 7 after that
-      if (idx === 4 || (idx > 4 && (idx - 4) % 7 === 0)) {
-        const type = _suggTypes[_suggShown % 3];
-        _suggShown++;
-        if (type === "people") list.appendChild(renderInlinePeopleSuggestion());
-        else if (type === "groups") list.appendChild(renderInlineGroupSuggestion());
-        else list.appendChild(renderInlineSpaceSuggestion());
-      }
-    });
+    // Reset list and pagination state for a fresh first page
+    list.innerHTML  = "";
+    _renderedIds    = new Set();
+    _suggShown      = 0;
+    _lastDoc        = snap.docs[snap.docs.length - 1];
+    _allLoaded      = snap.docs.length < FEED_PAGE_SIZE;
 
-    // Wire scroll-to-play on all <video> elements now in the feed
+    _appendPosts(posts, byUid);
+
+    // Attach sentinel at the bottom and start watching it
+    list.appendChild(sentinel);
+    sentinel.innerHTML = "";
+    _sentinelIO.disconnect(); // reset before re-observing
+    if (!_allLoaded) _sentinelIO.observe(sentinel);
+
     _setupFeedVideoScroll(list);
   });
 
-  // store unsub globally and on root so route changes can clean up
-  _feedUnsub = unsub;
-  root._unsub = unsub;
+  // Store unsub globally and on root so route changes can clean up
+  _feedUnsub   = unsub;
+  root._unsub  = unsub;
 };
 
 // ── Feed scroll-to-play ───────────────────────────────────────────────────
