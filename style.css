@@ -565,23 +565,36 @@ textarea { resize: vertical; min-height: 80px; }
   background: var(--bg-elev-2);
   position: relative;
 }
-.tfb-media img,
-.tfb-media video {
+.tfb-media img {
   width: 100%;
   max-height: 360px;
   object-fit: cover;
   border-radius: 10px;
   display: block;
 }
+.tfb-media video {
+  width: 100%;
+  max-height: 480px;
+  object-fit: contain;
+  border-radius: 10px;
+  display: block;
+  background: #000;
+}
 /* Carousel inside tfb-media inherits the border-radius */
-.tfb-media .carousel-slide img,
-.tfb-media .carousel-slide video {
+.tfb-media .carousel-slide img {
   border-radius: 0;
   max-height: 360px;
+  object-fit: cover;
+}
+.tfb-media .carousel-slide video {
+  border-radius: 0;
+  max-height: 480px;
+  object-fit: contain;
+  background: #000;
 }
 /* Video player inside tfb-media */
-.tfb-media .vid-player { border-radius: 10px; overflow: hidden; }
-.tfb-media .vid-player video { max-height: 360px; }
+.tfb-media .vid-player { border-radius: 10px; overflow: hidden; background: #000; }
+.tfb-media .vid-player video { max-height: 480px; object-fit: contain; }
 
 /* ── Actions row ── */
 .tfb-actions {
@@ -706,8 +719,8 @@ textarea { resize: vertical; min-height: 80px; }
   background: var(--bg-elev-2); position: relative;
 }
 .post-media img { width: 100%; display: block; max-height: 520px; object-fit: cover; }
-.post-media .vid-player { width: 100%; border-radius: 14px; overflow: hidden; }
-.post-media .vid-player video { width: 100%; max-height: 520px; object-fit: cover; display: block; }
+.post-media .vid-player { width: 100%; border-radius: 14px; overflow: hidden; background: #000; }
+.post-media .vid-player video { width: 100%; max-height: 520px; object-fit: contain; display: block; }
 .post-actions {
   display: flex; align-items: center; gap: 4px;
   color: var(--text-dim); flex-wrap: nowrap;
@@ -771,7 +784,8 @@ textarea { resize: vertical; min-height: 80px; }
 /* Post media carousel */
 .post-media.carousel { position: relative; }
 .carousel-slide { width: 100%; }
-.carousel-slide img, .carousel-slide video { width: 100%; max-height: 460px; object-fit: cover; border-radius: 0; display: block; }
+.carousel-slide img { width: 100%; max-height: 460px; object-fit: cover; border-radius: 0; display: block; }
+.carousel-slide video { width: 100%; max-height: 480px; object-fit: contain; border-radius: 0; display: block; background: #000; }
 .carousel-arrow {
   position: absolute; top: 50%; transform: translateY(-50%);
   background: rgba(0,0,0,.55); color: white; border-radius: 50%;
