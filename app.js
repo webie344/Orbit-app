@@ -4354,7 +4354,7 @@ const renderInlinePeopleSuggestion = () => {
   getDocs(query(collection(db, "users"), orderBy("createdAt", "desc"), limit(30))).then((snap) => {
     // Shuffle so a different set appears each time
     const _all = snap.docs.map(d => ({ uid: d.id, ...d.data() }))
-      .filter(u => u.uid !== state.uid && !u.isBot);
+      .filter(u => u.uid !== state.uid);
     for (let i = _all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [_all[i], _all[j]] = [_all[j], _all[i]]; }
     let added = 0;
     _all.forEach((u) => {
@@ -4784,7 +4784,7 @@ const startSuggestions = () => {
     const list = $("#suggestList"); if (!list) return;
     list.innerHTML = "";
     const _all = snap.docs.map(d => ({ uid: d.id, ...d.data() }))
-      .filter(u => u.uid !== state.uid && !u.isBot);
+      .filter(u => u.uid !== state.uid);
     for (let i = _all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [_all[i], _all[j]] = [_all[j], _all[i]]; }
     _all.slice(0, 5).forEach((u) => {
       const iFollow = (state.me.following || []).includes(u.uid);
