@@ -4,9 +4,12 @@
    groups, profile, settings, modals, toasts.
    ================================================================= */
 
+/* DM Sans — closest free equivalent to the font used by X / Threads */
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800;1,9..40,400&display=swap');
+
 /* ---------- Tokens ---------- */
 :root {
-  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-sans: "DM Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-display: "Plus Jakarta Sans", "Inter", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
 
@@ -355,7 +358,7 @@ textarea { resize: vertical; min-height: 80px; }
 
 .content {
   overflow-y: auto; overflow-x: hidden;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
   padding-bottom: 80px;
   /* Must be a positioned block so chat-active height can fill it */
   min-height: 0;
@@ -544,7 +547,7 @@ textarea { resize: vertical; min-height: 80px; }
 
 /* ── Caption ── */
 .tfb-caption {
-  font-size: 14.5px;
+  font-size: 15.5px;
   line-height: 1.45;
   padding: 10px 0 10px 48px; /* clears avatar column */
   color: var(--text);
@@ -3277,6 +3280,43 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   .cr-stage { width: 100%; border-radius: 0; aspect-ratio: 9/16; }
 }
 
+
+/* ==========================================================================
+   REPLY-TO LABEL — shown above a comment's text when it is a reply
+   ========================================================================== */
+.reply-to-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-mute);
+  margin-bottom: 3px;
+  line-height: 1.3;
+}
+.reply-to-label i {
+  font-size: 12px;
+  color: var(--primary);
+  flex-shrink: 0;
+}
+.reply-to-label a.mention {
+  color: var(--primary);
+  font-weight: 600;
+  text-decoration: none;
+}
+.reply-to-label a.mention:hover { text-decoration: underline; }
+
+/* ==========================================================================
+   NESTED REPLIES — visually indented under their parent comment
+   ========================================================================== */
+.tw-comment-reply {
+  margin-left: 44px;
+  border-left: 2px solid var(--line);
+  padding-left: 10px;
+}
+.tw-comment-reply .tw-comment {
+  border-top: 1px solid var(--line-soft);
+}
+.tw-comment-reply .tw-comment:first-child { border-top: none; }
 
 /* ==========================================================================
    PATCH — remove browser-default text-cursor / selection highlight on posts

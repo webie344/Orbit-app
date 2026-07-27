@@ -1247,7 +1247,13 @@ const router = () => {
       content.appendChild(_feedCachedNode);
       content._unsub = _feedUnsub;
       const sy = _feedScrollY;
-      requestAnimationFrame(() => { content.scrollTop = sy; });
+      requestAnimationFrame(() => {
+        // Disable smooth-scroll briefly so the position restores instantly
+        // instead of animating visibly from the top.
+        content.style.scrollBehavior = "auto";
+        content.scrollTop = sy;
+        requestAnimationFrame(() => { content.style.scrollBehavior = ""; });
+      });
       _feedCachedNode = null;
     } else {
       // Fresh navigation — discard old cache, re-render with new shuffle
@@ -2001,10 +2007,14 @@ const renderPost = (p, author, opts = {}) => {
 
   const saveIcon = (state.me?.saved || []).includes(p.id) ? "ri-bookmark-fill" : "ri-bookmark-line";
 
+  // Live-updatable comment count element — updated by the feed onSnapshot below
+  const cmtCountEl = el("span", {});
+  cmtCountEl.textContent = " " + String(p.commentCount || 0);
+
   const actions = el("div", { class: "tfb-actions" },
     el("button", { class: "tfb-act", onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; } },
       el("i", { class: "ri-chat-1-line" }),
-      " " + String(p.commentCount || 0),
+      cmtCountEl,
     ),
     el("button", {
       class: "tfb-act",
@@ -2263,6 +2273,8 @@ const renderPost = (p, author, opts = {}) => {
         const authors  = await Promise.all([...new Set(comments.map((c) => c.authorUid))].map(fetchUser));
         const map      = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
         comments.forEach((c) => cBox.appendChild(renderFeedComment(c, map[c.authorUid])));
+        // Keep the feed comment count badge in sync with live comment data
+        cmtCountEl.textContent = " " + String(snap.size);
       },
     );
 
@@ -2449,7 +2461,7 @@ const renderPostDetail = async (root, postId) => {
       class: "tw-cmt-act-btn",
       onclick: () => {
         const handle = a?.username || a?.name || "user";
-        _detailReplyTo = { uid: a?.uid, name: a?.name || "user", username: a?.username || "" };
+        _detailReplyTo = { uid: a?.uid, name: a?.name || "user", username: a?.username || "", commentId: c.id };
         _replyBannerUsername.textContent = `@${handle}`;
         detailReplyBanner.classList.remove("hidden");
         const inp = cmtSection.querySelector("input[type='text']");
@@ -2517,7 +2529,21 @@ const renderPostDetail = async (root, postId) => {
       const comments = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       const auths = await Promise.all([...new Set(comments.map((c) => c.authorUid))].map(fetchUser));
       const map = Object.fromEntries(auths.filter(Boolean).map((u) => [u.uid, u]));
-      comments.forEach((c) => cList.appendChild(renderDetailComment(c, map[c.authorUid])));
+
+      // Separate top-level comments from replies, then render nested
+      const topLevel = comments.filter((c) => !c.parentCommentId);
+      const replies   = comments.filter((c) => !!c.parentCommentId);
+
+      topLevel.forEach((c) => {
+        cList.appendChild(renderDetailComment(c, map[c.authorUid]));
+        // Collect direct replies to this comment
+        const children = replies.filter((r) => r.parentCommentId === c.id);
+        if (children.length > 0) {
+          const replyWrap = el("div", { class: "tw-comment-reply" });
+          children.forEach((r) => replyWrap.appendChild(renderDetailComment(r, map[r.authorUid])));
+          cList.appendChild(replyWrap);
+        }
+      });
 
       // Show "Load more" button only if we might have more and haven't loaded all yet
       if (!showAll && snap.docs.length >= DETAIL_CMT_PAGE) {
@@ -2630,7 +2656,12 @@ const renderPostDetail = async (root, postId) => {
     submitBtn.disabled = true;
     const commentData = {
       text: text || "", authorUid: state.uid, createdAt: serverTimestamp(), likes: [],
-      ..._detailReplyTo ? { replyToUid: _detailReplyTo.uid, replyToName: _detailReplyTo.name, replyToUsername: _detailReplyTo.username } : {},
+      ..._detailReplyTo ? {
+        replyToUid: _detailReplyTo.uid,
+        replyToName: _detailReplyTo.name,
+        replyToUsername: _detailReplyTo.username,
+        parentCommentId: _detailReplyTo.commentId || null,
+      } : {},
     };
     try {
       if (_dCmtMediaFile) {
