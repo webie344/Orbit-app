@@ -11,7 +11,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/fireba
 import {
   getAuth, onAuthStateChanged, signInWithEmailAndPassword,
   createUserWithEmailAndPassword, signOut, GoogleAuthProvider,
-  signInWithPopup, updateProfile,
+  signInWithPopup, updateProfile, sendPasswordResetEmail,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
 import {
   getFirestore, doc, setDoc, getDoc, updateDoc, addDoc, deleteDoc,
@@ -819,6 +819,166 @@ export const fetchUser = async (uid) => {
   return data;
 };
 
+const resolveGroupMemberIds = async (raw = "") => {
+  const tokens = [...new Set(raw.split(/[\s,]+/).map((value) => value.trim().replace(/^@/, "").toLowerCase()).filter(Boolean))];
+  const ids = [];
+  for (const token of tokens) {
+    const byUsername = await getDocs(query(collection(db, "users"), where("username", "==", token), limit(1)));
+    if (!byUsername.empty) {
+      ids.push(byUsername.docs[0].id);
+      continue;
+    }
+    const byEmail = await getDocs(query(collection(db, "users"), where("email", "==", token), limit(1)));
+    if (!byEmail.empty) ids.push(byEmail.docs[0].id);
+  }
+  return [...new Set(ids)].filter((uid) => uid !== state.uid);
+};
+
+const openGroupAdmin = async (groupId) => {
+  const snap = await getDoc(doc(db, "groups", groupId));
+  if (!snap.exists()) { toast("Group not found"); return; }
+  const group = { id: groupId, ...snap.data() };
+  if (!(group.admins || []).includes(state.uid) && group.ownerUid !== state.uid) {
+    toast("Only group admins can manage this group");
+    return;
+  }
+
+  const overlay = el("div", { class: "modal group-admin-modal" });
+  const memberList = el("div", { class: "group-admin-members" });
+  const nameInput = el("input", { type: "text", value: group.name || "", placeholder: "Group name" });
+  const iconInput = el("input", { type: "file", accept: "image/*" });
+  const linkInput = el("input", { type: "url", value: group.groupLink || "", placeholder: "https://example.com/group" });
+  const addInput = el("input", { type: "text", placeholder: "@username or email, separated by commas" });
+  const close = () => overlay.remove();
+
+  const paintMembers = async () => {
+    memberList.innerHTML = "";
+    const members = await Promise.all((group.members || []).map(fetchUser));
+    members.filter(Boolean).forEach((member) => {
+      const isOwner = member.uid === group.ownerUid;
+      const row = el("div", { class: "group-admin-member" },
+        el("img", { class: "avatar xs", src: avatarFor(member), alt: member.name || "Member" }),
+        el("div", { class: "group-admin-member-meta" },
+          el("strong", {}, member.name || "Member"),
+          el("span", {}, `@${member.username || "user"}${isOwner ? " · Owner" : ""}`),
+        ),
+        !isOwner ? el("button", {
+          class: "icon-btn",
+          title: "Remove member",
+          onclick: async () => {
+            group.members = (group.members || []).filter((uid) => uid !== member.uid);
+            await updateDoc(doc(db, "groups", group.id), { members: arrayRemove(member.uid) });
+            toast("Member removed");
+            paintMembers();
+          },
+        }, el("i", { class: "ri-user-unfollow-line" })) : null,
+      );
+      memberList.appendChild(row);
+    });
+    if (!memberList.children.length) memberList.appendChild(el("div", { class: "group-admin-empty" }, "No members yet."));
+  };
+
+  const saveLinkBtn = el("button", {
+    class: "btn primary",
+    onclick: async () => {
+      const value = linkInput.value.trim();
+      if (value && !/^https?:\/\//i.test(value)) {
+        toast("Group links must start with http:// or https://");
+        return;
+      }
+      await updateDoc(doc(db, "groups", group.id), { groupLink: value });
+      group.groupLink = value;
+      toast("Group link updated");
+    },
+  }, "Save link");
+
+  const saveDetailsBtn = el("button", {
+    class: "btn primary",
+    onclick: async () => {
+      const name = nameInput.value.trim();
+      if (!name) { toast("Group name cannot be empty"); return; }
+      const updates = { name };
+      if (iconInput.files?.[0]) {
+        saveDetailsBtn.disabled = true;
+        saveDetailsBtn.textContent = "Uploading…";
+        try {
+          const uploaded = await uploadToCloudinary(iconInput.files[0], "image");
+          updates.iconUrl = uploaded.url;
+        } catch {
+          saveDetailsBtn.disabled = false;
+          saveDetailsBtn.textContent = "Save details";
+          return;
+        }
+      }
+      await updateDoc(doc(db, "groups", group.id), updates);
+      Object.assign(group, updates);
+      toast("Group details updated");
+      saveDetailsBtn.disabled = false;
+      saveDetailsBtn.textContent = "Save details";
+      close();
+      router();
+    },
+  }, "Save details");
+
+  const addBtn = el("button", {
+    class: "btn ghost",
+    onclick: async () => {
+      const ids = await resolveGroupMemberIds(addInput.value);
+      if (!ids.length) { toast("No matching Orbit members found"); return; }
+      await updateDoc(doc(db, "groups", group.id), { members: arrayUnion(...ids) });
+      group.members = [...new Set([...(group.members || []), ...ids])];
+      addInput.value = "";
+      toast(`${ids.length} member${ids.length === 1 ? "" : "s"} added`);
+      paintMembers();
+    },
+  }, "Add members");
+
+  overlay.appendChild(el("div", { class: "modal-card group-admin-card" },
+    el("div", { class: "modal-head" },
+      el("h3", {}, "Manage group"),
+      el("button", { class: "icon-btn", onclick: close }, el("i", { class: "ri-close-line" })),
+    ),
+    el("div", { class: "group-admin-section" },
+      el("div", { class: "group-admin-label" }, "Group profile"),
+      nameInput,
+      iconInput,
+      saveDetailsBtn,
+    ),
+    el("div", { class: "group-admin-section" },
+      el("div", { class: "group-admin-label" }, "Group link"),
+      el("div", { class: "group-admin-inline" }, linkInput, saveLinkBtn),
+    ),
+    el("div", { class: "group-admin-section" },
+      el("div", { class: "group-admin-label" }, "Add members"),
+      el("div", { class: "group-admin-inline" }, addInput, addBtn),
+      el("p", { class: "group-admin-help" }, "Admins can add members by Orbit username or email."),
+    ),
+    el("div", { class: "group-admin-section" },
+      el("div", { class: "group-admin-label" }, `Members (${(group.members || []).length})`),
+      memberList,
+    ),
+  ));
+  overlay.addEventListener("click", (event) => { if (event.target === overlay) close(); });
+  document.body.appendChild(overlay);
+  paintMembers();
+};
+
+export const setFollowState = async (uid, shouldFollow) => {
+  if (!uid || uid === state.uid) return;
+  const meRef = doc(db, "users", state.uid);
+  const themRef = doc(db, "users", uid);
+  const batch = writeBatch(db);
+  batch.update(meRef, { following: shouldFollow ? arrayUnion(uid) : arrayRemove(uid) });
+  batch.update(themRef, { followers: shouldFollow ? arrayUnion(state.uid) : arrayRemove(state.uid) });
+  await batch.commit();
+  state.me.following = shouldFollow
+    ? [...new Set([...(state.me.following || []), uid])]
+    : (state.me.following || []).filter((id) => id !== uid);
+  state.cache.users.delete(uid);
+  state.cache.users.delete(state.uid);
+  if (shouldFollow) writeNotif(uid, "follow", {}).catch(() => {});
+};
+
 // =========================================================================
 // 4. CLOUDINARY UPLOAD
 // =========================================================================
@@ -994,6 +1154,12 @@ const ensureUserDoc = async (user, extras = {}) => {
       location: null,                 // { lat, lng, city }
       followers: [],
       following: [],
+      privateAccount: false,
+      showOnline: true,
+      allowMessages: true,
+      autoplayVideos: true,
+      emailNotifications: true,
+      hideSensitive: false,
       themePref: "dark",
       online: true,
       lastSeen: serverTimestamp(),
@@ -1076,6 +1242,7 @@ $$(".auth-tab").forEach((tab) => {
     // Sign-in tab: hide everything else, show sign-in
     $("#signupOnboard").classList.add("hidden");
     $("#signupForm").classList.add("hidden");
+    $("#forgotPasswordForm")?.classList.add("hidden");
     $("#signinForm").classList.remove("hidden");
   });
 });
@@ -1096,6 +1263,40 @@ $("#signinForm").addEventListener("submit", async (e) => {
   } catch (err) {
     hideOrbitLoader();
     toast(err.message.replace("Firebase: ", ""));
+  }
+});
+
+$("#forgotPasswordBtn")?.addEventListener("click", () => {
+  $("#signinForm").classList.add("hidden");
+  $("#forgotPasswordForm").classList.remove("hidden");
+  const email = $("#signinForm").querySelector("[name=email]")?.value || "";
+  const resetEmail = $("#forgotPasswordForm").querySelector("[name=email]");
+  if (resetEmail) resetEmail.value = email;
+});
+
+$("#backToSigninBtn")?.addEventListener("click", () => {
+  $("#forgotPasswordForm").classList.add("hidden");
+  $("#signinForm").classList.remove("hidden");
+});
+
+$("#forgotPasswordForm")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const email = new FormData(e.target).get("email")?.toString().trim();
+  if (!email) return;
+  const button = e.target.querySelector("button[type=submit]");
+  button.disabled = true;
+  button.textContent = "Sending…";
+  try {
+    await sendPasswordResetEmail(auth, email);
+    toast("Password reset link sent. Check your email.");
+    e.target.reset();
+    $("#forgotPasswordForm").classList.add("hidden");
+    $("#signinForm").classList.remove("hidden");
+  } catch (err) {
+    toast(err.message.replace("Firebase: ", ""));
+  } finally {
+    button.disabled = false;
+    button.textContent = "Send reset link";
   }
 });
 
@@ -1683,7 +1884,7 @@ const _setupFeedVideoScroll = (list) => {
     entries.forEach((e) => {
       const v = e.target;
       if (e.isIntersecting) {
-        v.play().catch(() => {});
+        if (state.me?.autoplayVideos !== false) v.play().catch(() => {});
       } else {
         v.pause();
         v.currentTime = 0;
@@ -1862,6 +2063,7 @@ const renderPost = (p, author, opts = {}) => {
   const iOrbited = (p.orbits || []).includes(state.uid);
   const isMine = p.authorUid === state.uid;
   const { hideComments = false, detailView: _detailView = false } = opts;
+  let _isFollowingAuthor = !isMine && (state.me?.following || []).includes(author?.uid);
 
   // View-count tracking: count once per session per post (skip own posts)
   if (!isMine && p.id) {
@@ -1902,6 +2104,30 @@ const renderPost = (p, author, opts = {}) => {
       ),
       el("span", { class: "tfb-sub" }, `@${author?.username || "user"} · ${fmtTime(p.createdAt)}`),
     ),
+    !isMine && author?.uid
+      ? el("button", {
+          class: `post-follow-btn${_isFollowingAuthor ? " following" : ""}`,
+          onclick: async (e) => {
+            e.stopPropagation();
+            const btn = e.currentTarget;
+            const previous = _isFollowingAuthor;
+            _isFollowingAuthor = !_isFollowingAuthor;
+            btn.textContent = _isFollowingAuthor ? "Following" : "Follow";
+            btn.classList.toggle("following", _isFollowingAuthor);
+            btn.disabled = true;
+            try {
+              await setFollowState(author.uid, _isFollowingAuthor);
+            } catch {
+              _isFollowingAuthor = previous;
+              btn.textContent = _isFollowingAuthor ? "Following" : "Follow";
+              btn.classList.toggle("following", _isFollowingAuthor);
+              toast("Could not update follow status");
+            } finally {
+              btn.disabled = false;
+            }
+          },
+        }, _isFollowingAuthor ? "Following" : "Follow")
+      : null,
     menuBtn,
     el("div", { class: "tfb-tail" }),
   );
@@ -2757,6 +2983,7 @@ const renderGroups = (root) => {
 
   const buildGroupRow = (g) => {
     const member = (g.members || []).includes(state.uid);
+    const canManage = (g.admins || []).includes(state.uid) || g.ownerUid === state.uid;
     const icon = g.iconUrl
       ? el("img", { class: "grp-icon", src: g.iconUrl })
       : el("div", { class: "grp-icon grp-icon-letter" }, (g.name || "?")[0].toUpperCase());
@@ -2805,10 +3032,22 @@ const renderGroups = (root) => {
       el("div", { class: "grp-info" },
         el("span", { class: "grp-name" }, g.name || "Unnamed group"),
         countEl,
-        g.description ? el("span", { class: "grp-desc" }, g.description.slice(0, 80)) : null,
+        g.about ? el("span", { class: "grp-desc" }, g.about.slice(0, 80)) : null,
+        g.groupLink ? el("a", {
+          class: "grp-link",
+          href: g.groupLink,
+          target: "_blank",
+          rel: "noopener noreferrer",
+          onclick: (e) => e.stopPropagation(),
+        }, el("i", { class: "ri-link" }), " Group link") : null,
       ),
       el("div", { class: "grp-row-actions" },
         joinBtn,
+        canManage ? el("button", {
+          class: "grp-open-btn",
+          title: "Manage group",
+          onclick: () => openGroupAdmin(g.id),
+        }, el("i", { class: "ri-admin-line" })) : null,
         (g.members || []).includes(state.uid)
           ? el("button", { class: "grp-open-btn", onclick: () => location.hash = `#chats/${g.id}` },
               el("i", { class: "ri-chat-3-line" })) : null,
@@ -3322,6 +3561,7 @@ const renderProfile = async (root, uid) => {
   }
   const isMe = uid === state.uid;
   let _iFollow = (state.me.following || []).includes(uid);
+  const canViewPrivateProfile = isMe || !u.privateAccount || _iFollow;
 
   // Live-update follower count in-place — no full page re-render on follow/unfollow
   const followersCountEl = el("strong", {}, String((u.followers || []).length));
@@ -3367,6 +3607,7 @@ const renderProfile = async (root, uid) => {
           notifyUser(uid, state.me?.name || "Someone", "started following you", "/#profile/" + state.uid, state.me?.photoURL || "")
         ).catch(() => {});
       }
+      if (u.privateAccount && _iFollow) router();
     });
   }
 
@@ -3386,7 +3627,7 @@ const renderProfile = async (root, uid) => {
         isMe
           ? el("button", { class: "btn ghost", onclick: () => openProfileEditModal() }, el("i", { class: "ri-edit-line" }), "Edit profile")
           : profileFollowBtn,
-        !isMe ? el("button", { class: "btn ghost", onclick: () => location.hash = `#chats/${uid}` },
+        !isMe && u.allowMessages !== false ? el("button", { class: "btn ghost", onclick: () => location.hash = `#chats/${uid}` },
           el("i", { class: "ri-chat-3-line" }), "Message") : null,
         isMe && !u.verified ? el("button", { class: "btn ghost", onclick: requestLocationVerification },
           el("i", { class: "ri-shield-check-line" }), "Get verified") : null,
@@ -3420,6 +3661,15 @@ const renderProfile = async (root, uid) => {
   root.appendChild(tabs);
   const body = el("div", {});
   root.appendChild(body);
+
+  if (!canViewPrivateProfile) {
+    body.appendChild(el("div", { class: "private-profile-notice" },
+      el("i", { class: "ri-lock-2-line" }),
+      el("strong", {}, "This account is private"),
+      el("span", {}, "Follow this account to see their posts and media."),
+    ));
+    return;
+  }
 
   const renderTab = async (which) => {
     // Kill any live listener from the previously active tab (Posts/Media)
@@ -3534,7 +3784,9 @@ const renderProfile = async (root, uid) => {
           el("h3", {}, "About"),
           el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Joined"), el("div", { class: "d" }, fmtTime(u.createdAt) || "—"))),
           u.location ? el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Verified location"), el("div", { class: "d" }, u.location.city || `${u.location.lat?.toFixed(2)}, ${u.location.lng?.toFixed(2)}`))) : null,
-          el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Status"), el("div", { class: "d" }, u.online ? "Online now" : `Last seen ${fmtTime(u.lastSeen)}`))),
+          u.showOnline !== false
+            ? el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Status"), el("div", { class: "d" }, u.online ? "Online now" : `Last seen ${fmtTime(u.lastSeen)}`)))
+            : el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Status"), el("div", { class: "d" }, "Online status hidden")),
         ),
       ));
     } else if (which === "mutuals") {
@@ -3576,6 +3828,35 @@ const renderProfileByUsername = async (root, username) => {
 // 13. SETTINGS — theme, verification, notifications
 // =========================================================================
 const renderSettings = (root) => {
+  const settingSwitch = (key, title, description, onChange = null) => {
+    const defaultValue = !["privateAccount", "hideSensitive"].includes(key);
+    const current = state.me?.[key] ?? defaultValue;
+    const sw = el("button", {
+      class: `switch${current ? " on" : ""}`,
+      type: "button",
+      role: "switch",
+      "aria-checked": String(current),
+      "aria-label": title,
+    });
+    sw.addEventListener("click", async () => {
+      const next = !sw.classList.contains("on");
+      sw.classList.toggle("on", next);
+      sw.setAttribute("aria-checked", String(next));
+      if (state.me) state.me[key] = next;
+      await updateDoc(doc(db, "users", state.uid), { [key]: next }).catch(() => {
+        sw.classList.toggle("on", !next);
+        sw.setAttribute("aria-checked", String(!next));
+        if (state.me) state.me[key] = !next;
+        toast("Could not save setting");
+      });
+      if (onChange) onChange(next);
+    });
+    return el("div", { class: "row setting-row" },
+      el("div", { class: "label" }, el("div", { class: "t" }, title), el("div", { class: "d" }, description)),
+      sw,
+    );
+  };
+
   const wrap = el("div", { class: "settings" },
     el("h2", { style: "margin-top:0;font-family:var(--font-display);" }, "Settings"),
 
@@ -3709,6 +3990,27 @@ const renderSettings = (root) => {
           import("./notifications.js").then((m) => m.sendTestGroupNotification());
         }}, "Send test"),
       ),
+      settingSwitch("emailNotifications", "Email notifications", "Receive account and social activity updates by email."),
+      settingSwitch("showOnline", "Show when you’re online", "Let people see your online status and last active time."),
+    ),
+
+    el("div", { class: "group" },
+      el("h3", {}, "Privacy & safety"),
+      settingSwitch("privateAccount", "Private account", "Only people you approve can follow you and view your posts."),
+      settingSwitch("allowMessages", "Allow direct messages", "Let other Orbit members start a chat with you."),
+      settingSwitch("hideSensitive", "Hide sensitive content", "Hide posts that have been marked as sensitive."),
+    ),
+
+    el("div", { class: "group" },
+      el("h3", {}, "Content preferences"),
+      settingSwitch("autoplayVideos", "Autoplay videos", "Play feed videos automatically when they come into view."),
+      el("div", { class: "row" },
+        el("div", { class: "label" },
+          el("div", { class: "t" }, "Saved posts"),
+          el("div", { class: "d" }, `${(state.me?.saved || []).length} posts saved for later.`),
+        ),
+        el("button", { class: "btn ghost", onclick: () => { location.hash = "#saved"; } }, "View saved"),
+      ),
     ),
 
     el("div", { class: "group" },
@@ -3716,8 +4018,45 @@ const renderSettings = (root) => {
       el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Email"), el("div", { class: "d" }, state.me.email || "—"))),
       el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Username"), el("div", { class: "d" }, "@" + state.me.username))),
       el("div", { class: "row" },
+        el("div", { class: "label" },
+          el("div", { class: "t" }, "Change password"),
+          el("div", { class: "d" }, "Send a secure password reset link to your email."),
+        ),
+        el("button", { class: "btn ghost", onclick: async () => {
+          if (!state.me.email) { toast("No email address is attached to this account"); return; }
+          await sendPasswordResetEmail(auth, state.me.email).then(
+            () => toast("Password reset link sent"),
+            () => toast("Could not send password reset link"),
+          );
+        }}, "Reset password"),
+      ),
+      el("div", { class: "row" },
+        el("div", { class: "label" },
+          el("div", { class: "t" }, "Download your data"),
+          el("div", { class: "d" }, "Save a copy of your Orbit profile and preferences."),
+        ),
+        el("button", { class: "btn ghost", onclick: () => {
+          const blob = new Blob([JSON.stringify(state.me || {}, null, 2)], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url; a.download = "orbit-account-data.json"; a.click();
+          URL.revokeObjectURL(url);
+        }}, "Download"),
+      ),
+      el("div", { class: "row" },
         el("div", { class: "label" }, el("div", { class: "t" }, "Sign out"), el("div", { class: "d" }, "End your session on this device.")),
         el("button", { class: "btn ghost", onclick: () => $("#signOutBtn").click() }, "Sign out"),
+      ),
+      el("div", { class: "row danger-setting-row" },
+        el("div", { class: "label" },
+          el("div", { class: "t" }, "Deactivate account"),
+          el("div", { class: "d" }, "Hide your profile until you sign in again."),
+        ),
+        el("button", { class: "btn ghost danger-btn", onclick: async () => {
+          if (!confirm("Deactivate your Orbit profile? You can restore it by signing in again.")) return;
+          await updateDoc(doc(db, "users", state.uid), { deactivated: true, online: false, lastSeen: serverTimestamp() });
+          await signOut(auth);
+        }}, "Deactivate"),
       ),
     ),
 
@@ -3821,13 +4160,24 @@ $("#groupForm").addEventListener("submit", async (e) => {
   const btn = e.target.querySelector("button[type='submit']");
   btn.disabled = true; btn.textContent = "Creating…";
   try {
+    const iconFile = fd.get("iconFile");
+    let iconUrl = "";
+    if (iconFile instanceof File && iconFile.size > 0) {
+      btn.textContent = "Uploading picture…";
+      iconUrl = (await uploadToCloudinary(iconFile, "image")).url;
+    }
+    const invitedMemberIds = await resolveGroupMemberIds(fd.get("memberUsernames") || "");
+    const memberIds = [...new Set([state.uid, ...invitedMemberIds])];
     const ref = await addDoc(collection(db, "groups"), {
       name,
       about: fd.get("about") || "",
+      groupLink: (fd.get("groupLink") || "").trim(),
+      iconUrl,
       isPublic: fd.get("isPublic") === "on",
       ownerUid: state.uid,
       admins: [state.uid],
-      members: [state.uid],
+      members: memberIds,
+      memberCount: memberIds.length,
       createdAt: serverTimestamp(),
     });
     await addDoc(collection(db, "groups", ref.id, "messages"), {

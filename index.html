@@ -153,7 +153,17 @@
           <label>Password
             <input type="password" name="password" placeholder="••••••••" required autocomplete="current-password"/>
           </label>
+          <button type="button" id="forgotPasswordBtn" class="link auth-forgot">Forgot password?</button>
           <button type="submit" class="btn primary block">Enter Orbit</button>
+        </form>
+
+        <form id="forgotPasswordForm" class="auth-form hidden">
+          <p class="auth-reset-copy">Enter your email and we’ll send you a secure password reset link.</p>
+          <label>Email
+            <input type="email" name="email" placeholder="you@orbit.app" required autocomplete="email"/>
+          </label>
+          <button type="submit" class="btn primary block">Send reset link</button>
+          <button type="button" id="backToSigninBtn" class="btn ghost block">Back to sign in</button>
         </form>
 
         <!-- Pre-signup feature overview — shown when "Create account" tab is clicked -->
@@ -367,6 +377,11 @@
         <form id="groupForm" class="compose-pane">
           <input type="text" name="name" placeholder="Group name" required />
           <textarea name="about" placeholder="What's this group about?" rows="3"></textarea>
+          <label>Group profile picture
+            <input type="file" name="iconFile" accept="image/*" />
+          </label>
+          <input type="url" name="groupLink" placeholder="Group link (optional)" />
+          <textarea name="memberUsernames" placeholder="Add members automatically — usernames or emails separated by commas" rows="2"></textarea>
           <label class="row gap">
             <input type="checkbox" name="isPublic" checked /> Public group (anyone can join)
           </label>
