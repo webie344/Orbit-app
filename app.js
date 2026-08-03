@@ -3788,7 +3788,7 @@ const renderProfile = async (root, uid) => {
             ? el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Status"), el("div", { class: "d" }, u.online ? "Online now" : `Last seen ${fmtTime(u.lastSeen)}`)))
             : el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Status"), el("div", { class: "d" }, "Online status hidden")),
         ),
-      ));
+    )  ));
     } else if (which === "mutuals") {
       body.innerHTML = "";
       const mutualsWrap = el("div", { style: "padding: 0 0 16px;" });
