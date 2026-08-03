@@ -403,7 +403,7 @@ const renderChatRow = (c) => {
     el("div", { class: "av" },
       el("img", { class: "avatar md",
         src: isGroup
-          ? `https://api.dicebear.com/7.x/shapes/svg?seed=${c.id}`
+          ? (c.iconUrl || c.photoURL || `https://api.dicebear.com/7.x/shapes/svg?seed=${c.id}`)
           : avatarFor(c.peer) }),
       !isGroup && c.peer?.online ? el("span", { class: "online" }) : null,
     ),
@@ -515,7 +515,7 @@ const renderChatView = ({ isGroup, chatId, peer, group }) => {
       el("i", { class: "ri-arrow-left-line" })),
     el("img", { class: "avatar md",
       src: isGroup
-        ? (group.photoURL || `https://api.dicebear.com/7.x/shapes/svg?seed=${chatId}`)
+        ? (group.iconUrl || group.photoURL || `https://api.dicebear.com/7.x/shapes/svg?seed=${chatId}`)
         : avatarFor(peer),
       style: "cursor:pointer;",
       onclick: () => isGroup
@@ -920,6 +920,7 @@ const renderMessages = async (root, snap, { isGroup, chatId, peer }) => {
     }
 
     const fromMe = m.authorUid === state.uid;
+    const isForwarded = m.forwarded || m.type === "forwarded";
     const author = authorMap[m.authorUid];
     const showAv = isGroup && !fromMe && lastAuthor !== m.authorUid;
 
@@ -939,9 +940,35 @@ const renderMessages = async (root, snap, { isGroup, chatId, peer }) => {
       ));
     }
 
-    if (m.type === "voice" && m.media?.url) {
+    if (m.forwarded || m.type === "forwarded") {
+      const forwardedAuthor = m.forwardAuthorName || "Orbit member";
+      const forwardedCard = el("div", { class: "forwarded-post-card" },
+        el("div", { class: "forwarded-post-label" },
+          el("i", { class: "ri-share-forward-line" }), " Forwarded post"),
+        el("div", { class: "forwarded-post-author" },
+          el("i", { class: "ri-planet-line" }), forwardedAuthor),
+        m.forwardText
+          ? el("div", { class: "forwarded-post-text" }, m.forwardText.slice(0, 220))
+          : null,
+      );
+      const forwardMedia = Array.isArray(m.media) ? m.media[0] : m.media;
+      if (forwardMedia?.url) {
+        forwardedCard.appendChild(
+          forwardMedia.type === "video"
+            ? el("video", { class: "forwarded-post-media", src: forwardMedia.url, muted: "", playsinline: "", controls: "" })
+            : el("img", { class: "forwarded-post-media", src: forwardMedia.url, loading: "lazy" }),
+        );
+      }
+      if (m.forwardPostId) {
+        forwardedCard.onclick = () => { location.hash = `#post/${m.forwardPostId}`; };
+        forwardedCard.classList.add("is-link");
+      }
+      bubble.appendChild(forwardedCard);
+    }
+
+    if (!isForwarded && m.type === "voice" && m.media?.url) {
       bubble.appendChild(buildVoicePlayer(m.media.url));
-    } else if (m.media?.url) {
+    } else if (!isForwarded && m.media?.url) {
       if (m.viewOnce) {
         if (fromMe) {
           // Sender: show media + small badge
@@ -1040,7 +1067,7 @@ const renderMessages = async (root, snap, { isGroup, chatId, peer }) => {
       lp.setAttribute("title", m.stickerName || "Sticker");
       lp.style.cssText = "width:150px;height:150px;display:block;pointer-events:none;";
       bubble.appendChild(lp);
-    } else if (m.text) {
+    } else if (m.text && !isForwarded) {
       const t = el("span", {});
       if (m.deleted) {
         t.innerHTML = '<i class="ri-error-warning-line"></i> Message deleted';

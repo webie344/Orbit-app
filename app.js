@@ -834,7 +834,7 @@ const resolveGroupMemberIds = async (raw = "") => {
   return [...new Set(ids)].filter((uid) => uid !== state.uid);
 };
 
-const openGroupAdmin = async (groupId) => {
+export const openGroupAdmin = async (groupId) => {
   const snap = await getDoc(doc(db, "groups", groupId));
   if (!snap.exists()) { toast("Group not found"); return; }
   const group = { id: groupId, ...snap.data() };
@@ -847,6 +847,7 @@ const openGroupAdmin = async (groupId) => {
   const memberList = el("div", { class: "group-admin-members" });
   const nameInput = el("input", { type: "text", value: group.name || "", placeholder: "Group name" });
   const iconInput = el("input", { type: "file", accept: "image/*" });
+  const currentIcon = el("img", { class: "group-admin-current-icon", src: group.iconUrl || group.photoURL || avatarFor({ uid: group.id }), alt: "Group picture" });
   const linkInput = el("input", { type: "url", value: group.groupLink || "", placeholder: "https://example.com/group" });
   const addInput = el("input", { type: "text", placeholder: "@username or email, separated by commas" });
   const close = () => overlay.remove();
@@ -940,6 +941,7 @@ const openGroupAdmin = async (groupId) => {
     ),
     el("div", { class: "group-admin-section" },
       el("div", { class: "group-admin-label" }, "Group profile"),
+      currentIcon,
       nameInput,
       iconInput,
       saveDetailsBtn,
@@ -1084,6 +1086,26 @@ const hideOrbitLoader = () => {
   if (_orbitLoaderEl) { _orbitLoaderEl.remove(); _orbitLoaderEl = null; }
 };
 
+const showPostSuccess = () => {
+  const existing = document.querySelector(".post-success-overlay");
+  if (existing) existing.remove();
+  const overlay = el("div", { class: "post-success-overlay" },
+    el("div", { class: "post-success-card" },
+      el("div", { class: "post-success-orbit" },
+        el("span", {}, el("i", { class: "ri-check-line" })),
+      ),
+      el("h3", {}, "Your post is live"),
+      el("p", {}, "Your Orbit is growing. Keep sharing your world."),
+    ),
+  );
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add("is-visible"));
+  setTimeout(() => {
+    overlay.classList.remove("is-visible");
+    setTimeout(() => overlay.remove(), 280);
+  }, 2200);
+};
+
 // =========================================================================
 // 6. AUTH FLOW
 // =========================================================================
@@ -1200,8 +1222,8 @@ onAuthStateChanged(auth, async (user) => {
   router(); // initial route
   watchOfflineOnUnload();
   startNewsBot(); // kick off official news/sport/social bot (throttled to every 5 h)
-  // Show onboarding modal for brand-new users; otherwise prompt incomplete profiles
-  if (state.me._isNew) showOnboardingModal();
+  // Show a full-page setup guide for brand-new users; otherwise prompt incomplete profiles
+  if (state.me._isNew) showOnboardingGuide();
   else checkProfileSetup();
   // Notify chat module
   document.dispatchEvent(new CustomEvent("orbit:auth-ready", { detail: state.me }));
@@ -1738,7 +1760,7 @@ const renderFeed = (root) => {
   // ── Append a batch of posts into the list (before the sentinel) ─────────
   const _appendPosts = (posts, byUid) => {
     // Deduplicate, score once each, then sort
-    const fresh = posts.filter((p) => !_renderedIds.has(p.id));
+    const fresh = posts.filter((p) => !_renderedIds.has(p.id) && !postIsHidden(p));
     const scored = fresh.map((p) => ({ p, score: _scorePost(p) }));
     scored.sort((a, b) => b.score - a.score);
 
@@ -1844,7 +1866,7 @@ const renderFeed = (root) => {
       return;
     }
 
-    const posts   = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const posts   = snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((p) => !postIsHidden(p));
     const authors = await Promise.all([...new Set(posts.map((p) => p.authorUid))].map(fetchUser));
     if (seq !== _renderSeq) return; // newer snapshot fired; discard stale render
 
@@ -2059,6 +2081,180 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
   return grid;
 };
 
+const postIsHidden = (p) => (state.me?.hiddenPosts || []).includes(p.id);
+
+const removePostFromView = (postId) => {
+  const node = document.querySelector(`.tfb-post[data-post-id="${postId}"]`);
+  if (!node) return;
+  node.classList.add("post-dismissed");
+  setTimeout(() => node.remove(), 320);
+};
+
+const openPostShareModal = async (p, author) => {
+  const overlay = el("div", { class: "post-share-overlay" });
+  const card = el("div", { class: "post-share-card" });
+  const close = () => {
+    overlay.classList.remove("is-visible");
+    setTimeout(() => overlay.remove(), 220);
+  };
+  const selected = new Set();
+  const list = el("div", { class: "post-share-list" },
+    el("div", { class: "post-share-loading" }, el("i", { class: "ri-loader-4-line" }), " Loading your chats…"),
+  );
+  const sendBtn = el("button", { class: "btn primary block", disabled: true }, el("i", { class: "ri-send-plane-fill" }), " Send post");
+  const updateSendState = () => { sendBtn.disabled = selected.size === 0; };
+
+  const addTarget = (target) => {
+    const row = el("button", { class: "post-share-target", type: "button" });
+    const check = el("span", { class: "post-share-check" }, el("i", { class: "ri-check-line" }));
+    row.append(
+      target.kind === "group"
+        ? el("img", { class: "avatar sm", src: target.iconUrl || `https://api.dicebear.com/7.x/shapes/svg?seed=${target.id}` })
+        : el("img", { class: "avatar sm", src: avatarFor(target.peer) }),
+      el("span", { class: "post-share-target-info" },
+        el("strong", {}, target.name),
+        el("small", {}, target.kind === "group" ? `${(target.members || []).length} members` : `@${target.peer?.username || "user"}`),
+      ),
+      check,
+    );
+    row.onclick = () => {
+      if (selected.has(target.key)) { selected.delete(target.key); row.classList.remove("selected"); }
+      else { selected.add(target.key); row.classList.add("selected"); }
+      updateSendState();
+    };
+    list.appendChild(row);
+  };
+
+  sendBtn.onclick = async () => {
+    sendBtn.disabled = true;
+    sendBtn.innerHTML = '<i class="ri-loader-4-line"></i> Sharing…';
+    const targets = [...list.querySelectorAll(".post-share-target.selected")].map((row) => row._target).filter(Boolean);
+    try {
+      const body = {
+        type: "forwarded",
+        forwarded: true,
+        forwardPostId: p.id,
+        forwardText: p.text || "",
+        forwardAuthorUid: p.authorUid,
+        forwardAuthorName: author?.name || "Orbit member",
+        text: p.text || "Shared a post",
+        media: p.media || null,
+        createdAt: serverTimestamp(),
+        readBy: [state.uid],
+      };
+      await Promise.all(targets.map(async (target) => {
+        if (target.kind === "group") {
+          await addDoc(collection(db, "groups", target.id, "messages"), body);
+          await updateDoc(doc(db, "groups", target.id), {
+            lastMessage: `Shared a post by ${author?.name || "an Orbit member"}`,
+            lastMessageAt: serverTimestamp(),
+          }).catch(() => {});
+        } else {
+          const chatId = [state.uid, target.peer.uid].sort().join("__");
+          const myRef = doc(db, "users", state.uid, "chats", chatId);
+          const theirRef = doc(db, "users", target.peer.uid, "chats", chatId);
+          await addDoc(collection(db, "chats", chatId, "messages"), body);
+          await Promise.all([
+            setDoc(myRef, {
+              peerUid: target.peer.uid, lastMessage: "Shared a post", lastFromMe: true,
+              unread: 0, updatedAt: serverTimestamp(), createdAt: serverTimestamp(),
+            }, { merge: true }),
+            setDoc(theirRef, {
+              peerUid: state.uid, lastMessage: "Shared a post", lastFromMe: false,
+              unread: increment(1), updatedAt: serverTimestamp(), createdAt: serverTimestamp(),
+            }, { merge: true }),
+          ]);
+          writeNotif(target.peer.uid, "message", { text: `${state.me?.name || "Someone"} shared a post with you` }).catch(() => {});
+        }
+      }));
+      toast(`Shared to ${targets.length} chat${targets.length === 1 ? "" : "s"}`);
+      close();
+    } catch (err) {
+      toast("Could not share this post");
+      sendBtn.disabled = false;
+      sendBtn.innerHTML = '<i class="ri-send-plane-fill"></i> Send post';
+    }
+  };
+
+  card.append(
+    el("div", { class: "post-share-head" },
+      el("div", {}, el("h3", {}, "Share post"), el("p", {}, `Send ${author?.name || "this member"}’s post to your Orbit`)),
+      el("button", { class: "icon-btn", onclick: close }, el("i", { class: "ri-close-line" })),
+    ),
+    el("div", { class: "post-share-preview" },
+      el("img", { class: "avatar sm", src: avatarFor(author) }),
+      el("span", {}, (p.text || "Shared post").slice(0, 100)),
+    ),
+    list,
+    sendBtn,
+  );
+  overlay.appendChild(card);
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add("is-visible"));
+
+  try {
+    const [groupSnap, dmSnap] = await Promise.all([
+      getDocs(query(collection(db, "groups"), where("members", "array-contains", state.uid), limit(80))),
+      getDocs(query(collection(db, "users", state.uid, "chats"), orderBy("updatedAt", "desc"), limit(80))),
+    ]);
+    list.innerHTML = "";
+    groupSnap.docs.forEach((d) => {
+      const g = { id: d.id, ...d.data(), kind: "group", key: `group:${d.id}` };
+      g.name = g.name || "Group";
+      g.iconUrl = g.iconUrl || g.photoURL || "";
+      addTarget(g);
+      list.lastElementChild._target = g;
+    });
+    const peers = await Promise.all(dmSnap.docs.map(async (d) => {
+      const data = d.data();
+      const peer = await fetchUser(data.peerUid);
+      return peer ? { ...data, peer, kind: "dm", key: `dm:${peer.uid}`, name: peer.name || "User" } : null;
+    }));
+    peers.filter(Boolean).forEach((target) => { addTarget(target); list.lastElementChild._target = target; });
+    if (!list.children.length) list.appendChild(el("div", { class: "post-share-empty" }, "Join a group or start a chat to share posts."));
+  } catch {
+    list.innerHTML = "";
+    list.appendChild(el("div", { class: "post-share-empty" }, "Could not load your chats."));
+  }
+};
+
+const openPostMenu = (p, author, isMine) => {
+  const overlay = el("div", { class: "post-menu-overlay" });
+  const sheet = el("div", { class: "post-menu-sheet" });
+  const close = () => { sheet.classList.remove("is-visible"); setTimeout(() => overlay.remove(), 220); };
+  const action = (icon, label, handler, danger = false) => {
+    const btn = el("button", { class: `post-menu-action${danger ? " danger" : ""}`, onclick: async () => { close(); await handler(); } },
+      el("i", { class: icon }), el("span", {}, label));
+    sheet.appendChild(btn);
+  };
+  action("ri-share-forward-line", "Share to chats", () => openPostShareModal(p, author));
+  if (!isMine) {
+    action("ri-eye-off-line", "Not interested — hide this post", async () => {
+      await updateDoc(doc(db, "users", state.uid), { hiddenPosts: arrayUnion(p.id) });
+      state.me.hiddenPosts = [...new Set([...(state.me.hiddenPosts || []), p.id])];
+      removePostFromView(p.id);
+      toast("You won’t see this post again");
+    });
+  } else {
+    action("ri-delete-bin-line", "Delete post", async () => {
+      if (!confirm("Delete this post for everyone?")) return;
+      await deleteDoc(doc(db, "posts", p.id));
+      removePostFromView(p.id);
+      toast("Post deleted");
+    }, true);
+  }
+  action("ri-links-line", "Copy post link", async () => {
+    const url = `${location.origin}${location.pathname}#post/${p.id}`;
+    await navigator.clipboard.writeText(url);
+    toast("Link copied");
+  });
+  overlay.appendChild(sheet);
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => sheet.classList.add("is-visible"));
+};
+
 const renderPost = (p, author, opts = {}) => {
   const iOrbited = (p.orbits || []).includes(state.uid);
   const isMine = p.authorUid === state.uid;
@@ -2074,19 +2270,13 @@ const renderPost = (p, author, opts = {}) => {
     }
   }
 
-  const post = el("article", { class: "tfb-post" });
+  const post = el("article", { class: "tfb-post", data: { postId: p.id } });
 
   // ── Header: avatar ring + name + timestamp + menu ────────────────
-  const menuBtn = isMine
-    ? el("button", { class: "icon-btn tfb-menu", onclick: async (e) => {
-        e.stopPropagation();
-        if (confirm("Delete this post?")) {
-          await deleteDoc(doc(db, "posts", p.id));
-          toast("Post deleted");
-        }
-      }}, el("i", { class: "ri-more-2-line" }))
-    : el("button", { class: "icon-btn tfb-menu", onclick: (e) => e.stopPropagation() },
-        el("i", { class: "ri-more-2-line" }));
+  const menuBtn = el("button", { class: "icon-btn tfb-menu", onclick: (e) => {
+    e.stopPropagation();
+    openPostMenu(p, author, isMine);
+  }}, el("i", { class: "ri-more-2-line" }));
 
   const header = el("div", { class: "tfb-header" },
     el("div", {
@@ -2210,6 +2400,9 @@ const renderPost = (p, author, opts = {}) => {
       e.stopPropagation();
       _iOrbited = !_iOrbited;
       if (_iOrbited) sfxOrbit();
+      orbitBtn.classList.remove("orbit-burst");
+      void orbitBtn.offsetWidth;
+      orbitBtn.classList.add("orbit-burst");
       orbitIcon.className   = _iOrbited ? "ri-fire-fill" : "ri-fire-line";
       orbitCount.textContent = String((p.orbitCount || 0) + (_iOrbited ? 1 : -1));
       orbitBtn.classList.toggle("active", _iOrbited);
@@ -2231,7 +2424,8 @@ const renderPost = (p, author, opts = {}) => {
     },
   }, orbitIcon, orbitCount);
 
-  const saveIcon = (state.me?.saved || []).includes(p.id) ? "ri-bookmark-fill" : "ri-bookmark-line";
+  let _saved = (state.me?.saved || []).includes(p.id);
+  const saveIconEl = el("i", { class: _saved ? "ri-bookmark-fill" : "ri-bookmark-line" });
 
   // Live-updatable comment count element — updated by the feed onSnapshot below
   const cmtCountEl = el("span", {});
@@ -2246,15 +2440,21 @@ const renderPost = (p, author, opts = {}) => {
       class: "tfb-act",
       onclick: async (e) => {
         e.stopPropagation();
-        const url = `${location.origin}${location.pathname}#post/${p.id}`;
-        try { await navigator.share?.({ title: "Orbit", text: p.text || "Check this out", url }); }
-        catch { await navigator.clipboard.writeText(url); toast("Link copied"); }
+        await openPostShareModal(p, author);
       },
     },
       el("i", { class: "ri-share-forward-line" }), " Share",
     ),
-    el("button", { class: "tfb-act", onclick: (e) => { e.stopPropagation(); toggleSave(p.id); } },
-      el("i", { class: saveIcon }),
+    el("button", { class: `tfb-act save-post-btn${_saved ? " saved" : ""}`, onclick: async (e) => {
+      e.stopPropagation();
+      _saved = !_saved;
+      saveIconEl.className = _saved ? "ri-bookmark-fill" : "ri-bookmark-line";
+      e.currentTarget.classList.toggle("saved", _saved);
+      e.currentTarget.classList.add("save-burst");
+      setTimeout(() => e.currentTarget.classList.remove("save-burst"), 420);
+      await toggleSave(p.id, _saved);
+    } },
+      saveIconEl,
     ),
     el("span", { class: "spacer" }),
     el("span", { class: "tfb-act", style: "cursor:default;pointer-events:none;" },
@@ -2923,11 +3123,15 @@ const renderPostDetail = async (root, postId) => {
   cmtSection.appendChild(cForm);
 };
 
-const toggleSave = async (postId) => {
+const toggleSave = async (postId, shouldSave = null) => {
   const ref = doc(db, "users", state.uid);
   const has = (state.me.saved || []).includes(postId);
-  await updateDoc(ref, { saved: has ? arrayRemove(postId) : arrayUnion(postId) });
-  toast(has ? "Removed from Saved" : "Saved");
+  const next = shouldSave == null ? !has : shouldSave;
+  await updateDoc(ref, { saved: next ? arrayUnion(postId) : arrayRemove(postId) });
+  state.me.saved = next
+    ? [...new Set([...(state.me.saved || []), postId])]
+    : (state.me.saved || []).filter((id) => id !== postId);
+  toast(next ? "Saved" : "Removed from Saved");
 };
 
 // =========================================================================
@@ -4791,6 +4995,7 @@ async function crSubmitPost(btn) {
     const newPostRef = await addDoc(collection(db, "posts"), postData);
     sfxPost();
     toast("Posted!");
+    showPostSuccess();
     crClose();
     addDoc(collection(db, "notifications", state.uid, "items"), {
       type: "postConfirm", postId: newPostRef.id, text: "Your post is live!", read: false, createdAt: serverTimestamp(),
@@ -4957,6 +5162,119 @@ const renderInlineSpaceSuggestion = () => {
 // =========================================================================
 // 14c. NEW USER ONBOARDING MODAL
 // =========================================================================
+
+const showOnboardingGuide = () => {
+  const overlay = el("div", { class: "onboarding-guide-overlay" });
+  const card = el("div", { class: "onboarding-guide-card" });
+  const progress = el("div", { class: "onboarding-guide-progress" });
+  const body = el("div", { class: "onboarding-guide-body" });
+  let step = 0;
+  const steps = [
+    { icon: "ri-user-smile-line", title: "Set up your profile", sub: "Make your Orbit feel like you." },
+    { icon: "ri-user-heart-line", title: "Find your people", sub: "Follow a few people to personalize your feed." },
+    { icon: "ri-group-2-line", title: "Join your communities", sub: "Pick groups that match your interests." },
+  ];
+  const finish = async () => {
+    try {
+      await updateDoc(doc(db, "users", state.uid), { onboardingCompleted: true });
+      state.me.onboardingCompleted = true;
+    } catch {}
+    overlay.remove();
+    showFirstPostPrompt();
+  };
+  const close = () => finish();
+  const renderProgress = () => {
+    progress.innerHTML = "";
+    steps.forEach((s, i) => progress.appendChild(el("span", { class: i <= step ? "active" : "" })));
+  };
+  const renderStep = () => {
+    renderProgress();
+    body.innerHTML = "";
+    const current = steps[step];
+    body.appendChild(el("div", { class: "onboarding-guide-icon" }, el("i", { class: current.icon })));
+    body.appendChild(el("div", { class: "onboarding-guide-kicker" }, `STEP ${step + 1} OF ${steps.length}`));
+    body.appendChild(el("h2", {}, current.title));
+    body.appendChild(el("p", { class: "onboarding-guide-sub" }, current.sub));
+
+    if (step === 0) {
+      const name = el("input", { type: "text", value: state.me?.name || "", placeholder: "Your name" });
+      const username = el("input", { type: "text", value: state.me?.username || "", placeholder: "Username" });
+      const bio = el("textarea", { placeholder: "A short bio (optional)", rows: "3" }, state.me?.bio || "");
+      const save = el("button", { class: "btn primary block" }, "Save profile");
+      save.onclick = async () => {
+        if (!name.value.trim() || !username.value.trim()) { toast("Add your name and username"); return; }
+        save.disabled = true; save.textContent = "Saving…";
+        await updateDoc(doc(db, "users", state.uid), { name: name.value.trim(), username: username.value.trim().toLowerCase().replace(/[^a-z0-9_]/g, ""), bio: bio.value.trim() });
+        Object.assign(state.me, { name: name.value.trim(), username: username.value.trim(), bio: bio.value.trim() });
+        step = 1; renderStep();
+      };
+      body.append(el("div", { class: "onboarding-guide-fields" }, name, username, bio, save));
+    } else {
+      const list = el("div", { class: "onboarding-guide-list" }, el("div", { class: "onboarding-guide-loading" }, el("i", { class: "ri-loader-4-line" }), " Finding suggestions…"));
+      const next = el("button", { class: "btn primary block" }, step === steps.length - 1 ? "Finish setup" : "Continue");
+      next.onclick = () => { if (step === steps.length - 1) finish(); else { step += 1; renderStep(); } };
+      body.append(list, next);
+      const load = async () => {
+        const source = step === 1
+          ? await getDocs(query(collection(db, "users"), orderBy("createdAt", "desc"), limit(6)))
+          : await getDocs(query(collection(db, "groups"), orderBy("createdAt", "desc"), limit(6)));
+        list.innerHTML = "";
+        source.docs.forEach((d) => {
+          const item = { id: d.id, ...d.data() };
+          if (step === 1 && item.id === state.uid) return;
+          let selected = step === 1 ? (state.me.following || []).includes(item.id) : (item.members || []).includes(state.uid);
+          const button = el("button", { class: `onboarding-guide-select${selected ? " selected" : ""}` }, selected ? "Selected" : "Select");
+          button.onclick = async () => {
+            selected = !selected;
+            if (step === 1) {
+              await updateDoc(doc(db, "users", state.uid), { following: selected ? arrayUnion(item.id) : arrayRemove(item.id) });
+              state.me.following = selected ? [...new Set([...(state.me.following || []), item.id])] : (state.me.following || []).filter((id) => id !== item.id);
+            } else {
+              await updateDoc(doc(db, "groups", item.id), { members: selected ? arrayUnion(state.uid) : arrayRemove(state.uid) });
+            }
+            button.textContent = selected ? "Selected" : "Select";
+            button.classList.toggle("selected", selected);
+          };
+          list.appendChild(el("div", { class: "onboarding-guide-row" },
+            el("img", { class: "avatar sm", src: step === 1 ? avatarFor(item) : (item.iconUrl || item.photoURL || `https://api.dicebear.com/7.x/shapes/svg?seed=${item.id}`) }),
+            el("div", { class: "onboarding-guide-row-info" },
+              el("strong", {}, item.name || "Orbit member"),
+              el("small", {}, step === 1 ? `@${item.username || "user"}` : `${(item.members || []).length} members`),
+            ),
+            button,
+          ));
+        });
+        if (!list.children.length) list.appendChild(el("div", { class: "onboarding-guide-empty" }, "No suggestions yet — you can continue."));
+      };
+      load().catch(() => { list.innerHTML = ""; list.appendChild(el("div", { class: "onboarding-guide-empty" }, "You can continue and explore later.")); });
+    }
+  };
+  card.append(
+    el("button", { class: "icon-btn onboarding-guide-close", onclick: close }, el("i", { class: "ri-close-line" })),
+    el("div", { class: "onboarding-guide-brand" }, el("i", { class: "ri-planet-fill" }), " ORBIT"),
+    progress,
+    body,
+  );
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+  renderStep();
+};
+
+const showFirstPostPrompt = () => {
+  const overlay = el("div", { class: "first-post-overlay" });
+  const card = el("div", { class: "first-post-card" },
+    el("div", { class: "first-post-sparkles" }, "✦  ✧  ✦"),
+    el("div", { class: "first-post-orbit" }, el("i", { class: "ri-quill-pen-line" })),
+    el("h2", {}, "Your Orbit is ready"),
+    el("p", {}, "Share something that feels like you and start your first conversation."),
+    el("div", { class: "first-post-actions" },
+      el("button", { class: "btn primary", onclick: () => { overlay.remove(); openCreatePost(); } }, el("i", { class: "ri-add-line" }), " Create your first post"),
+      el("button", { class: "btn ghost", onclick: () => overlay.remove() }, "I’ll do it later"),
+    ),
+  );
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+};
 
 const showOnboardingModal = () => {
   const overlay = el("div", { class: "onboard-overlay" });
