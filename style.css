@@ -3977,6 +3977,21 @@ body > [class^="goog"] {
 .post-share-target.selected .post-share-check { color: #fff; background: var(--primary); border-color: var(--primary); }
 .post-share-loading, .post-share-empty { padding: 24px 10px; text-align: center; color: var(--text-mute); font-size: 13px; }
 .post-share-loading i { animation: spin 1s linear infinite; display: inline-block; }
+.chat-forward-overlay {
+  position: fixed; inset: 0; z-index: 9150; display: flex; align-items: center;
+  justify-content: center; padding: 18px; background: rgba(5, 7, 18, .7);
+  backdrop-filter: blur(12px); opacity: 0; transition: opacity .22s ease;
+}
+.chat-forward-overlay.is-visible { opacity: 1; }
+.chat-forward-card {
+  width: min(560px, 100%); max-height: min(760px, calc(100vh - 28px));
+  overflow: auto; padding: 20px; border: 1px solid var(--line);
+  border-radius: 24px; background: var(--bg-elev-1, var(--bg));
+  box-shadow: 0 28px 90px rgba(0,0,0,.45);
+  transform: translateY(18px) scale(.98);
+  transition: transform .28s cubic-bezier(.22,1,.36,1);
+}
+.chat-forward-overlay.is-visible .chat-forward-card { transform: translateY(0) scale(1); }
 .save-post-btn.saved { color: var(--primary); }
 .orbit-burst { animation: orbitBurst .48s cubic-bezier(.2,1.5,.4,1); }
 .save-burst { animation: saveBurst .42s cubic-bezier(.2,1.6,.4,1); }
@@ -4031,7 +4046,12 @@ body > [class^="goog"] {
 .forwarded-post-author { display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700; margin-bottom: 5px; }
 .forwarded-post-text { color: var(--text-dim); font-size: 12px; line-height: 1.45; white-space: pre-wrap; }
 .forwarded-post-media { display: block; width: 100%; max-height: 180px; margin-top: 8px; border-radius: 8px; object-fit: cover; }
+.forwarded-message-card { margin: 8px 0 4px; padding: 11px; border-left: 3px solid var(--primary); border-radius: 10px; background: rgba(108,99,255,.1); max-width: 280px; }
+.forwarded-message-label { color: var(--primary); font-size: 11px; font-weight: 800; margin-bottom: 7px; }
+.forwarded-message-text { color: var(--text); font-size: 13px; line-height: 1.45; white-space: pre-wrap; }
+.forwarded-message-media { display: block; width: 100%; max-height: 180px; margin-top: 8px; border-radius: 8px; object-fit: cover; }
 @media (max-width: 520px) {
-  .post-share-card, .onboarding-guide-card { border-radius: 22px 22px 0 0; }
+  .post-share-card, .chat-forward-card, .onboarding-guide-card { border-radius: 22px 22px 0 0; }
   .post-share-overlay, .onboarding-guide-overlay { padding: 0; }
+  .chat-forward-overlay { align-items: flex-end; padding: 0; }
 }

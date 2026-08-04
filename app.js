@@ -2131,12 +2131,14 @@ const openPostShareModal = async (p, author) => {
     const targets = [...list.querySelectorAll(".post-share-target.selected")].map((row) => row._target).filter(Boolean);
     try {
       const body = {
+        authorUid: state.uid,
         type: "forwarded",
         forwarded: true,
         forwardPostId: p.id,
         forwardText: p.text || "",
         forwardAuthorUid: p.authorUid,
         forwardAuthorName: author?.name || "Orbit member",
+        forwardKind: "post",
         text: p.text || "Shared a post",
         media: p.media || null,
         createdAt: serverTimestamp(),

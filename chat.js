@@ -940,26 +940,59 @@ const renderMessages = async (root, snap, { isGroup, chatId, peer }) => {
       ));
     }
 
-    if (m.forwarded || m.type === "forwarded") {
+    if (isForwarded) {
       const forwardedAuthor = m.forwardAuthorName || "Orbit member";
-      const forwardedCard = el("div", { class: "forwarded-post-card" },
-        el("div", { class: "forwarded-post-label" },
-          el("i", { class: "ri-share-forward-line" }), " Forwarded post"),
+      const forwardMedia = Array.isArray(m.media) ? m.media[0] : m.media;
+      const isForwardedPost = m.forwardKind === "post" || Boolean(m.forwardPostId);
+      const forwardedCard = el("div", {
+        class: isForwardedPost ? "forwarded-post-card" : "forwarded-message-card",
+      },
+        el("div", { class: isForwardedPost ? "forwarded-post-label" : "forwarded-message-label" },
+          el("i", { class: "ri-share-forward-line" }),
+          isForwardedPost ? " Forwarded post" : " Forwarded message"),
         el("div", { class: "forwarded-post-author" },
           el("i", { class: "ri-planet-line" }), forwardedAuthor),
         m.forwardText
-          ? el("div", { class: "forwarded-post-text" }, m.forwardText.slice(0, 220))
+          ? el("div", {
+              class: isForwardedPost ? "forwarded-post-text" : "forwarded-message-text",
+            }, m.forwardText.slice(0, 220))
           : null,
       );
-      const forwardMedia = Array.isArray(m.media) ? m.media[0] : m.media;
+
       if (forwardMedia?.url) {
-        forwardedCard.appendChild(
-          forwardMedia.type === "video"
-            ? el("video", { class: "forwarded-post-media", src: forwardMedia.url, muted: "", playsinline: "", controls: "" })
-            : el("img", { class: "forwarded-post-media", src: forwardMedia.url, loading: "lazy" }),
-        );
+        if (isForwardedPost) {
+          // Shared posts are only a link preview in chat. Do not expose native
+          // video controls or allow the preview to start playing here.
+          forwardedCard.appendChild(
+            forwardMedia.type === "video"
+              ? el("img", {
+                  class: "forwarded-post-media",
+                  src: _cloudPoster(forwardMedia.url),
+                  loading: "lazy",
+                  alt: "Shared post video",
+                })
+              : el("img", {
+                  class: "forwarded-post-media",
+                  src: forwardMedia.url,
+                  loading: "lazy",
+                  alt: "Shared post media",
+                }),
+          );
+        } else if (forwardMedia.type === "video") {
+          forwardedCard.appendChild(buildVideoPlayer(forwardMedia.url));
+        } else if (forwardMedia.type === "audio") {
+          forwardedCard.appendChild(buildVoicePlayer(forwardMedia.url));
+        } else {
+          forwardedCard.appendChild(el("img", {
+            class: "forwarded-message-media",
+            src: forwardMedia.url,
+            loading: "lazy",
+            alt: "Forwarded message media",
+          }));
+        }
       }
-      if (m.forwardPostId) {
+
+      if (isForwardedPost && m.forwardPostId) {
         forwardedCard.onclick = () => { location.hash = `#post/${m.forwardPostId}`; };
         forwardedCard.classList.add("is-link");
       }
@@ -1112,6 +1145,10 @@ const renderMessages = async (root, snap, { isGroup, chatId, peer }) => {
     const actions = el("div", { class: "msg-actions" },
       el("button", { title: "React", onclick: (e) => openReactPicker(e, m, isGroup, chatId) }, el("i", { class: "ri-emotion-line" })),
       el("button", { title: "Reply", onclick: () => setReply(m, author?.name) }, el("i", { class: "ri-reply-line" })),
+      el("button", {
+        title: "Forward",
+        onclick: () => openForwardMessageModal(m, { author, isGroup, chatId }),
+      }, el("i", { class: "ri-share-forward-line" })),
       el("button", { title: "Copy", onclick: () => { navigator.clipboard.writeText(m.text || ""); toast("Copied"); } }, el("i", { class: "ri-file-copy-line" })),
       fromMe && !m.deleted ? el("button", { title: "Edit", onclick: () => editMessage(m, isGroup, chatId) }, el("i", { class: "ri-edit-line" })) : null,
       fromMe ? el("button", { title: "Delete", onclick: () => deleteMessage(m, isGroup, chatId) }, el("i", { class: "ri-delete-bin-line" })) : null,
@@ -1165,6 +1202,191 @@ const setReply = (m, authorName) => {
 const clearReply = () => {
   replyingTo = null;
   $("#replyPreview")?.classList.add("hidden");
+};
+
+const openForwardMessageModal = async (message, source = {}) => {
+  const overlay = el("div", { class: "chat-forward-overlay" });
+  const card = el("div", { class: "chat-forward-card" });
+  const selected = new Set();
+  const list = el("div", { class: "post-share-list" },
+    el("div", { class: "post-share-loading" },
+      el("i", { class: "ri-loader-4-line" }), " Loading your chats…"),
+  );
+  const sendBtn = el("button", {
+    class: "btn primary block",
+    disabled: true,
+  }, el("i", { class: "ri-share-forward-line" }), " Forward message");
+  const close = () => {
+    overlay.classList.remove("is-visible");
+    setTimeout(() => overlay.remove(), 220);
+  };
+  const updateSendState = () => { sendBtn.disabled = selected.size === 0; };
+
+  const addTarget = (target) => {
+    const row = el("button", { class: "post-share-target", type: "button" });
+    const check = el("span", { class: "post-share-check" },
+      el("i", { class: "ri-check-line" }));
+    row.append(
+      target.kind === "group"
+        ? el("img", {
+            class: "avatar sm",
+            src: target.iconUrl || target.photoURL ||
+              `https://api.dicebear.com/7.x/shapes/svg?seed=${target.id}`,
+          })
+        : el("img", { class: "avatar sm", src: avatarFor(target.peer) }),
+      el("span", { class: "post-share-target-info" },
+        el("strong", {}, target.name || "Chat"),
+        el("small", {}, target.kind === "group"
+          ? `${(target.members || []).length} members`
+          : `@${target.peer?.username || "user"}`),
+      ),
+      check,
+    );
+    row.onclick = () => {
+      if (selected.has(target.key)) {
+        selected.delete(target.key);
+        row.classList.remove("selected");
+      } else {
+        selected.add(target.key);
+        row.classList.add("selected");
+      }
+      updateSendState();
+    };
+    row._target = target;
+    list.appendChild(row);
+  };
+
+  sendBtn.onclick = async () => {
+    sendBtn.disabled = true;
+    sendBtn.innerHTML = '<i class="ri-loader-4-line"></i> Forwarding…';
+    const targets = [...list.querySelectorAll(".post-share-target.selected")]
+      .map((row) => row._target)
+      .filter(Boolean);
+    const originalAuthor = source.author || await fetchUser(message.authorUid);
+    const originalText = message.text ||
+      (message.media ? "Media message" :
+        message.stickerName ? `Sticker: ${message.stickerName}` : "");
+    const body = {
+      authorUid: state.uid,
+      type: "forwarded",
+      forwarded: true,
+      forwardKind: "message",
+      forwardMessageId: message.id || "",
+      forwardAuthorUid: message.authorUid || "",
+      forwardAuthorName: originalAuthor?.name || "Orbit member",
+      forwardText: originalText,
+      media: message.media || null,
+      createdAt: serverTimestamp(),
+      readBy: [state.uid],
+    };
+
+    try {
+      await Promise.all(targets.map(async (target) => {
+        if (target.kind === "group") {
+          await addDoc(collection(db, "groups", target.id, "messages"), body);
+          await updateDoc(doc(db, "groups", target.id), {
+            lastMessage: `Forwarded a message from ${originalAuthor?.name || "an Orbit member"}`,
+            lastMessageAt: serverTimestamp(),
+          }).catch(() => {});
+        } else {
+          const chatId = [state.uid, target.peer.uid].sort().join("__");
+          await addDoc(collection(db, "chats", chatId, "messages"), body);
+          await Promise.all([
+            setDoc(doc(db, "users", state.uid, "chats", chatId), {
+              peerUid: target.peer.uid,
+              lastMessage: "Forwarded a message",
+              lastFromMe: true,
+              unread: 0,
+              updatedAt: serverTimestamp(),
+              createdAt: serverTimestamp(),
+            }, { merge: true }),
+            setDoc(doc(db, "users", target.peer.uid, "chats", chatId), {
+              peerUid: state.uid,
+              lastMessage: "Forwarded a message",
+              lastFromMe: false,
+              unread: increment(1),
+              updatedAt: serverTimestamp(),
+              createdAt: serverTimestamp(),
+            }, { merge: true }),
+          ]);
+          writeNotif(target.peer.uid, "message", {
+            text: `${state.me?.name || "Someone"} forwarded a message`,
+          }).catch(() => {});
+        }
+      }));
+      toast(`Forwarded to ${targets.length} chat${targets.length === 1 ? "" : "s"}`);
+      close();
+    } catch {
+      toast("Could not forward this message");
+      sendBtn.disabled = false;
+      sendBtn.innerHTML = '<i class="ri-share-forward-line"></i> Forward message';
+    }
+  };
+
+  card.append(
+    el("div", { class: "post-share-head" },
+      el("div", {},
+        el("h3", {}, "Forward message"),
+        el("p", {}, "Choose one or more chats"),
+      ),
+      el("button", { class: "icon-btn", onclick: close },
+        el("i", { class: "ri-close-line" })),
+    ),
+    el("div", { class: "post-share-preview" },
+      el("i", { class: "ri-share-forward-line" }),
+      el("span", {}, (message.text || "Media message").slice(0, 120)),
+    ),
+    list,
+    sendBtn,
+  );
+  overlay.appendChild(card);
+  overlay.onclick = (event) => { if (event.target === overlay) close(); };
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add("is-visible"));
+
+  try {
+    const [groupSnap, dmSnap] = await Promise.all([
+      getDocs(query(
+        collection(db, "groups"),
+        where("members", "array-contains", state.uid),
+        limit(80),
+      )),
+      getDocs(query(
+        collection(db, "users", state.uid, "chats"),
+        orderBy("updatedAt", "desc"),
+        limit(80),
+      )),
+    ]);
+    list.innerHTML = "";
+    groupSnap.docs.forEach((groupDoc) => {
+      const target = {
+        id: groupDoc.id,
+        kind: "group",
+        key: `group:${groupDoc.id}`,
+        ...groupDoc.data(),
+      };
+      addTarget(target);
+    });
+    const peers = await Promise.all(dmSnap.docs.map(async (chatDoc) => {
+      const data = chatDoc.data();
+      const peer = await fetchUser(data.peerUid);
+      return peer ? {
+        kind: "dm",
+        key: `dm:${peer.uid}`,
+        name: peer.name || "User",
+        peer,
+      } : null;
+    }));
+    peers.filter(Boolean).forEach(addTarget);
+    if (!list.children.length) {
+      list.appendChild(el("div", { class: "post-share-empty" },
+        "Join a group or start a chat to forward messages."));
+    }
+  } catch {
+    list.innerHTML = "";
+    list.appendChild(el("div", { class: "post-share-empty" },
+      "Could not load your chats."));
+  }
 };
 
 const editMessage = async (m, isGroup, chatId) => {
