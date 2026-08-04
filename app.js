@@ -810,6 +810,9 @@ export const toast = (msg, ms = 2200) => {
 export const avatarFor = (u) =>
   u?.photoURL || `https://api.dicebear.com/7.x/shapes/svg?seed=${encodeURIComponent(u?.uid || u?.username || "x")}`;
 
+const profileCoverFor = (u) =>
+  u?.coverURL || u?.coverUrl || u?.bannerURL || u?.bannerUrl || "";
+
 export const fetchUser = async (uid) => {
   if (!uid) return null;
   if (state.cache.users.has(uid)) return state.cache.users.get(uid);
@@ -2809,7 +2812,6 @@ const renderPostDetail = async (root, postId) => {
   const back = el("div", { class: "detail-topbar" },
     el("button", { class: "icon-btn", onclick: () => history.back() },
       el("i", { class: "ri-arrow-left-line" }), "Back"),
-    el("span", { class: "detail-title" }, "Post"),
   );
   root.appendChild(back);
 
@@ -2823,6 +2825,26 @@ const renderPostDetail = async (root, postId) => {
   }
   const p = { id: snap.id, ...snap.data() };
   const author = await fetchUser(p.authorUid);
+
+  back.append(
+    el("div", { class: "detail-author" },
+      el("img", {
+        class: "avatar xs",
+        src: avatarFor(author),
+        alt: `${author?.name || "Post owner"} profile picture`,
+        onclick: () => { location.hash = `#profile/${author?.uid}`; },
+      }),
+      el("div", { class: "detail-author-copy" },
+        el("strong", {}, author?.name || "User"),
+        el("span", {}, `@${author?.username || "user"}`),
+      ),
+    ),
+    el("div", { class: "detail-topbar-stats" },
+      el("span", {}, el("i", { class: "ri-fire-line" }), ` ${p.orbitCount || 0}`),
+      el("span", {}, el("i", { class: "ri-eye-line" }), ` ${p.views || 0}`),
+      el("span", {}, el("i", { class: "ri-chat-1-line" }), ` ${p.commentCount || 0}`),
+    ),
+  );
 
   // Render the post card with media stacked vertically in detail view
   root.appendChild(renderPost(p, author, { hideComments: true, detailView: true }));
@@ -3771,79 +3793,114 @@ const renderProfile = async (root, uid) => {
 
   // Live-update follower count in-place — no full page re-render on follow/unfollow
   const followersCountEl = el("strong", {}, String((u.followers || []).length));
+  const postsCountEl = el("strong", {}, String(u.postCount || 0));
 
   let profileFollowBtn = null;
+  let compactFollowBtn = null;
+  const syncFollowButtons = () => {
+    [profileFollowBtn, compactFollowBtn].filter(Boolean).forEach((button) => {
+      button.textContent = _iFollow ? "Following" : "Follow";
+      button.className = `btn ${_iFollow ? "ghost" : "primary"}`;
+    });
+  };
+  const followProfile = async () => {
+    const prev = _iFollow;
+    _iFollow = !_iFollow;
+    syncFollowButtons();
+    const curCount = parseInt(followersCountEl.textContent) || 0;
+    followersCountEl.textContent = String(Math.max(0, curCount + (_iFollow ? 1 : -1)));
+    const meRef = doc(db, "users", state.uid);
+    const themRef = doc(db, "users", uid);
+    const batch = writeBatch(db);
+    if (_iFollow) {
+      batch.update(meRef, { following: arrayUnion(uid) });
+      batch.update(themRef, { followers: arrayUnion(state.uid) });
+    } else {
+      batch.update(meRef, { following: arrayRemove(uid) });
+      batch.update(themRef, { followers: arrayRemove(state.uid) });
+    }
+    await batch.commit().catch(() => {
+      _iFollow = prev;
+      syncFollowButtons();
+      followersCountEl.textContent = String(curCount);
+      toast("Failed to update follow status");
+    });
+    state.cache.users.delete(uid);
+    state.cache.users.delete(state.uid);
+    if (state.me) {
+      state.me.following = _iFollow
+        ? [...new Set([...(state.me.following || []), uid])]
+        : (state.me.following || []).filter((x) => x !== uid);
+    }
+    if (_iFollow) {
+      writeNotif(uid, "follow", {}).catch(() => {});
+      import("./notifications.js").then(({ notifyUser }) =>
+        notifyUser(uid, state.me?.name || "Someone", "started following you", "/#profile/" + state.uid, state.me?.photoURL || "")
+      ).catch(() => {});
+    }
+    if (u.privateAccount && _iFollow) router();
+  };
   if (!isMe) {
     profileFollowBtn = el("button", { class: `btn ${_iFollow ? "ghost" : "primary"}` }, _iFollow ? "Following" : "Follow");
-    profileFollowBtn.addEventListener("click", async () => {
-      const prev = _iFollow;
-      _iFollow = !_iFollow;
-      profileFollowBtn.textContent = _iFollow ? "Following" : "Follow";
-      profileFollowBtn.className = `btn ${_iFollow ? "ghost" : "primary"}`;
-      const curCount = parseInt(followersCountEl.textContent) || 0;
-      followersCountEl.textContent = String(Math.max(0, curCount + (_iFollow ? 1 : -1)));
-      const meRef = doc(db, "users", state.uid);
-      const themRef = doc(db, "users", uid);
-      const batch = writeBatch(db);
-      if (_iFollow) {
-        batch.update(meRef, { following: arrayUnion(uid) });
-        batch.update(themRef, { followers: arrayUnion(state.uid) });
-      } else {
-        batch.update(meRef, { following: arrayRemove(uid) });
-        batch.update(themRef, { followers: arrayRemove(state.uid) });
-      }
-      await batch.commit().catch(() => {
-        // Revert optimistic update on failure
-        _iFollow = prev;
-        profileFollowBtn.textContent = _iFollow ? "Following" : "Follow";
-        profileFollowBtn.className = `btn ${_iFollow ? "ghost" : "primary"}`;
-        followersCountEl.textContent = String(curCount);
-        toast("Failed to update follow status");
-      });
-      state.cache.users.delete(uid);
-      state.cache.users.delete(state.uid);
-      if (state.me) {
-        state.me.following = _iFollow
-          ? [...new Set([...(state.me.following || []), uid])]
-          : (state.me.following || []).filter((x) => x !== uid);
-      }
-      if (_iFollow) {
-        writeNotif(uid, "follow", {}).catch(() => {});
-        import("./notifications.js").then(({ notifyUser }) =>
-          notifyUser(uid, state.me?.name || "Someone", "started following you", "/#profile/" + state.uid, state.me?.photoURL || "")
-        ).catch(() => {});
-      }
-      if (u.privateAccount && _iFollow) router();
-    });
+    profileFollowBtn.addEventListener("click", followProfile);
   }
 
-  root.appendChild(el("div", { class: "profile-head" },
-    el("img", { class: "avatar xl", src: avatarFor(u) }),
-    el("div", {},
-      el("div", { class: "name-row" }, u.name,
-        u.verified ? el("span", { class: "verified lg", title: "Location verified", html: '<i class="ri-check-line"></i>' }) : null,
-        u.isPro ? el("span", { class: "pro-name-badge" }, el("i", { class: "ri-vip-crown-fill" }), " Pro") : null),
-      el("div", { class: "uname" }, "@" + u.username),
-      el("div", { class: "stats" },
-        el("div", { class: "stat" }, followersCountEl, el("span", {}, "followers")),
-        el("div", { class: "stat" }, el("strong", {}, String((u.following || []).length)), el("span", {}, "following")),
-      ),
-      u.bio ? el("div", { class: "bio", text: u.bio }) : null,
-      el("div", { class: "profile-actions" },
-        isMe
-          ? el("button", { class: "btn ghost", onclick: () => openProfileEditModal() }, el("i", { class: "ri-edit-line" }), "Edit profile")
-          : profileFollowBtn,
-        !isMe && u.allowMessages !== false ? el("button", { class: "btn ghost", onclick: () => location.hash = `#chats/${uid}` },
-          el("i", { class: "ri-chat-3-line" }), "Message") : null,
-        isMe && !u.verified ? el("button", { class: "btn ghost", onclick: requestLocationVerification },
-          el("i", { class: "ri-shield-check-line" }), "Get verified") : null,
+  const profileShell = el("div", { class: "profile-shell" });
+  root.appendChild(profileShell);
+  const profileHead = el("div", { class: "profile-head" },
+    profileCoverFor(u)
+      ? el("div", { class: "profile-cover" },
+          el("img", { src: profileCoverFor(u), alt: `${u.name || "Profile"} cover photo` }))
+      : el("div", { class: "profile-cover profile-cover-empty" }),
+    el("div", { class: "profile-head-main" },
+      el("img", { class: "avatar xl profile-main-avatar", src: avatarFor(u), alt: `${u.name || "Profile"} profile picture` }),
+      el("div", { class: "profile-head-copy" },
+        el("div", { class: "name-row" }, u.name,
+          u.verified ? el("span", { class: "verified lg", title: "Location verified", html: '<i class="ri-check-line"></i>' }) : null,
+          u.isPro ? el("span", { class: "pro-name-badge" }, el("i", { class: "ri-vip-crown-fill" }), " Pro") : null),
+        el("div", { class: "uname" }, "@" + u.username),
+        el("div", { class: "stats" },
+          el("div", { class: "stat" }, postsCountEl, el("span", {}, "posts")),
+          el("div", { class: "stat" }, followersCountEl, el("span", {}, "followers")),
+          el("div", { class: "stat" }, el("strong", {}, String((u.following || []).length)), el("span", {}, "following")),
+        ),
+        u.bio ? el("div", { class: "bio", text: u.bio }) : null,
+        el("div", { class: "profile-actions" },
+          isMe
+            ? el("button", { class: "btn ghost", onclick: () => openProfileEditModal() }, el("i", { class: "ri-edit-line" }), "Edit profile")
+            : profileFollowBtn,
+          !isMe && u.allowMessages !== false ? el("button", { class: "btn ghost", onclick: () => location.hash = `#chats/${uid}` },
+            el("i", { class: "ri-chat-3-line" }), "Message") : null,
+          isMe && !u.verified ? el("button", { class: "btn ghost", onclick: requestLocationVerification },
+            el("i", { class: "ri-shield-check-line" }), "Get verified") : null,
+        ),
       ),
     ),
-  ));
+  );
+  profileShell.appendChild(profileHead);
+
+  const compactPostsCountEl = el("span", {}, `${postsCountEl.textContent} posts`);
+  const compactBar = el("div", { class: "profile-compact-bar" },
+    el("img", { class: "avatar sm", src: avatarFor(u), alt: `${u.name || "Profile"} profile picture` }),
+    el("div", { class: "profile-compact-name" },
+      el("strong", {}, u.name || "User"),
+      compactPostsCountEl,
+    ),
+    el("span", { class: "profile-compact-count" }, `${postsCountEl.textContent} posts`),
+  );
+  if (!isMe) {
+    compactFollowBtn = el("button", { class: `btn compact-follow ${_iFollow ? "ghost" : "primary"}` }, _iFollow ? "Following" : "Follow");
+    compactFollowBtn.addEventListener("click", followProfile);
+    compactBar.appendChild(compactFollowBtn);
+  }
+  profileShell.appendChild(compactBar);
+  const onProfileScroll = () => profileShell.classList.toggle("profile-scrolled", root.scrollTop > 170);
+  root.addEventListener("scroll", onProfileScroll, { passive: true });
+  profileShell._cleanupScroll = () => root.removeEventListener("scroll", onProfileScroll);
 
   // Feature: Pro section — rendered directly below header, always visible
   const proSection = el("div", { class: "profile-pro-section" });
-  root.appendChild(proSection);
+  profileShell.appendChild(proSection);
   import("./features.js").then((m) => {
     if (u.isPro) {
       m.renderOrbitScoreBadge(proSection, uid);
@@ -3864,9 +3921,9 @@ const renderProfile = async (root, uid) => {
     el("button", { class: "profile-tab", "data-ptab": "mutuals" },
       el("i", { class: "ri-team-line" }), " Mutuals"),
   );
-  root.appendChild(tabs);
+  profileShell.appendChild(tabs);
   const body = el("div", {});
-  root.appendChild(body);
+  profileShell.appendChild(body);
 
   if (!canViewPrivateProfile) {
     body.appendChild(el("div", { class: "private-profile-notice" },
@@ -3913,6 +3970,9 @@ const renderProfile = async (root, uid) => {
             const posts = snap.docs
               .map((d) => ({ id: d.id, ...d.data() }))
               .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+            postsCountEl.textContent = String(posts.length);
+            compactPostsCountEl.textContent = `${posts.length} posts`;
+            compactBar.querySelector(".profile-compact-count").textContent = `${posts.length} posts`;
             _profFeed = el("div", { class: "profile-feed-list" }); body.appendChild(_profFeed);
             posts.forEach((p) => {
               const card = renderPost(p, u, { hideComments: true });
@@ -3934,6 +3994,9 @@ const renderProfile = async (root, uid) => {
               }
             } else if (change.type === "added") {
               const p = { id: change.doc.id, ...change.doc.data() };
+              postsCountEl.textContent = String((parseInt(postsCountEl.textContent) || 0) + 1);
+              compactPostsCountEl.textContent = `${postsCountEl.textContent} posts`;
+              compactBar.querySelector(".profile-compact-count").textContent = `${postsCountEl.textContent} posts`;
               const card = renderPost(p, u, { hideComments: true });
               _postEls.set(p.id, card);
               _profFeed.prepend(card);
@@ -4015,6 +4078,9 @@ const openProfileEditModal = () => {
   const ui = document.getElementById("editUsername"); if (ui) ui.value = state.me.username || "";
   const bi = document.getElementById("editBio");      if (bi) bi.value = state.me.bio || "";
   const av = document.getElementById("editAvatar");   if (av) av.src = state.me.photoURL || avatarFor(state.me);
+  const cover = document.getElementById("editCover"); if (cover) {
+    cover.src = profileCoverFor(state.me) || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='180' viewBox='0 0 640 180'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' x2='1'%3E%3Cstop stop-color='%237c5cff'/%3E%3Cstop offset='1' stop-color='%23ff5cae'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='640' height='180' fill='url(%23g)'/%3E%3C/svg%3E";
+  }
   modal.classList.remove("hidden");
   modal.style.display = "flex";
 };
@@ -5645,12 +5711,20 @@ $("#globalSearch").addEventListener("keydown", async (e) => {
   const save  = document.getElementById("editProfileSave");
   if (!modal || !save) return;
   let pendingAvFile = null;
-  const closeModal = () => { modal.style.display = "none"; modal.classList.add("hidden"); pendingAvFile = null; };
+  let pendingCoverFile = null;
+  const closeModal = () => { modal.style.display = "none"; modal.classList.add("hidden"); pendingAvFile = null; pendingCoverFile = null; };
   document.getElementById("profileEditClose")?.addEventListener("click", closeModal);
   document.getElementById("editProfileCancel")?.addEventListener("click", closeModal);
   modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
   document.getElementById("editAvatarWrap")?.addEventListener("click", () => document.getElementById("editAvatarInput")?.click());
   document.getElementById("editAvatarInput")?.addEventListener("change", (e) => { const f = e.target.files?.[0]; if (!f) return; pendingAvFile = f; const av = document.getElementById("editAvatar"); if (av) av.src = URL.createObjectURL(f); });
+  document.getElementById("editCoverWrap")?.addEventListener("click", () => document.getElementById("editCoverInput")?.click());
+  document.getElementById("editCoverInput")?.addEventListener("change", (e) => {
+    const f = e.target.files?.[0]; if (!f) return;
+    pendingCoverFile = f;
+    const cover = document.getElementById("editCover");
+    if (cover) cover.src = URL.createObjectURL(f);
+  });
   save.addEventListener("click", async () => {
     const nameV = (document.getElementById("editName")?.value || "").trim();
     const userV = (document.getElementById("editUsername")?.value || "").trim().toLowerCase().replace(/[^a-z0-9_]/g, "");
@@ -5660,6 +5734,7 @@ $("#globalSearch").addEventListener("keydown", async (e) => {
     try {
       const updates = { name: nameV, bio: bioV, username: userV || state.me.username };
       if (pendingAvFile) { toast("Uploading photo..."); const up = await uploadToCloudinary(pendingAvFile, "image"); updates.photoURL = up.url; }
+      if (pendingCoverFile) { toast("Uploading cover photo..."); const up = await uploadToCloudinary(pendingCoverFile, "image"); updates.coverURL = up.url; }
       await updateDoc(doc(db, "users", state.uid), updates);
       toast("Profile updated"); closeModal(); router();
     } catch (err) { toast("Save failed: " + (err.message || "unknown")); }
