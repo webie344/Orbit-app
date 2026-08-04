@@ -449,15 +449,17 @@ const _injectVVStyles = () => {
       position: fixed; inset: 0; z-index: 2000;
       background: rgba(0,0,0,0.93);
       display: flex; align-items: center; justify-content: center;
+      overflow-y: auto;
       animation: vvFadeIn .18s ease;
     }
     @keyframes vvFadeIn { from { opacity:0; } to { opacity:1; } }
     .vv-modal {
       position: relative;
       display: flex; flex-direction: column; align-items: center;
-      width: 100%; max-width: 900px; max-height: 100dvh;
+      width: 100%; max-width: 900px; max-height: none;
       padding: 0 48px;
       box-sizing: border-box;
+      overflow: visible;
     }
     .vv-header {
       width: 100%; display: flex; align-items: center;
@@ -480,13 +482,13 @@ const _injectVVStyles = () => {
     .vv-close:hover { background: rgba(255,255,255,0.22); }
     .vv-media {
       width: 100%; display: flex; align-items: center; justify-content: center;
-      flex: 1; overflow: hidden;
+      flex: none; overflow: visible;
     }
     .vv-media .vid-player {
-      width: 100%; max-height: 78dvh; border-radius: 10px; overflow: hidden;
+      width: 100%; border-radius: 10px; overflow: hidden;
     }
     .vv-media .vid-player video {
-      width: 100%; max-height: 78dvh; object-fit: contain; background: #000;
+      width: 100%; height: auto; max-height: none; object-fit: contain; background: transparent;
     }
     .vv-media img {
       max-width: 100%; max-height: 78dvh;

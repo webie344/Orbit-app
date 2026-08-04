@@ -594,11 +594,12 @@ textarea { resize: vertical; min-height: 80px; }
 }
 .tfb-media video {
   width: 100%;
-  max-height: 480px;
+  height: auto;
+  max-height: none;
   object-fit: contain;
   border-radius: 10px;
   display: block;
-  background: #000;
+  background: transparent;
 }
 /* Carousel inside tfb-media inherits the border-radius */
 .tfb-media .carousel-slide img {
@@ -608,13 +609,14 @@ textarea { resize: vertical; min-height: 80px; }
 }
 .tfb-media .carousel-slide video {
   border-radius: 0;
-  max-height: 480px;
+  height: auto;
+  max-height: none;
   object-fit: contain;
-  background: #000;
+  background: transparent;
 }
 /* Video player inside tfb-media */
 .tfb-media .vid-player { border-radius: 10px; overflow: hidden; background: #000; }
-.tfb-media .vid-player video { max-height: 480px; object-fit: contain; }
+.tfb-media .vid-player video { height: auto; max-height: none; object-fit: contain; background: transparent; }
 
 /* ── Actions row ── */
 .tfb-actions {
@@ -758,7 +760,7 @@ textarea { resize: vertical; min-height: 80px; }
 }
 .post-media img { width: 100%; display: block; max-height: 520px; object-fit: cover; }
 .post-media .vid-player { width: 100%; border-radius: 14px; overflow: hidden; background: #000; }
-.post-media .vid-player video { width: 100%; max-height: 520px; object-fit: contain; display: block; }
+.post-media .vid-player video { width: 100%; height: auto; max-height: none; object-fit: contain; display: block; background: transparent; }
 .post-actions {
   display: flex; align-items: center; gap: 4px;
   color: var(--text-dim); flex-wrap: nowrap;
@@ -823,7 +825,7 @@ textarea { resize: vertical; min-height: 80px; }
 .post-media.carousel { position: relative; }
 .carousel-slide { width: 100%; }
 .carousel-slide img { width: 100%; max-height: 460px; object-fit: cover; border-radius: 0; display: block; }
-.carousel-slide video { width: 100%; max-height: 480px; object-fit: contain; border-radius: 0; display: block; background: #000; }
+.carousel-slide video { width: 100%; height: auto; max-height: none; object-fit: contain; border-radius: 0; display: block; background: transparent; }
 .carousel-arrow {
   position: absolute; top: 50%; transform: translateY(-50%);
   background: rgba(0,0,0,.55); color: white; border-radius: 50%;
@@ -1607,8 +1609,9 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   background: #000; user-select: none;
 }
 .vid-player video {
-  width: 100%; display: block;
-  max-height: 480px; object-fit: cover;
+  width: 100%; height: auto; display: block;
+  max-height: none; object-fit: contain;
+  background: transparent;
 }
 .vp-overlay {
   position: absolute; inset: 0;
@@ -3175,9 +3178,11 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .cmt-media video {
   width: 100%;
   max-width: 200px;
-  max-height: 150px;
-  object-fit: cover;
+  height: auto;
+  max-height: none;
+  object-fit: contain;
   display: block;
+  background: transparent;
 }
 
 /* Video thumbnail: play overlay */
@@ -4117,11 +4122,11 @@ body > [class^="goog"] {
 .forwarded-post-label { color: var(--primary); font-size: 11px; font-weight: 800; margin-bottom: 7px; }
 .forwarded-post-author { display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700; margin-bottom: 5px; }
 .forwarded-post-text { color: var(--text-dim); font-size: 12px; line-height: 1.45; white-space: pre-wrap; }
-.forwarded-post-media { display: block; width: 100%; max-height: 180px; margin-top: 8px; border-radius: 8px; object-fit: cover; }
+.forwarded-post-media { display: block; width: 100%; height: auto; max-height: none; margin-top: 8px; border-radius: 8px; object-fit: contain; }
 .forwarded-message-card { margin: 8px 0 4px; padding: 11px; border-left: 3px solid var(--primary); border-radius: 10px; background: rgba(108,99,255,.1); max-width: 280px; }
 .forwarded-message-label { color: var(--primary); font-size: 11px; font-weight: 800; margin-bottom: 7px; }
 .forwarded-message-text { color: var(--text); font-size: 13px; line-height: 1.45; white-space: pre-wrap; }
-.forwarded-message-media { display: block; width: 100%; max-height: 180px; margin-top: 8px; border-radius: 8px; object-fit: cover; }
+.forwarded-message-media { display: block; width: 100%; height: auto; max-height: none; margin-top: 8px; border-radius: 8px; object-fit: contain; }
 @media (max-width: 520px) {
   .post-share-card, .chat-forward-card, .onboarding-guide-card { border-radius: 22px 22px 0 0; }
   .post-share-overlay, .onboarding-guide-overlay { padding: 0; }
