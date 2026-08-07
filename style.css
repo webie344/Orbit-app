@@ -4132,3 +4132,60 @@ body > [class^="goog"] {
   .post-share-overlay, .onboarding-guide-overlay { padding: 0; }
   .chat-forward-overlay { align-items: flex-end; padding: 0; }
 }
+
+/* External post sharing */
+.post-external-share {
+  padding: 12px;
+  margin: 0 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--bg-elev-2);
+}
+.post-external-share-title {
+  margin: 0 0 10px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 700;
+}
+.post-external-share-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.post-external-share-btn {
+  min-width: 0;
+  min-height: 64px;
+  padding: 8px 5px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-elev-1, var(--bg));
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font: inherit;
+  font-size: 11px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform .16s ease, border-color .16s ease, background .16s ease;
+}
+.post-external-share-btn:hover {
+  transform: translateY(-2px);
+  border-color: var(--primary);
+  background: var(--hover);
+}
+.post-external-share-btn i { color: var(--primary); font-size: 21px; }
+.post-external-share-btn.whatsapp i { color: #25d366; }
+.post-external-share-btn.telegram i { color: #229ed9; }
+.post-external-share small {
+  display: block;
+  margin-top: 10px;
+  color: var(--text-mute);
+  font-size: 10px;
+  line-height: 1.45;
+}
+@media (max-width: 420px) {
+  .post-external-share-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

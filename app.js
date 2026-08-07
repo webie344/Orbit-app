@@ -160,6 +160,112 @@ const _cloudPoster = (url) => {
   try { return url.replace(/\.mp4(\?.*)?$/, ".jpg").replace(/\.webm(\?.*)?$/, ".jpg").replace(/\.mov(\?.*)?$/, ".jpg"); }
   catch { return ""; }
 };
+
+// Public URLs used when a post is shared outside Orbit. Keep this as the
+// public Vercel URL, not the current preview URL, so WhatsApp, Telegram and
+// Google always receive the same crawlable address.
+export const ORBIT_PUBLIC_ORIGIN = "https://appConnect.vercel.app";
+export const postPublicUrl = (postId) =>
+  `${ORBIT_PUBLIC_ORIGIN}/post/${encodeURIComponent(postId)}`;
+
+const postMediaItems = (post) => {
+  if (!post?.media) return [];
+  return Array.isArray(post.media) ? post.media.filter(Boolean) : [post.media];
+};
+
+const firstPostMedia = (post) => postMediaItems(post)[0] || null;
+
+const postPreviewImage = (post) => {
+  const media = firstPostMedia(post);
+  if (!media?.url) return `${ORBIT_PUBLIC_ORIGIN}/orbit.png`;
+  return media.type === "video" ? (_cloudPoster(media.url) || media.url) : media.url;
+};
+
+// Share the real image/video where the browser supports file sharing.
+// Otherwise share the public post URL. The public URL is important because
+// the Vercel /post/:id function supplies the post-specific preview metadata.
+const sharePostExternally = async (post, author) => {
+  const url = postPublicUrl(post.id);
+  const text = (post.text || `A post by ${author?.name || "an Orbit member"}`).trim();
+  const media = firstPostMedia(post);
+
+  if (navigator.share) {
+    try {
+      const shareData = { title: "A new gravity for your circles.", text, url };
+      if (media?.url && navigator.canShare) {
+        try {
+          const response = await fetch(media.url, { mode: "cors" });
+          const blob = await response.blob();
+          const extension = media.type === "video" ? "mp4" : "jpg";
+          const mime = blob.type || (media.type === "video" ? "video/mp4" : "image/jpeg");
+          const file = new File([blob], `orbit-post-${post.id}.${extension}`, { type: mime });
+          if (navigator.canShare({ files: [file] })) shareData.files = [file];
+        } catch {
+          // Sharing the public link still works when a media host blocks fetch.
+        }
+      }
+      await navigator.share(shareData);
+      return true;
+    } catch (error) {
+      if (error?.name === "AbortError") return false;
+    }
+  }
+
+  try {
+    await navigator.clipboard.writeText(url);
+    toast("Post link copied");
+    return false;
+  } catch {
+    window.prompt("Copy this Orbit post link:", url);
+    return false;
+  }
+};
+
+const buildExternalShareActions = (post, author, close) => {
+  const url = postPublicUrl(post.id);
+  const text = (post.text || `A post by ${author?.name || "an Orbit member"}`).trim();
+  const encodedUrl = encodeURIComponent(url);
+  const encodedText = encodeURIComponent(text);
+  const actions = el("div", { class: "post-external-share" },
+    el("div", { class: "post-external-share-title" }, "Share outside Orbit"),
+    el("div", { class: "post-external-share-grid" },
+      el("button", {
+        class: "post-external-share-btn",
+        type: "button",
+        onclick: async () => { await sharePostExternally(post, author); },
+      }, el("i", { class: "ri-share-forward-line" }), el("span", {}, "Share")),
+      el("a", {
+        class: "post-external-share-btn whatsapp",
+        href: `https://wa.me/?text=${encodedText}%20${encodedUrl}`,
+        target: "_blank",
+        rel: "noopener noreferrer",
+        onclick: () => close(),
+      }, el("i", { class: "ri-whatsapp-line" }), el("span", {}, "WhatsApp")),
+      el("a", {
+        class: "post-external-share-btn telegram",
+        href: `https://t.me/share/url?url=${encodedUrl}&text=${encodedText}`,
+        target: "_blank",
+        rel: "noopener noreferrer",
+        onclick: () => close(),
+      }, el("i", { class: "ri-telegram-2-line" }), el("span", {}, "Telegram")),
+      el("button", {
+        class: "post-external-share-btn",
+        type: "button",
+        onclick: async () => {
+          try {
+            await navigator.clipboard.writeText(url);
+            toast("Post link copied");
+            close();
+          } catch {
+            window.prompt("Copy this Orbit post link:", url);
+          }
+        },
+      }, el("i", { class: "ri-link" }), el("span", {}, "Copy link")),
+    ),
+    el("small", {}, "Images and videos are attached when your device supports file sharing. Otherwise the link shows the post preview."),
+  );
+  return actions;
+};
 // Renders the text/sticker overlay layer created in the create-post studio
 // on top of a video (images have overlays already baked in at post time).
 function _renderFeedOverlays(wrap, overlays) {
@@ -2111,6 +2217,7 @@ const openPostShareModal = async (p, author) => {
 
   const addTarget = (target) => {
     const row = el("button", { class: "post-share-target", type: "button" });
+    row._target = target;
     const check = el("span", { class: "post-share-check" }, el("i", { class: "ri-check-line" }));
     row.append(
       target.kind === "group"
@@ -2192,6 +2299,7 @@ const openPostShareModal = async (p, author) => {
       el("img", { class: "avatar sm", src: avatarFor(author) }),
       el("span", {}, (p.text || "Shared post").slice(0, 100)),
     ),
+    buildExternalShareActions(p, author, close),
     list,
     sendBtn,
   );
@@ -2925,9 +3033,20 @@ const renderPostDetail = async (root, postId) => {
       class: "tw-cmt-act-btn",
       onclick: async (ev) => {
         ev.stopPropagation();
-        const url = `${location.origin}${location.pathname}#post/${p.id}`;
-        try { await navigator.share?.({ title: "Orbit", text: c.text || "", url }); }
-        catch { await navigator.clipboard.writeText(url); toast("Link copied"); }
+        const url = postPublicUrl(p.id);
+        try {
+          if (navigator.share) {
+            await navigator.share({ title: "A new gravity for your circles.", text: c.text || "", url });
+          } else {
+            await navigator.clipboard.writeText(url);
+            toast("Link copied");
+          }
+        } catch (error) {
+          if (error?.name !== "AbortError") {
+            await navigator.clipboard.writeText(url).catch(() => {});
+            toast("Link copied");
+          }
+        }
       },
     }, el("i", { class: "ri-share-forward-line" }));
 
