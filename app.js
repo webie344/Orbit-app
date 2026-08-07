@@ -164,7 +164,7 @@ const _cloudPoster = (url) => {
 // Public URLs used when a post is shared outside Orbit. Keep this as the
 // public Vercel URL, not the current preview URL, so WhatsApp, Telegram and
 // Google always receive the same crawlable address.
-export const ORBIT_PUBLIC_ORIGIN = "https://appConnect.vercel.app";
+export const ORBIT_PUBLIC_ORIGIN = "https://orbit-appconnect.vercel.app";
 export const postPublicUrl = (postId) =>
   `${ORBIT_PUBLIC_ORIGIN}/post/${encodeURIComponent(postId)}`;
 

@@ -11,11 +11,11 @@
   ],
   "headers": [
     {
-      "source": "/(robots.txt|sitemap.xml)",
+      "source": "/sitemap.xml",
       "headers": [
         {
           "key": "Content-Type",
-          "value": "text/plain; charset=utf-8"
+          "value": "application/xml; charset=utf-8"
         }
       ]
     }
