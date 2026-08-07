@@ -3,7 +3,7 @@ const FIREBASE_CONFIG = {
   projectId: "crypto-6517d",
 };
 
-const SITE_ORIGIN = "https://appConnect.vercel.app";
+const SITE_ORIGIN = "https://orbit-appconnect.vercel.app";
 
 export default async function handler(_request, response) {
   const urls = [`${SITE_ORIGIN}/`, `${SITE_ORIGIN}/explore`];
