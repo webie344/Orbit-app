@@ -1,4 +1,3 @@
-
 /*
  * Vercel serverless route for public Orbit post previews.
  *
@@ -16,7 +15,7 @@ const FIREBASE_CONFIG = {
   projectId: "crypto-6517d",
 };
 
-const SITE_ORIGIN = "https://appConnect.vercel.app";
+const SITE_ORIGIN = "https://orbit-appconnect.vercel.app";
 const DEFAULT_TITLE = "Orbit — Your Space to Learn, Connect, and Create.";
 const DEFAULT_DESCRIPTION = "A new gravity for your circles.";
 const DEFAULT_IMAGE = `${SITE_ORIGIN}/orbit.png`;
