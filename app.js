@@ -1527,7 +1527,7 @@ $("#notifBtn").addEventListener("click", () => { location.hash = "#notifications
 // 7. ROUTER
 // =========================================================================
 // "reels" removed — videos live in the feed as regular posts
-const routes = ["feed", "chats", "ai-chat", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn"];
+const routes = ["feed", "pool", "chats", "ai-chat", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn"];
 
 // Feed DOM caching — lets us restore the feed instantly when navigating
 // back from a post without re-rendering or re-shuffling.
@@ -1608,6 +1608,7 @@ const router = () => {
         setTimeout(() => _injectAIChatEntry(), 350);
       }
       break;
+    case "pool":       renderPool(content); break;
     case "ai-chat":    renderAIChat(content); break;
     case "groups":     renderGroups(content); break;
     case "explore":    renderExplore(content, rest[0] === "tag" ? rest[1] : null); break;
@@ -6178,6 +6179,460 @@ const renderAIChat = async (root) => {
 
 // Expose so router can call it
 window.renderAIChat = renderAIChat;
+
+// =========================================================================
+// 16. POOL — non-monetary social quiz MVP
+// =========================================================================
+// Pool is intentionally local-first in this first version. It gives Orbit a
+// complete, playable competition loop without requiring new Firestore rules.
+// Pools created and results recorded in this browser can later be moved to
+// Firestore without changing the UI contract.
+const POOL_STORAGE_KEY = "orbit:pool:mvp:v1";
+const POOL_CATEGORIES = [
+  ["music", "Music", "ri-music-2-line"],
+  ["football", "Football", "ri-football-line"],
+  ["movies", "Movies", "ri-movie-2-line"],
+  ["culture", "African Culture", "ri-earth-line"],
+  ["memes", "Memes", "ri-emotion-laugh-line"],
+  ["knowledge", "General Knowledge", "ri-lightbulb-line"],
+  ["gaming", "Gaming", "ri-gamepad-line"],
+  ["technology", "Technology", "ri-code-s-slash-line"],
+];
+const POOL_CATEGORY_MAP = Object.fromEntries(POOL_CATEGORIES.map(([id, label, icon]) => [id, { id, label, icon }]));
+
+const poolQuestions = {
+  music: [
+    { prompt: 'Which artist released "Unavailable"?', options: ["Burna Boy", "Davido", "Wizkid", "Rema"], answer: 1 },
+    { prompt: "Which Nigerian artist is known as the Starboy?", options: ["Wizkid", "Olamide", "Fireboy DML", "Asake"], answer: 0 },
+    { prompt: "Which instrument keeps the beat in many Afrobeats tracks?", options: ["Drums", "Harp", "Oboe", "Cello"], answer: 0 },
+    { prompt: "Which city is famous for Nigeria's Afrobeats scene?", options: ["Lagos", "Jos", "Ilorin", "Uyo"], answer: 0 },
+    { prompt: "What does a DJ usually do?", options: ["Mix and select music", "Write novels", "Paint murals", "Design buildings"], answer: 0 },
+  ],
+  football: [
+    { prompt: "How many players start on the pitch for one football team?", options: ["7", "9", "11", "13"], answer: 2 },
+    { prompt: "What colour card means a player is sent off?", options: ["Blue", "Yellow", "Green", "Red"], answer: 3 },
+    { prompt: "Which part of the body cannot normally touch the ball?", options: ["Foot", "Head", "Hand", "Chest"], answer: 2 },
+    { prompt: "What is awarded after a foul inside the penalty area?", options: ["Throw-in", "Penalty", "Corner", "Kick-off"], answer: 1 },
+    { prompt: "How long is a standard match, before added time?", options: ["60 minutes", "75 minutes", "90 minutes", "120 minutes"], answer: 2 },
+  ],
+  movies: [
+    { prompt: "What do we call the person who directs a film?", options: ["Director", "Referee", "Editor-in-chief", "Producer only"], answer: 0 },
+    { prompt: "Which award is strongly associated with Hollywood films?", options: ["Grammy", "Oscar", "Ballon d'Or", "Booker"], answer: 1 },
+    { prompt: "What is a film's soundtrack?", options: ["Its music", "Its ticket", "Its poster", "Its cast list"], answer: 0 },
+    { prompt: "A sequel follows what?", options: ["Another film", "A trailer only", "A soundtrack", "A cinema"], answer: 0 },
+    { prompt: "What does a cinema screen show?", options: ["A film", "A match score only", "A menu", "A map"], answer: 0 },
+  ],
+  culture: [
+    { prompt: "What is a group of people with shared traditions called?", options: ["A culture", "A decimal", "A timetable", "A password"], answer: 0 },
+    { prompt: "Which fabric is widely associated with colourful West African prints?", options: ["Wax print", "Denim only", "Fleece", "Silk only"], answer: 0 },
+    { prompt: "What is a community celebration usually called?", options: ["Festival", "Formula", "Invoice", "Circuit"], answer: 0 },
+    { prompt: "Which is commonly passed between generations?", options: ["Tradition", "Battery", "Password", "Receipt"], answer: 0 },
+    { prompt: "What does local food often reflect?", options: ["Culture and history", "Only weather", "A phone model", "A football score"], answer: 0 },
+  ],
+  memes: [
+    { prompt: "What usually makes a meme recognisable?", options: ["A repeatable joke or format", "A legal contract", "A weather report", "A password"], answer: 0 },
+    { prompt: "A meme shared widely online is often described as what?", options: ["Viral", "Analog", "Private", "Offline"], answer: 0 },
+    { prompt: "What is the text on a meme image usually called?", options: ["Caption", "Invoice", "Subtitle track", "Footer note"], answer: 0 },
+    { prompt: "What is a reaction meme used to express?", options: ["A feeling or response", "A bank transfer", "A GPS route", "A recipe"], answer: 0 },
+    { prompt: "The best memes are usually easy to do what?", options: ["Understand and share", "Hide forever", "Print as a passport", "Measure"], answer: 0 },
+  ],
+  knowledge: [
+    { prompt: "What is the largest planet in our solar system?", options: ["Earth", "Mars", "Jupiter", "Venus"], answer: 2 },
+    { prompt: "How many days are in a leap year?", options: ["364", "365", "366", "367"], answer: 2 },
+    { prompt: "What is H2O commonly known as?", options: ["Salt", "Water", "Oxygen", "Hydrogen"], answer: 1 },
+    { prompt: "Which direction does the sun rise from?", options: ["North", "South", "East", "West"], answer: 2 },
+    { prompt: "How many continents are commonly taught?", options: ["5", "6", "7", "8"], answer: 2 },
+  ],
+  gaming: [
+    { prompt: "What does NPC commonly mean?", options: ["Non-player character", "New play card", "Next player call", "Network power code"], answer: 0 },
+    { prompt: "What does a game tutorial usually teach?", options: ["How to play", "How to sleep", "How to cook", "How to travel"], answer: 0 },
+    { prompt: "What is a leaderboard used to show?", options: ["Rankings", "Weather", "Recipes", "Addresses"], answer: 0 },
+    { prompt: "What does multiplayer mean?", options: ["Several people can play", "Only one player can play", "No one can play", "The game has no rules"], answer: 0 },
+    { prompt: "What is a game controller used for?", options: ["Input", "Cooking", "Charging a car", "Measuring height"], answer: 0 },
+  ],
+  technology: [
+    { prompt: "What does HTML help structure?", options: ["Web pages", "Roads", "Football teams", "Music concerts"], answer: 0 },
+    { prompt: "What does a URL identify?", options: ["A web address", "A shoe size", "A song key", "A tax rate"], answer: 0 },
+    { prompt: "Which device is usually used to browse the web?", options: ["Browser", "Toaster", "Compass", "Whistle"], answer: 0 },
+    { prompt: "What is a password used for?", options: ["Access control", "Cooking", "Painting", "Measuring time"], answer: 0 },
+    { prompt: "What does AI stand for?", options: ["Artificial intelligence", "Audio input", "Active internet", "Automatic image"], answer: 0 },
+  ],
+};
+
+const POOL_SEED = [
+  { id: "seed-music", title: "Nigerian Music Challenge", category: "music", status: "live", players: 37, maxPlayers: 50, round: 2, rounds: 5, difficulty: "Medium", creator: "David", creatorHandle: "@david", accent: "violet" },
+  { id: "seed-football", title: "Football IQ", category: "football", status: "live", players: 82, maxPlayers: 100, round: 1, rounds: 5, difficulty: "Hard", creator: "Sarah", creatorHandle: "@sarah", accent: "green" },
+  { id: "seed-meme", title: "African Meme Challenge", category: "memes", status: "live", players: 24, maxPlayers: 50, round: 1, rounds: 5, difficulty: "Easy", creator: "Chris", creatorHandle: "@chris", accent: "pink" },
+  { id: "seed-afrobeats", title: "Afrobeats Battle", category: "music", status: "soon", players: 18, maxPlayers: 50, round: 0, rounds: 5, difficulty: "Medium", creator: "Joy", creatorHandle: "@joy", accent: "orange", startsIn: "2 min" },
+  { id: "seed-culture", title: "How Well Do You Know Africa?", category: "culture", status: "soon", players: 11, maxPlayers: 20, round: 0, rounds: 5, difficulty: "Medium", creator: "Tobi", creatorHandle: "@tobi", accent: "blue", startsIn: "8 min" },
+];
+
+let poolRuntime = { view: "home", tab: "live", active: null, question: 0, score: 0, answers: [], timer: null, answerLocked: false, result: null };
+
+const poolRead = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(POOL_STORAGE_KEY) || "{}");
+    return {
+      custom: Array.isArray(parsed.custom) ? parsed.custom : [],
+      history: Array.isArray(parsed.history) ? parsed.history : [],
+      achievements: Array.isArray(parsed.achievements) ? parsed.achievements : [],
+    };
+  } catch {
+    return { custom: [], history: [], achievements: [] };
+  }
+};
+const poolWrite = (data) => localStorage.setItem(POOL_STORAGE_KEY, JSON.stringify(data));
+const poolAll = () => [...POOL_SEED, ...poolRead().custom];
+const poolCat = (id) => POOL_CATEGORY_MAP[id] || POOL_CATEGORY_MAP.knowledge;
+const poolQuestionsFor = (pool) => {
+  const bank = poolQuestions[pool.category] || poolQuestions.knowledge;
+  return bank.slice(0, Math.min(pool.rounds || 5, bank.length));
+};
+const poolInitials = (name = "Orbit") => name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
+const poolUserName = () => state.me?.name || state.me?.username || "You";
+
+const poolClearTimer = () => {
+  if (poolRuntime.timer) { clearInterval(poolRuntime.timer); poolRuntime.timer = null; }
+};
+
+const poolIcon = (pool) => el("span", { class: `pool-card-icon pool-accent-${pool.accent || "violet"}` },
+  el("i", { class: poolCat(pool.category).icon }));
+
+const poolCard = (pool, root) => {
+  const category = poolCat(pool.category);
+  const card = el("article", { class: "pool-card" },
+    el("div", { class: "pool-card-top" },
+      poolIcon(pool),
+      el("div", { class: "pool-card-meta" },
+        el("span", { class: "pool-category" }, category.label),
+        el("span", { class: `pool-status pool-status-${pool.status}` }, pool.status === "live" ? "Live now" : "Starting soon"),
+      ),
+      el("button", { class: "icon-btn pool-more", title: "Pool details", onclick: () => toast("Pool details are coming next.") }, el("i", { class: "ri-more-2-fill" })),
+    ),
+    el("h3", { class: "pool-card-title" }, pool.title),
+    el("div", { class: "pool-card-stats" },
+      el("span", {}, el("i", { class: "ri-group-line" }), `${pool.players} players`),
+      el("span", {}, el("i", { class: "ri-stack-line" }), `${pool.rounds} rounds`),
+      el("span", {}, el("i", { class: "ri-bar-chart-2-line" }), pool.difficulty),
+    ),
+    el("div", { class: "pool-card-progress" },
+      el("span", { style: `width:${Math.min(100, Math.max(12, (pool.players / pool.maxPlayers) * 100))}%` }),
+    ),
+    el("div", { class: "pool-card-foot" },
+      el("span", { class: "pool-creator" }, `by ${pool.creatorHandle || "@you"}`),
+      el("button", { class: "btn primary sm", onclick: () => poolStart(pool, root) },
+        pool.status === "live" ? "Join Pool" : `Join · ${pool.startsIn || "soon"}`),
+    ),
+  );
+  return card;
+};
+
+const poolHistoryPanel = () => {
+  const data = poolRead();
+  const history = data.history.slice(0, 4);
+  const wins = history.filter((item) => item.rank === 1).length;
+  const panel = el("aside", { class: "pool-rail" },
+    el("div", { class: "pool-stat-panel" },
+      el("div", { class: "pool-panel-kicker" }, "Your Pool"),
+      el("div", { class: "pool-stat-big" }, String(history.length)),
+      el("div", { class: "pool-stat-label" }, "competitions played"),
+      el("div", { class: "pool-mini-stats" },
+        el("span", {}, el("strong", {}, String(wins)), " wins"),
+        el("span", {}, el("strong", {}, String(data.achievements.length)), " badges"),
+      ),
+    ),
+    el("div", { class: "pool-rail-card" },
+      el("div", { class: "pool-rail-title" }, "Basic achievements"),
+      data.achievements.length
+        ? data.achievements.map((badge) => el("div", { class: "pool-badge-row" }, el("span", { class: "pool-badge-icon" }, badge.icon), el("span", {}, badge.title)))
+        : el("div", { class: "pool-muted" }, "Play your first Pool to unlock a badge."),
+    ),
+    el("div", { class: "pool-rail-card" },
+      el("div", { class: "pool-rail-title" }, "Recent results"),
+      history.length
+        ? history.map((item) => el("div", { class: "pool-history-row" },
+            el("span", { class: "pool-history-rank" }, item.rank === 1 ? "1st" : `${item.rank}th`),
+            el("span", { class: "pool-history-name" }, item.title),
+            el("strong", {}, `${item.score} pts`),
+          ))
+        : el("div", { class: "pool-muted" }, "Your completed Pools will appear here."),
+    ),
+  );
+  return panel;
+};
+
+const poolRenderHome = (root) => {
+  const data = poolRead();
+  const all = poolAll();
+  let visible = all;
+  if (poolRuntime.tab === "live") visible = all.filter((pool) => pool.status === "live");
+  if (poolRuntime.tab === "soon") visible = all.filter((pool) => pool.status === "soon");
+  if (poolRuntime.tab === "trending") visible = [...all].sort((a, b) => b.players - a.players);
+  if (poolRuntime.tab === "friends") visible = all.filter((pool) => ["David", "Sarah", "Joy"].includes(pool.creator));
+  if (poolRuntime.tab === "mine") visible = data.custom;
+
+  const page = el("div", { class: "pool-page" });
+  const header = el("div", { class: "pool-header" },
+    el("div", { class: "pool-header-copy" },
+      el("div", { class: "pool-eyebrow" }, el("i", { class: "ri-trophy-line" }), "ORBIT POOL"),
+      el("h1", {}, "What can you compete in today?"),
+      el("p", {}, "Fast social quizzes. Real rankings. Bragging rights that stay on your profile."),
+    ),
+    el("button", { class: "btn primary pool-create-btn", onclick: () => { poolRuntime.view = "create"; poolRender(root); } },
+      el("i", { class: "ri-add-line" }), "Create Pool"),
+  );
+  page.appendChild(header);
+
+  const tabs = el("div", { class: "pool-tabs", role: "tablist" });
+  [["live", "Live Now", "ri-live-line"], ["soon", "Starting Soon", "ri-time-line"], ["trending", "Trending", "ri-fire-line"], ["friends", "Friends", "ri-group-line"], ["mine", "My Pools", "ri-user-star-line"]].forEach(([id, label, icon]) => {
+    tabs.appendChild(el("button", { class: `pool-tab${poolRuntime.tab === id ? " active" : ""}`, role: "tab", onclick: () => { poolRuntime.tab = id; poolRender(root); } },
+      el("i", { class: icon }), label));
+  });
+  page.appendChild(tabs);
+
+  const content = el("div", { class: "pool-content-grid" });
+  const main = el("div", { class: "pool-main" });
+  if (poolRuntime.tab === "live") {
+    main.appendChild(el("div", { class: "pool-section-heading" },
+      el("div", {}, el("span", { class: "pool-live-dot" }), el("h2", {}, "Live now")),
+      el("span", { class: "pool-section-note" }, `${visible.length} active Pools`)));
+  } else {
+    const labels = { soon: "Starting soon", trending: "Trending Pools", friends: "From your circles", mine: "Pools you created" };
+    main.appendChild(el("div", { class: "pool-section-heading" }, el("h2", {}, labels[poolRuntime.tab]), el("span", { class: "pool-section-note" }, `${visible.length} Pools`)));
+  }
+  if (!visible.length) {
+    main.appendChild(el("div", { class: "pool-empty" }, el("div", { class: "pool-empty-icon" }, el("i", { class: "ri-trophy-line" })), el("h3", {}, poolRuntime.tab === "mine" ? "You have not created a Pool yet" : "Nothing here yet"), el("p", {}, "Create a Pool and give your circle something to compete in."), el("button", { class: "btn primary", onclick: () => { poolRuntime.view = "create"; poolRender(root); } }, "Create a Pool")));
+  } else {
+    const grid = el("div", { class: "pool-grid" });
+    visible.forEach((pool) => grid.appendChild(poolCard(pool, root)));
+    main.appendChild(grid);
+  }
+  content.appendChild(main);
+  content.appendChild(poolHistoryPanel());
+  page.appendChild(content);
+  root.appendChild(page);
+};
+
+const poolRenderCreate = (root) => {
+  const page = el("div", { class: "pool-page pool-create-page" });
+  const head = el("div", { class: "pool-subpage-head" },
+    el("button", { class: "icon-btn", onclick: () => { poolRuntime.view = "home"; poolRender(root); } }, el("i", { class: "ri-arrow-left-line" })),
+    el("div", {}, el("div", { class: "pool-eyebrow" }, "CREATE A POOL"), el("h1", {}, "Give people something to compete in.")),
+  );
+  page.appendChild(head);
+  const form = el("form", { class: "pool-create-form" });
+  const field = (label, control) => el("label", { class: "pool-form-field" }, el("span", {}, label), control);
+  form.appendChild(field("Pool title", el("input", { name: "title", required: true, maxlength: "60", placeholder: "How well do you know Afrobeats?" })));
+  const category = el("select", { name: "category" });
+  POOL_CATEGORIES.forEach(([id, label]) => category.appendChild(el("option", { value: id }, label)));
+  form.appendChild(field("Category", category));
+  const row = el("div", { class: "pool-form-row" });
+  const players = el("select", { name: "maxPlayers" });
+  ["10", "20", "50", "100"].forEach((value) => players.appendChild(el("option", { value }, value + " players")));
+  const rounds = el("select", { name: "rounds" });
+  ["5", "10", "20"].forEach((value) => rounds.appendChild(el("option", { value }, value + " rounds")));
+  row.appendChild(field("Players", players));
+  row.appendChild(field("Rounds", rounds));
+  form.appendChild(row);
+  const rowTwo = el("div", { class: "pool-form-row" });
+  const difficulty = el("select", { name: "difficulty" });
+  ["Easy", "Medium", "Hard"].forEach((value) => difficulty.appendChild(el("option", { value }, value)));
+  const visibility = el("select", { name: "visibility" });
+  [["everyone", "Everyone"], ["followers", "Followers"], ["invite", "Invite only"]].forEach(([value, label]) => visibility.appendChild(el("option", { value }, label)));
+  rowTwo.appendChild(field("Difficulty", difficulty));
+  rowTwo.appendChild(field("Visibility", visibility));
+  form.appendChild(rowTwo);
+  const launch = el("div", { class: "pool-launch-options" },
+    el("label", { class: "pool-launch-option active" }, el("input", { type: "radio", name: "start", value: "now", checked: true }), el("span", {}, el("strong", {}, "Start now"), el("small", {}, "Let people join immediately"))),
+    el("label", { class: "pool-launch-option" }, el("input", { type: "radio", name: "start", value: "soon" }), el("span", {}, el("strong", {}, "Schedule for soon"), el("small", {}, "Show it in Starting Soon"))),
+  );
+  form.appendChild(el("div", { class: "pool-form-label" }, "When should it start?"));
+  form.appendChild(launch);
+  form.appendChild(el("div", { class: "pool-create-note" }, el("i", { class: "ri-information-line" }), "This first version is free to play. Players compete for rankings, achievements, and social status."));
+  form.appendChild(el("button", { class: "btn primary pool-submit", type: "submit" }, el("i", { class: "ri-rocket-line" }), "Create Pool"));
+  form.addEventListener("change", (event) => {
+    if (event.target.name === "start") launch.querySelectorAll(".pool-launch-option").forEach((option) => option.classList.toggle("active", option.contains(event.target)));
+  });
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const fd = new FormData(form);
+    const categoryId = String(fd.get("category") || "knowledge");
+    const created = {
+      id: `pool-${Date.now()}`,
+      title: String(fd.get("title") || "My Pool").trim(),
+      category: categoryId,
+      status: fd.get("start") === "soon" ? "soon" : "live",
+      players: 1,
+      maxPlayers: Number(fd.get("maxPlayers") || 20),
+      round: 0,
+      rounds: Math.min(Number(fd.get("rounds") || 5), poolQuestions[categoryId]?.length || 5),
+      difficulty: String(fd.get("difficulty") || "Medium"),
+      visibility: String(fd.get("visibility") || "everyone"),
+      creator: poolUserName(),
+      creatorHandle: state.me?.username ? `@${state.me.username}` : "@you",
+      accent: "violet",
+      createdAt: new Date().toISOString(),
+    };
+    const data = poolRead();
+    data.custom.unshift(created);
+    poolWrite(data);
+    poolRuntime.tab = "mine";
+    poolRuntime.view = "home";
+    poolRender(root);
+    toast("Pool created. Let the competition begin.");
+  });
+  page.appendChild(form);
+  root.appendChild(page);
+};
+
+const poolStart = (pool, root) => {
+  poolClearTimer();
+  poolRuntime = { view: "game", tab: poolRuntime.tab, active: pool, question: 0, score: 0, answers: [], timer: null, answerLocked: false, result: null };
+  poolRender(root);
+};
+
+const poolStartQuestionTimer = (root) => {
+  poolClearTimer();
+  let remaining = 5;
+  const timerEl = root.querySelector("#poolTimer");
+  if (timerEl) timerEl.textContent = String(remaining);
+  poolRuntime.timer = setInterval(() => {
+    remaining -= 1;
+    const liveTimer = root.querySelector("#poolTimer");
+    if (liveTimer) liveTimer.textContent = String(Math.max(0, remaining));
+    if (remaining <= 0) poolAnswer(-1, root);
+  }, 1000);
+};
+
+const poolAnswer = (choice, root) => {
+  if (poolRuntime.answerLocked) return;
+  poolRuntime.answerLocked = true;
+  poolClearTimer();
+  const questions = poolQuestionsFor(poolRuntime.active);
+  const question = questions[poolRuntime.question];
+  const correct = choice === question.answer;
+  if (correct) poolRuntime.score += 20;
+  poolRuntime.answers.push({ choice, correct });
+  root.querySelectorAll(".pool-answer").forEach((button, index) => {
+    button.disabled = true;
+    if (index === question.answer) button.classList.add("correct");
+    if (index === choice && !correct) button.classList.add("wrong");
+  });
+  const feedback = root.querySelector("#poolFeedback");
+  if (feedback) {
+    feedback.className = `pool-feedback ${correct ? "is-correct" : "is-wrong"}`;
+    feedback.innerHTML = `<i class="ri-${correct ? "checkbox-circle" : "close-circle"}-fill"></i><strong>${correct ? "Correct" : "Not quite"}</strong><span>${correct ? "+20 points" : "Keep your focus for the next round"}</span>`;
+  }
+  setTimeout(() => {
+    if (content._currentRoute !== "pool") return;
+    if (poolRuntime.question >= questions.length - 1) poolFinish(root);
+    else { poolRuntime.question += 1; poolRuntime.answerLocked = false; poolRender(root); }
+  }, 900);
+};
+
+const poolFinish = (root) => {
+  poolClearTimer();
+  const pool = poolRuntime.active;
+  const questions = poolQuestionsFor(pool);
+  const score = poolRuntime.score;
+  const rank = Math.max(1, Math.min(pool.players, 1 + Math.floor((questions.length * 20 - score) / 30)));
+  const result = { id: `result-${Date.now()}`, poolId: pool.id, title: pool.title, score, rank, players: pool.players, correct: poolRuntime.answers.filter((answer) => answer.correct).length, total: questions.length, createdAt: new Date().toISOString() };
+  const data = poolRead();
+  data.history.unshift(result);
+  const addAchievement = (id, title, icon) => { if (!data.achievements.some((badge) => badge.id === id)) data.achievements.unshift({ id, title, icon }); };
+  addAchievement("first-pool", "First Pool played", "🏊");
+  if (rank === 1) addAchievement("pool-champion", "Pool Champion", "🏆");
+  if (result.correct === result.total) addAchievement("quick-thinker", "Quick Thinker", "⚡");
+  poolWrite(data);
+  poolRuntime.view = "results";
+  poolRuntime.result = result;
+  poolRender(root);
+};
+
+const poolShareResult = async (result) => {
+  const text = `🏆 I finished #${result.rank} in ${result.title} on Orbit Pool — ${result.score} points with ${result.players} players. Challenge me.`;
+  if (!state.uid) { toast("Your Pool result is ready to share."); return; }
+  try {
+    await addDoc(collection(db, "posts"), {
+      authorUid: state.uid, text, kind: "pool-result", poolId: result.poolId,
+      poolScore: result.score, poolRank: result.rank, poolPlayers: result.players,
+      media: [], orbits: [], commentsCount: 0, createdAt: serverTimestamp(),
+    });
+    toast("Result shared to your Orbit feed.");
+  } catch {
+    toast("Result card ready — sharing will be available when connected.");
+  }
+};
+
+const poolRenderGame = (root) => {
+  const pool = poolRuntime.active;
+  const questions = poolQuestionsFor(pool);
+  const question = questions[poolRuntime.question];
+  const category = poolCat(pool.category);
+  const page = el("div", { class: "pool-game-page" });
+  const top = el("div", { class: "pool-game-top" },
+    el("button", { class: "icon-btn", onclick: () => { poolClearTimer(); poolRuntime.view = "home"; poolRender(root); } }, el("i", { class: "ri-close-line" })),
+    el("div", { class: "pool-game-title" }, el("span", { class: "pool-live-dot" }), pool.title),
+    el("span", { class: "pool-game-round" }, `Round ${poolRuntime.question + 1}/${questions.length}`),
+  );
+  page.appendChild(top);
+  const game = el("div", { class: "pool-game-card" },
+    el("div", { class: "pool-game-category" }, el("i", { class: category.icon }), category.label),
+    el("div", { class: "pool-question-progress" }, el("span", { style: `width:${((poolRuntime.question) / questions.length) * 100}%` })),
+    el("div", { class: "pool-timer-wrap" }, el("span", { class: "pool-timer-label" }, "Answer in"), el("strong", { id: "poolTimer" }, "5"), el("span", { class: "pool-timer-label" }, "seconds")),
+    el("h1", { class: "pool-question" }, question.prompt),
+    el("div", { class: "pool-answers" }, question.options.map((option, index) => el("button", { class: "pool-answer", onclick: () => poolAnswer(index, root) }, el("span", { class: "pool-answer-letter" }, String.fromCharCode(65 + index)), el("span", {}, option)))),
+    el("div", { class: "pool-feedback", id: "poolFeedback" }),
+  );
+  page.appendChild(game);
+  page.appendChild(el("div", { class: "pool-live-score" },
+    el("span", {}, "Your live score"), el("strong", { id: "poolScore" }, `${poolRuntime.score} pts`),
+    el("span", {}, `${pool.players} players competing`),
+  ));
+  root.appendChild(page);
+  poolStartQuestionTimer(root);
+};
+
+const poolRenderResults = (root) => {
+  const result = poolRuntime.result;
+  const won = result.rank === 1;
+  const page = el("div", { class: "pool-results-page" });
+  page.appendChild(el("div", { class: "pool-results-orbit" }, el("i", { class: won ? "ri-trophy-fill" : "ri-medal-fill" })));
+  page.appendChild(el("div", { class: "pool-eyebrow" }, "POOL COMPLETED"));
+  page.appendChild(el("h1", {}, won ? "You're the Champion!" : `You finished #${result.rank}`));
+  page.appendChild(el("p", { class: "pool-results-sub" }, `${result.title} · ${result.players} players`));
+  const score = el("div", { class: "pool-result-score" }, el("strong", {}, `${result.score}`), el("span", {}, "points"));
+  page.appendChild(score);
+  page.appendChild(el("div", { class: "pool-result-summary" },
+    el("span", {}, el("strong", {}, `${result.correct}/${result.total}`), " correct"),
+    el("span", {}, el("strong", {}, `#${result.rank}`), " final rank"),
+    el("span", {}, el("strong", {}, `${result.players}`), " players"),
+  ));
+  const actions = el("div", { class: "pool-results-actions" },
+    el("button", { class: "btn primary", onclick: () => poolShareResult(result) }, el("i", { class: "ri-share-forward-line" }), "Share Result"),
+    el("button", { class: "btn ghost", onclick: () => { poolRuntime.view = "home"; poolRuntime.tab = "live"; poolRender(root); } }, "Play another Pool"),
+  );
+  page.appendChild(actions);
+  const ranking = el("div", { class: "pool-results-rank" }, el("div", { class: "pool-rail-title" }, "Live ranking"));
+  ["You", "David", "Sarah", "Chris", "Joy"].forEach((name, index) => {
+    const points = name === "You" ? result.score : Math.max(120, result.score + 40 - index * 16);
+    ranking.appendChild(el("div", { class: `pool-ranking-row${name === "You" ? " is-you" : ""}` },
+      el("span", {}, `${index + 1}`), el("span", {}, name), el("strong", {}, `${points}`)));
+  });
+  page.appendChild(ranking);
+  root.appendChild(page);
+};
+
+const poolRender = (root) => {
+  poolClearTimer();
+  root.innerHTML = "";
+  root.classList.toggle("pool-route-active", poolRuntime.view !== "home" || true);
+  if (poolRuntime.view === "create") poolRenderCreate(root);
+  else if (poolRuntime.view === "game") poolRenderGame(root);
+  else if (poolRuntime.view === "results") poolRenderResults(root);
+  else poolRenderHome(root);
+};
+const renderPool = poolRender;
 
 // =========================================================================
 // 17. INIT
