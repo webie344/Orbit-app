@@ -23,15 +23,39 @@ import {
 // 1. CONFIG — REPLACE THESE BEFORE HOSTING
 // =========================================================================
 
-// Firebase: get from https://console.firebase.google.com → Project Settings → Your apps
-export const firebaseConfig = {
-  apiKey: "AIzaSyC9jF-ocy6HjsVzWVVlAyXW-4aIFgA79-A",
-    authDomain: "crypto-6517d.firebaseapp.com",
-    projectId: "crypto-6517d",
-    storageBucket: "crypto-6517d.firebasestorage.app",
-    messagingSenderId: "60263975159",
-    appId: "1:60263975159:web:bd53dcaad86d6ed9592bf2"
-};
+// Firebase web configuration is loaded at runtime from /api/config.
+// This keeps deployment values out of this source file. The Firebase web config
+// is still visible to browsers by design; protect the project with Firebase
+// Authentication, Firestore rules, Storage rules, and API-key restrictions.
+async function loadFirebaseConfig() {
+  const response = await fetch("/api/config", {
+    headers: { Accept: "application/json" },
+  });
+
+  if (!response.ok) {
+    throw new Error("Unable to load Firebase configuration (HTTP " + response.status + ")");
+  }
+
+  const config = await response.json();
+  const required = [
+    "apiKey",
+    "authDomain",
+    "projectId",
+    "storageBucket",
+    "messagingSenderId",
+    "appId",
+  ];
+  const missing = required.filter((key) => !config[key]);
+
+  if (missing.length) {
+    throw new Error("Firebase configuration is incomplete: " + missing.join(", "));
+  }
+
+  return config;
+}
+
+// Top-level await is supported because this file is loaded as type=module.
+export const firebaseConfig = await loadFirebaseConfig();
 
 // Cloudinary: get from https://cloudinary.com → Settings → Upload → Upload presets
 // 1) Create an UNSIGNED preset (recommended for client-side uploads)
@@ -102,10 +126,8 @@ export const state = {
 // =========================================================================
 // AI ASSISTANT CONSTANTS
 // =========================================================================
-// Set your Groq API key here or assign window.GROQ_API_KEY before this file loads.
-// Get a free key at https://console.groq.com
-window.GROQ_API_KEY = window.GROQ_API_KEY || "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";
-window.GROQ_MODEL   = window.GROQ_MODEL   || "llama-3.3-70b-versatile";
+// Groq is called through /api/groq so the GROQ_API_KEY never reaches the browser.
+// The secret is configured in Vercel as a server-only environment variable.
 
 const AI_TONES = {
   friendly:   { label: "Friendly & Warm",    emoji: "😊" },
@@ -5999,7 +6021,6 @@ window._aiSend = async function() {
   const ta   = document.getElementById("aiChatInput");
   const text = ta?.value?.trim();
   if (!text || _aiTyping) return;
-  if (!window.GROQ_API_KEY) { toast("Set window.GROQ_API_KEY to use the AI assistant"); return; }
   ta.value = "";
   ta.style.height = "auto";
 
@@ -6012,14 +6033,11 @@ window._aiSend = async function() {
       role:    m.role === "ai" ? "assistant" : "user",
       content: m.text,
     }));
-    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method:  "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${window.GROQ_API_KEY}` },
+    const res = await fetch("/api/groq", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model:       window.GROQ_MODEL,
-        messages:    [{ role: "system", content: getAIChatSystem() }, ...history],
-        max_tokens:  280,
-        temperature: 0.9,
+        messages: [{ role: "system", content: getAIChatSystem() }, ...history],
       }),
     });
     if (!res.ok) {
