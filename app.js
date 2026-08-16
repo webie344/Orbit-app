@@ -709,6 +709,376 @@ const openVideoViewer = (mediaItems, startIndex = 0) => {
   document.body.appendChild(backdrop);
   show(cur);
 };
+
+
+// =========================================================================
+// ORBIT REELS — short-video viewer over the existing post collection
+// =========================================================================
+const reelVideosForPost = (post) =>
+  postMediaItems(post).filter((media) => media?.type === "video" && media.url);
+
+const reelEntriesFromPosts = (posts, byUid = {}) =>
+  posts.flatMap((post) =>
+    reelVideosForPost(post).map((media) => ({ post, author: byUid[post.authorUid], media }))
+  );
+
+let _reelsOverlay = null;
+
+const closeReelsOverlay = () => {
+  if (!_reelsOverlay) return;
+  _reelsOverlay.querySelectorAll("video").forEach((video) => {
+    try { video.pause(); } catch {}
+  });
+  _reelsOverlay.remove();
+  _reelsOverlay = null;
+};
+
+const makeReelEntryCard = (entry, index, total, onNavigate) => {
+  const { post, author, media } = entry;
+  const video = el("video", {
+    class: "orbit-reel-video",
+    src: media.url,
+    poster: _cloudPoster(media.url),
+    preload: "metadata",
+    playsinline: "",
+    loop: "",
+  });
+  video.muted = false;
+  const soundIcon = el("i", { class: "ri-volume-up-line" });
+  const soundBtn = el("button", {
+    class: "orbit-reel-sound orbit-reel-sound-btn",
+    type: "button",
+    title: "Toggle reel sound",
+    onclick: (event) => {
+      event.stopPropagation();
+      video.muted = !video.muted;
+      soundIcon.className = video.muted ? "ri-volume-mute-line" : "ri-volume-up-line";
+    },
+  }, soundIcon, " Sound");
+
+  const orbitIcon = el("i", { class: "ri-fire-line" });
+  const orbitCount = el("span", {}, String(post.orbitCount || 0));
+  let orbited = (post.orbits || []).includes(state.uid);
+  const orbitBtn = el("button", {
+    class: `orbit-reel-action${orbited ? " orbited" : ""}`,
+    type: "button",
+    title: "Orbit this reel",
+    onclick: async (event) => {
+      event.stopPropagation();
+      orbited = !orbited;
+      orbitBtn.classList.toggle("orbited", orbited);
+      orbitIcon.className = orbited ? "ri-fire-fill" : "ri-fire-line";
+      orbitCount.textContent = String(Math.max(0, (post.orbitCount || 0) + (orbited ? 1 : -1)));
+      await updateDoc(doc(db, "posts", post.id), {
+        orbits: orbited ? arrayUnion(state.uid) : arrayRemove(state.uid),
+        orbitCount: increment(orbited ? 1 : -1),
+      }).catch(() => {});
+    },
+  }, orbitIcon, orbitCount);
+
+  const commentBtn = el("button", {
+    class: "orbit-reel-action",
+    type: "button",
+    title: "Open comments",
+    onclick: (event) => {
+      event.stopPropagation();
+      closeReelsOverlay();
+      location.hash = `#post/${post.id}`;
+    },
+  }, el("i", { class: "ri-chat-1-line" }), el("span", {}, String(post.commentCount || 0)));
+
+  let saved = (state.me?.saved || []).includes(post.id);
+  const saveIcon = el("i", { class: saved ? "ri-bookmark-fill" : "ri-bookmark-line" });
+  const saveBtn = el("button", {
+    class: `orbit-reel-action${saved ? " active" : ""}`,
+    type: "button",
+    title: "Save reel",
+    onclick: async (event) => {
+      event.stopPropagation();
+      saved = !saved;
+      saveIcon.className = saved ? "ri-bookmark-fill" : "ri-bookmark-line";
+      saveBtn.classList.toggle("active", saved);
+      await toggleSave(post.id, saved).catch(() => {});
+    },
+  }, saveIcon);
+
+  const shareBtn = el("button", {
+    class: "orbit-reel-action",
+    type: "button",
+    title: "Share reel",
+    onclick: async (event) => {
+      event.stopPropagation();
+      await openPostShareModal(post, author);
+    },
+  }, el("i", { class: "ri-share-forward-line" }));
+
+  const actions = el("div", { class: "orbit-reel-actions" }, orbitBtn, commentBtn, saveBtn, shareBtn);
+  const reel = el("article", { class: "orbit-reel", data: { postId: post.id } },
+    video,
+    el("div", { class: "orbit-reel-shade" }),
+    el("div", { class: "orbit-reel-topline" },
+      el("span", { class: "orbit-reel-index" }, `${index + 1} / ${total}`),
+      media.song || post.song
+        ? el("span", { class: "orbit-reel-sound" }, el("i", { class: "ri-music-2-fill" }), " Original sound")
+        : soundBtn,
+    ),
+    el("div", { class: "orbit-reel-bottom" },
+      el("div", { class: "orbit-reel-copy" },
+        el("div", {
+          class: "orbit-reel-author",
+          onclick: (event) => {
+            event.stopPropagation();
+            if (author?.uid) onNavigate?.(`profile/${author.uid}`);
+          },
+        },
+          el("img", { class: "avatar xs", src: avatarFor(author), alt: author?.name || "Orbit member" }),
+          `@${author?.username || "user"}`,
+          author?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
+        ),
+        post.text ? el("div", { class: "orbit-reel-caption" }, post.text) : null,
+        (post.song || media.song)?.name
+          ? el("div", { class: "orbit-reel-song" },
+              el("i", { class: "ri-music-2-line" }),
+              `${(post.song || media.song).name} — ${(post.song || media.song).artist || "Orbit"}`)
+          : null,
+      ),
+      actions,
+    ),
+  );
+
+  video.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (video.paused) {
+      video.muted = false;
+      soundIcon.className = "ri-volume-up-line";
+      video.play().catch(() => {});
+    } else {
+      video.pause();
+    }
+  });
+  return reel;
+};
+
+const wireReelPlayback = (scroller) => {
+  const videos = [...scroller.querySelectorAll(".orbit-reel-video")];
+  const io = new IntersectionObserver((entries) => {
+    if (scroller.dataset.reelsReady !== "1") return;
+    entries.forEach((entry) => {
+      const video = entry.target;
+      if (entry.isIntersecting) {
+        videos.forEach((other) => {
+          if (other !== video) {
+            other.pause();
+          }
+        });
+        video.muted = false;
+        video.play().catch(() => {});
+      } else {
+        video.pause();
+        video.currentTime = 0;
+      }
+    });
+  }, { root: scroller, threshold: 0.75 });
+  videos.forEach((video) => io.observe(video));
+  return io;
+};
+
+const buildReelsScroller = (entries, { modal = false, startIndex = 0 } = {}) => {
+  const scroller = el("div", {
+    class: `orbit-reels-scroll${modal ? " orbit-reels-modal-scroll" : ""}`,
+    "data-reels-ready": "0",
+  });
+  entries.forEach((entry, index) => {
+    scroller.appendChild(makeReelEntryCard(entry, index, entries.length, (route) => {
+      if (modal) closeReelsOverlay();
+      location.hash = `#${route}`;
+    }));
+  });
+  const io = wireReelPlayback(scroller);
+  scroller._reelsIO = io;
+  requestAnimationFrame(() => {
+    const target = scroller.children[startIndex] || scroller.children[0];
+    target?.scrollIntoView({ block: "start" });
+    requestAnimationFrame(() => {
+      scroller.dataset.reelsReady = "1";
+      const targetVideo = target?.querySelector(".orbit-reel-video");
+      if (targetVideo) {
+        videosForReelScroller(scroller).forEach((video) => {
+          if (video !== targetVideo) {
+            video.pause();
+          }
+        });
+        targetVideo.muted = false;
+        targetVideo.play().catch(() => {});
+      }
+    });
+  });
+  return scroller;
+};
+
+const videosForReelScroller = (scroller) =>
+  [...scroller.querySelectorAll(".orbit-reel-video")];
+
+const openReelsForPost = async (postId, seedPost = null, seedAuthor = null, seedMedia = null) => {
+  if (_reelsOverlay) return;
+  // Stop every feed video before the modal opens. Otherwise the feed player
+  // that was underneath the tapped grid cell can keep its audio channel.
+  document.querySelectorAll(".content video, .feed video").forEach((video) => {
+    video.pause();
+    video.muted = true;
+  });
+  _reelsOverlay = el("div", { class: "orbit-reels-overlay" });
+  const head = el("div", { class: "orbit-reels-overlay-head" },
+    el("span", { class: "orbit-reel-index" }, "Reels"),
+    el("button", { class: "orbit-reels-close", type: "button", title: "Close reels", onclick: closeReelsOverlay },
+      el("i", { class: "ri-close-line" })),
+  );
+  const loading = el("div", { class: "orbit-reel-loading" },
+    el("i", { class: "ri-loader-4-line" }), " Loading reels…");
+  const scroller = el("div", { class: "orbit-reels-scroll orbit-reels-modal-scroll" }, loading);
+  _reelsOverlay.append(head, scroller);
+  document.body.appendChild(_reelsOverlay);
+
+  try {
+    const snap = await getDocs(query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(80)));
+    const posts = snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((post) => !postIsHidden(post));
+    if (seedPost && !posts.some((post) => post.id === seedPost.id)) posts.unshift(seedPost);
+    const authors = await Promise.all([...new Set(posts.map((post) => post.authorUid))].map(fetchUser));
+    const byUid = Object.fromEntries(authors.filter(Boolean).map((author) => [author.uid, author]));
+    if (seedAuthor) byUid[seedAuthor.uid] = seedAuthor;
+    const entries = reelEntriesFromPosts(posts, byUid);
+    const selectedIndex = Math.max(0, entries.findIndex((entry) =>
+      entry.post.id === postId && (!seedMedia || entry.media?.url === seedMedia.url)
+    ));
+    // The tapped video is always the first card. Everything else is placed
+    // after it so swiping up moves forward through the remaining videos.
+    const orderedEntries = entries.length
+      ? [entries[selectedIndex], ...entries.slice(selectedIndex + 1), ...entries.slice(0, selectedIndex)]
+      : entries;
+    scroller.innerHTML = "";
+    if (!entries.length) {
+      scroller.appendChild(el("div", { class: "orbit-reel-loading" }, "No video reels are available yet."));
+      return;
+    }
+    const built = buildReelsScroller(orderedEntries, { modal: true, startIndex: 0 });
+    scroller.replaceWith(built);
+  } catch {
+    scroller.innerHTML = "";
+    scroller.appendChild(el("div", { class: "orbit-reel-loading" }, "Could not load reels right now."));
+  }
+};
+
+const wireFeedVideoToReels = (mediaNode, post, author) => {
+  mediaNode.querySelectorAll(".vid-player").forEach((player) => {
+    player.classList.add("feed-reel-target");
+    player.addEventListener("click", (event) => {
+      if (event.target.closest(".vp-big-play, .vp-btn, .vp-seek")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const currentVideo = player.querySelector("video");
+      openReelsForPost(post.id, post, author, currentVideo?.currentSrc ? { url: currentVideo.currentSrc } : null);
+    }, true);
+  });
+};
+
+const buildReelsDiscoverGrid = (entries) => {
+  const grid = el("div", { class: "orbit-reels-discover-grid" });
+  const videos = [];
+  entries.forEach((entry, index) => {
+    const { post, author, media } = entry;
+    const video = el("video", {
+      class: "orbit-discover-video",
+      src: media.url,
+      poster: _cloudPoster(media.url),
+      preload: "metadata",
+      autoplay: "",
+      muted: "",
+      loop: "",
+      playsinline: "",
+    });
+    video.muted = true;
+    video.autoplay = true;
+    video.loop = true;
+    videos.push(video);
+    const card = el("article", {
+      class: "orbit-discover-card",
+      tabindex: "0",
+      onclick: (event) => {
+        event.stopPropagation();
+        openReelsForPost(post.id, post, author, media);
+      },
+      onkeydown: (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openReelsForPost(post.id, post, author, media);
+        }
+      },
+    },
+      video,
+      el("div", { class: "orbit-discover-shade" }),
+      el("div", { class: "orbit-discover-meta" },
+        el("span", { class: "orbit-discover-play" }, el("i", { class: "ri-play-fill" })),
+        el("span", { class: "orbit-discover-author" }, `@${author?.username || "user"}`),
+        el("span", { class: "orbit-discover-count" },
+          el("i", { class: "ri-fire-line" }), String(post.orbitCount || 0)),
+      ),
+    );
+    grid.appendChild(card);
+  });
+  const io = new IntersectionObserver((entriesInView) => {
+    entriesInView.forEach((entry) => {
+      const video = entry.target.querySelector(".orbit-discover-video");
+      if (!video) return;
+      if (entry.isIntersecting) video.play().catch(() => {});
+      else video.pause();
+    });
+  }, { threshold: 0.3 });
+  grid.querySelectorAll(".orbit-discover-card").forEach((card) => io.observe(card));
+  grid._discoverIO = io;
+  return grid;
+};
+
+const renderReels = (root) => {
+  const page = el("div", { class: "orbit-reels-page" });
+  const head = el("div", { class: "orbit-reels-head" },
+    el("div", {},
+      el("div", { class: "orbit-reels-kicker" }, el("i", { class: "ri-film-line" }), " Orbit Reels"),
+      el("h1", { class: "orbit-reels-title" }, "Discover videos"),
+    ),
+    el("div", { class: "orbit-reels-hint" }, "Tap a video to enter Reels"),
+  );
+  let list = el("div", { class: "orbit-reels-discover-grid" },
+    el("div", { class: "orbit-reel-loading" }, el("i", { class: "ri-loader-4-line" }), " Loading videos…"));
+  page.append(head, list);
+  root.appendChild(page);
+
+  const unsub = onSnapshot(
+    query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(80)),
+    async (snap) => {
+      const posts = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+        .filter((post) => !postIsHidden(post) && reelVideosForPost(post).length);
+      const authors = await Promise.all([...new Set(posts.map((post) => post.authorUid))].map(fetchUser));
+      const byUid = Object.fromEntries(authors.filter(Boolean).map((author) => [author.uid, author]));
+      const entries = reelEntriesFromPosts(posts, byUid);
+      list.innerHTML = "";
+      if (!entries.length) {
+        list.appendChild(el("div", { class: "orbit-reel-loading" },
+          el("i", { class: "ri-film-line" }), " No videos yet. Share one to start the loop."));
+        return;
+      }
+      const built = buildReelsDiscoverGrid(entries);
+      list.replaceWith(built);
+      list = built;
+    },
+    () => {
+      list.innerHTML = "";
+      list.appendChild(el("div", { class: "orbit-reel-loading" }, "Could not load reels right now."));
+    },
+  );
+  root._unsub = unsub;
+};
+
+
 // =========================================================================
 // IMAGE ZOOM VIEWER — fullscreen modal with pinch / scroll zoom
 // =========================================================================
@@ -1526,8 +1896,9 @@ $("#notifBtn").addEventListener("click", () => { location.hash = "#notifications
 // =========================================================================
 // 7. ROUTER
 // =========================================================================
-// "reels" removed — videos live in the feed as regular posts
-const routes = ["feed", "pool", "chats", "ai-chat", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn"];
+// Videos remain regular posts in Firestore and are also surfaced through the
+// focused Reels route/viewer.
+const routes = ["feed", "reels", "pool", "chats", "ai-chat", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn"];
 
 // Feed DOM caching — lets us restore the feed instantly when navigating
 // back from a post without re-rendering or re-shuffling.
@@ -1608,6 +1979,7 @@ const router = () => {
         setTimeout(() => _injectAIChatEntry(), 350);
       }
       break;
+    case "reels":      renderReels(content); break;
     case "pool":       renderPool(content); break;
     case "ai-chat":    renderAIChat(content); break;
     case "groups":     renderGroups(content); break;
@@ -2064,7 +2436,7 @@ const _makeGridCell = (m, spanRows = false, _allItems = [], _idx = 0, _postId = 
     "position:relative;overflow:hidden;cursor:pointer;",
     spanRows ? "grid-row:1/3;" : "",
   ].join("");
-  const cell = el("div", { style: cellStyle });
+  const cell = el("div", { class: "orbit-grid-cell", style: cellStyle });
 
   const _navigateToPost = (e) => {
     e.stopPropagation();
@@ -2073,9 +2445,13 @@ const _makeGridCell = (m, spanRows = false, _allItems = [], _idx = 0, _postId = 
 
   if (m.type === "video") {
     const vid = el("video", {
+      class: "orbit-grid-video",
       src: m.url,
       poster: _cloudPoster(m.url),
       preload: "metadata",
+      autoplay: "",
+      muted: "",
+      loop: "",
       playsinline: "",
       style: "width:100%;height:100%;object-fit:cover;display:block;cursor:pointer;",
     });
@@ -2083,9 +2459,21 @@ const _makeGridCell = (m, spanRows = false, _allItems = [], _idx = 0, _postId = 
       class: "media-grid-play",
       style: "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.18);",
     }, el("i", { class: "ri-play-circle-fill", style: "font-size:44px;color:#fff;filter:drop-shadow(0 2px 10px rgba(0,0,0,0.5));" }));
-    // Clicking navigates to post detail instead of opening modal
-    vid.addEventListener("click", _navigateToPost);
-    overlay.addEventListener("click", _navigateToPost);
+    // Video cells in feed grids open the same vertical Reels viewer.
+    const _navigateToReel = (e) => {
+      e.stopPropagation();
+      if (_postId) openReelsForPost(_postId);
+    };
+    vid.muted = true;
+    vid.loop = true;
+    vid.autoplay = true;
+    const _gridVideoObserver = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) vid.play().catch(() => {});
+      else vid.pause();
+    }, { threshold: 0.35 });
+    _gridVideoObserver.observe(vid);
+    vid.addEventListener("click", _navigateToReel);
+    overlay.addEventListener("click", _navigateToReel);
     cell.appendChild(vid);
     cell.appendChild(overlay);
   } else {
@@ -2126,6 +2514,34 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
     });
     if (song && !sawVideo) _wireStandaloneSong(stack);
     return stack;
+  }
+
+  // ── TikTok-style video grid: 2 columns, autoplaying previews ────
+  // Keep the existing stacked detail view for comments and full post
+  // inspection; the feed gets a true multi-video grid.
+  const isVideoGrid = !detailView && items.length > 1 && items.every((m) => m.type === "video");
+  if (isVideoGrid) {
+    const visible = items.slice(0, 6);
+    const overflow = items.length - visible.length;
+    const grid = el("div", {
+      class: "post-media orbit-video-grid",
+      style: "display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:minmax(150px,1fr);gap:3px;border-radius:14px;overflow:hidden;margin:8px 0;position:relative;",
+    });
+    visible.forEach((m, i) => {
+      const cell = _makeGridCell(m, false, items, i, postId);
+      if (i === visible.length - 1 && overflow > 0) {
+        cell.appendChild(el("div", {
+          class: "orbit-video-grid-more",
+          onclick: (e) => {
+            e.stopPropagation();
+            if (postId) openReelsForPost(postId);
+          },
+        }, `+${overflow} more`));
+      }
+      grid.appendChild(cell);
+    });
+    if (song) _wireStandaloneSong(grid);
+    return grid;
   }
 
   // ── Single item ────────────────────────────────────────────────
@@ -2494,6 +2910,12 @@ const renderPost = (p, author, opts = {}) => {
     mediaNode.classList.remove("post-media");
     mediaNode.classList.add("tfb-media");
     post.appendChild(mediaNode);
+    // In the feed, tapping a video anywhere except its playback controls
+    // opens the vertical Reels viewer. The post-details route stays the
+    // dedicated place for comments.
+    if (!_detailView && reelVideosForPost(p).length) {
+      wireFeedVideoToReels(mediaNode, p, author);
+    }
   }
 
   // ── Build / project extra detail block ───────────────────────────
