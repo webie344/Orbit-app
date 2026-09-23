@@ -2074,51 +2074,12 @@ const renderTrendingCard = (p, author) => {
 };
 
 // =========================================================================
-// 8a. MEDIA CAROUSEL / GRID
+// 8a. MEDIA CAROUSEL
 // 1 item  → single full-width image or video player
-// 2 items → side-by-side grid (Facebook-style)
-// 3 items → 1 large left + 2 stacked right (Facebook-style)
-// 4+      → swipeable carousel
+// 2+      → Drop-style swipeable carousel
 // =========================================================================
-const _makeGridCell = (m, spanRows = false, _allItems = [], _idx = 0, _postId = null) => {
-  const cellStyle = [
-    "position:relative;overflow:hidden;cursor:pointer;",
-    spanRows ? "grid-row:1/3;" : "",
-  ].join("");
-  const cell = el("div", { style: cellStyle });
-
-  const _navigateToPost = (e) => {
-    e.stopPropagation();
-    if (_postId) location.hash = `#post/${_postId}`;
-  };
-
-  if (m.type === "video") {
-    const vid = el("video", {
-      src: m.url,
-      poster: _cloudPoster(m.url),
-      preload: "metadata",
-      playsinline: "",
-      style: "width:100%;height:100%;object-fit:cover;display:block;cursor:pointer;",
-    });
-    const overlay = el("div", {
-      class: "media-grid-play",
-      style: "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.18);",
-    }, el("i", { class: "ri-play-circle-fill", style: "font-size:44px;color:#fff;filter:drop-shadow(0 2px 10px rgba(0,0,0,0.5));" }));
-    // Clicking navigates to post detail instead of opening modal
-    vid.addEventListener("click", _navigateToPost);
-    overlay.addEventListener("click", _navigateToPost);
-    cell.appendChild(vid);
-    cell.appendChild(overlay);
-  } else {
-    const img = el("img", { src: m.url, loading: "lazy", style: "width:100%;height:100%;object-fit:cover;display:block;" });
-    img.addEventListener("click", _navigateToPost);
-    cell.appendChild(img);
-  }
-  return cell;
-};
-
 const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
-  const { detailView = false, song = null } = opts;
+  const { song = null } = opts;
   const items = Array.isArray(mediaRaw) ? mediaRaw : (mediaRaw ? [mediaRaw] : []);
   if (!items.length) return null;
   // A song attaches at the post level; if the media itself isn't a single
@@ -2546,12 +2507,9 @@ const renderPost = (p, author, opts = {}) => {
     ),
     el("div", { class: "tfb-header-text post-header-text" },
       el("span", { class: "tfb-name post-username" },
-        author?.name || "User",
-        author?.verified
-          ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' })
-          : null,
+         `@${author?.username || "user"}`,
       ),
-      el("span", { class: "tfb-sub post-time" }, `@${author?.username || "user"} · ${fmtTime(p.createdAt)}`),
+       el("span", { class: "tfb-sub post-time" }, fmtTime(p.createdAt)),
     ),
     !isMine && author?.uid
       ? el("button", {
@@ -2601,12 +2559,14 @@ const renderPost = (p, author, opts = {}) => {
     ));
   }
 
-  // ── Caption ──────────────────────────────────────────────────────
+  // ── Caption (Drop places this below media/actions/reactions) ─────
+  let captionNode = null;
   if (p.text) {
     const caption = el("div", { class: "tfb-caption post-caption" });
+    captionNode = caption;
     const attachCaptionAuthor = () => {
       if (!caption.querySelector(".post-caption-author")) {
-        caption.prepend(el("span", { class: "post-caption-author" }, `${author?.name || "User"} `));
+        caption.prepend(el("span", { class: "post-caption-author" }, `@${author?.username || "user"} `));
       }
     };
     if (p.text.includes("```")) {
@@ -2637,7 +2597,6 @@ const renderPost = (p, author, opts = {}) => {
         };
       }
     }
-    post.appendChild(caption);
   }
 
   // ── Media ────────────────────────────────────────────────────────
@@ -2658,13 +2617,16 @@ const renderPost = (p, author, opts = {}) => {
     }).catch(() => {});
   }
 
-  // ── Actions row ──────────────────────────────────────────────────
-  const orbitIcon  = el("i", { class: iOrbited ? "ri-fire-fill" : "ri-fire-line" });
+  // ── Drop action row: like/orbit, comment, share ──────────────────
+  // Orbit keeps its native orbit persistence, but uses Drop's heart
+  // treatment and three-button row so the post structure matches Drop.
+  const orbitIcon  = el("span", { class: "heart" }, iOrbited ? "♥" : "♡");
   const orbitCount = el("span", { text: String(p.orbitCount || 0) });
   let _iOrbited = iOrbited;
 
   const orbitBtn = el("button", {
-    class: `tfb-badge${iOrbited ? " active" : ""}`,
+    class: `post-action like-btn orbit-action${iOrbited ? " liked active" : ""}`,
+    "aria-label": "Like",
     onclick: async (e) => {
       e.stopPropagation();
       _iOrbited = !_iOrbited;
@@ -2672,8 +2634,9 @@ const renderPost = (p, author, opts = {}) => {
       orbitBtn.classList.remove("orbit-burst");
       void orbitBtn.offsetWidth;
       orbitBtn.classList.add("orbit-burst");
-      orbitIcon.className   = _iOrbited ? "ri-fire-fill" : "ri-fire-line";
+      orbitIcon.textContent = _iOrbited ? "♥" : "♡";
       orbitCount.textContent = String((p.orbitCount || 0) + (_iOrbited ? 1 : -1));
+      orbitBtn.classList.toggle("liked", _iOrbited);
       orbitBtn.classList.toggle("active", _iOrbited);
       await updateDoc(doc(db, "posts", p.id), {
         orbits:     _iOrbited ? arrayUnion(state.uid)   : arrayRemove(state.uid),
@@ -2693,14 +2656,12 @@ const renderPost = (p, author, opts = {}) => {
     },
   }, orbitIcon, orbitCount);
 
-  let _saved = (state.me?.saved || []).includes(p.id);
-  const saveIconEl = el("i", { class: _saved ? "ri-bookmark-fill" : "ri-bookmark-line" });
-
   // Live-updatable comment count element — updated by the feed onSnapshot below
   const cmtCountEl = el("span", {});
   cmtCountEl.textContent = " " + String(p.commentCount || 0);
 
   const actions = el("div", { class: "tfb-actions post-actions" },
+    orbitBtn,
     el("button", { class: "tfb-act post-action", onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; } },
       el("i", { class: "ri-chat-1-line" }),
       cmtCountEl,
@@ -2712,27 +2673,22 @@ const renderPost = (p, author, opts = {}) => {
         await openPostShareModal(p, author);
       },
     },
-      el("i", { class: "ri-share-forward-line" }), " Share",
+      el("i", { class: "ri-share-forward-line" }),
     ),
-    el("button", { class: `tfb-act post-action save-post-btn${_saved ? " saved" : ""}`, onclick: async (e) => {
-      e.stopPropagation();
-      _saved = !_saved;
-      saveIconEl.className = _saved ? "ri-bookmark-fill" : "ri-bookmark-line";
-      e.currentTarget.classList.toggle("saved", _saved);
-      e.currentTarget.classList.add("save-burst");
-      setTimeout(() => e.currentTarget.classList.remove("save-burst"), 420);
-      await toggleSave(p.id, _saved);
-    } },
-      saveIconEl,
-    ),
-    el("span", { class: "spacer" }),
-    el("span", { class: "tfb-act post-action", style: "cursor:default;pointer-events:none;" },
-      el("i", { class: "ri-eye-line" }), " " + String(p.views || 0),
-    ),
-    orbitBtn,
   );
   post.appendChild(actions);
   post.appendChild(renderDropReactionRow(p, p.id));
+
+  // Drop order: media → actions → reactions → caption → view comments.
+  if (captionNode) post.appendChild(captionNode);
+  const initialCommentCount = Number(p.commentCount || 0);
+  const viewCommentsBtn = !_detailView
+    ? el("button", {
+        class: `post-view-comments${initialCommentCount ? "" : " hidden"}`,
+        onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; },
+      }, `View all ${initialCommentCount} comment${initialCommentCount === 1 ? "" : "s"}`)
+    : null;
+  if (viewCommentsBtn) post.appendChild(viewCommentsBtn);
 
   // ── Comments (feed preview — top 5) ─────────────────────────────
   if (!hideComments) {
@@ -2969,8 +2925,13 @@ const renderPost = (p, author, opts = {}) => {
         const authors  = await Promise.all([...new Set(comments.map((c) => c.authorUid))].map(fetchUser));
         const map      = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
         comments.forEach((c) => cBox.appendChild(renderFeedComment(c, map[c.authorUid])));
-        // Keep the feed comment count badge in sync with live comment data
-        cmtCountEl.textContent = " " + String(snap.size);
+        // Keep the action count and Drop-style view-comments affordance live.
+        const liveCount = Math.max(snap.size, Number(p.commentCount || 0));
+        cmtCountEl.textContent = " " + String(liveCount);
+        if (viewCommentsBtn) {
+          viewCommentsBtn.textContent = `View all ${liveCount} comment${liveCount === 1 ? "" : "s"}`;
+          viewCommentsBtn.classList.toggle("hidden", liveCount === 0);
+        }
       },
     );
 
@@ -3115,10 +3076,10 @@ const renderPostDetail = async (root, postId) => {
   root.appendChild(renderPost(p, author, { hideComments: true, detailView: true }));
 
   // Full comments section
-  const cmtSection = el("div", { class: "detail-comments" });
+  const cmtSection = el("div", { class: "detail-comments post-detail-comments" });
   root.appendChild(cmtSection);
 
-  const cmtHead = el("div", { class: "detail-cmt-head" }, "Echoes");
+  const cmtHead = el("h3", { class: "detail-cmt-head" }, "Comments");
   cmtSection.appendChild(cmtHead);
 
   const cList = el("div", { class: "detail-cmt-list" });

@@ -4209,16 +4209,22 @@ body > [class^="goog"] {
 .drop-post {
   background: var(--bg-elev);
   border: 0;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 0;
   border-radius: 0;
   padding: 0;
   overflow: hidden;
   cursor: pointer;
   user-select: none;
+  display: flex;
+  flex-direction: column;
+  contain: content;
 }
 
 .drop-post:hover { background: var(--bg-elev); }
 .drop-post .tfb-tail { display: none; }
+.drop-post .post-follow-btn,
+.drop-post .tfb-menu { display: none; }
+.tfb-feed > .tfb-divider { display: none; }
 
 .drop-post .post-header {
   display: flex;
@@ -4433,11 +4439,30 @@ body > [class^="goog"] {
 
 .drop-post .post-action:active { transform: scale(.92); }
 .drop-post .post-action i { font-size: 22px; }
-.drop-post .post-action.save-post-btn { margin-left: 0; }
-.drop-post .post-actions .spacer { display: none; }
-.drop-post .post-actions .post-action:nth-last-child(2) { margin-left: auto; }
-.drop-post .post-actions .tfb-badge { padding: 0; }
-.drop-post .post-actions .tfb-badge i { font-size: 23px; }
+.drop-post .post-action .heart {
+  color: var(--text);
+  font-size: 24px;
+  line-height: 1;
+  transition: color 120ms ease;
+}
+.drop-post .post-action.like-btn.liked,
+.drop-post .post-action.like-btn.liked .heart { color: #ff2d55; }
+
+.drop-post .post-view-comments {
+  display: block;
+  width: 100%;
+  padding: 4px 14px 14px;
+  border: 0;
+  background: none;
+  color: var(--text-mute);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.drop-post .post-view-comments:hover { color: var(--text); }
+.drop-post .post-view-comments.hidden { display: none; }
+.detail-topbar { border-bottom: 0; }
 
 .drop-post .reactions-row {
   display: flex;
@@ -4511,8 +4536,8 @@ body > [class^="goog"] {
 
 .drop-post .comments {
   margin: 10px 14px 0;
-  padding: 10px 0 0;
-  border-top: 1px solid var(--line);
+  padding: 0;
+  border-top: 0;
 }
 
 .drop-post .drop-comment {
@@ -4589,7 +4614,7 @@ body > [class^="goog"] {
 .detail-comments {
   margin: 24px 0 0;
   padding: 16px 16px 96px;
-  border-top: 1px solid var(--line);
+  border-top: 0;
 }
 
 .detail-comments .detail-cmt-head {
@@ -4610,7 +4635,7 @@ body > [class^="goog"] {
   display: flex;
   gap: 10px;
   padding: 10px 0;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 0;
 }
 
 .detail-comments .detail-comment:last-child { border-bottom: 0; }
