@@ -16,7 +16,7 @@ import {
 import {
   getFirestore, doc, setDoc, getDoc, updateDoc, addDoc, deleteDoc,
   collection, query, where, orderBy, limit, startAfter, onSnapshot, getDocs,
-  serverTimestamp, increment, arrayUnion, arrayRemove, writeBatch,
+  serverTimestamp, increment, arrayUnion, arrayRemove, deleteField, writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 
 // =========================================================================
@@ -2126,29 +2126,6 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
   // media block scrolling into view instead.
   const _wireStandaloneSong = (node) => { if (song) _wireSongPlayback(node, song, null); return node; };
 
-  // ── Detail view: all items stacked vertically (Facebook-style) ──
-  if (detailView && items.length > 1) {
-    const stack = el("div", { class: "post-media-stack", style: "display:flex;flex-direction:column;gap:4px;position:relative;" });
-    let sawVideo = false;
-    items.forEach((m) => {
-      if (m.type === "video") {
-        sawVideo = true;
-        const player = buildVideoPlayer(m.url, { song, overlays: m.overlays });
-        player.style.borderRadius = "14px";
-        stack.appendChild(player);
-      } else {
-        const img = el("img", {
-          src: m.url, loading: "lazy",
-          style: "width:100%;display:block;max-height:520px;object-fit:cover;cursor:zoom-in;border-radius:0;",
-        });
-        img.addEventListener("click", () => openImageZoom(m.url));
-        stack.appendChild(img);
-      }
-    });
-    if (song && !sawVideo) _wireStandaloneSong(stack);
-    return stack;
-  }
-
   // ── Single item ────────────────────────────────────────────────
   if (items.length === 1) {
     const m = items[0];
@@ -2168,50 +2145,56 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
     return wrap;
   }
 
-  // ── 2 items: side-by-side ──────────────────────────────────────
-  if (items.length === 2) {
-    const grid = el("div", {
-      class: "post-media",
-      style: "display:grid;grid-template-columns:1fr 1fr;gap:3px;border-radius:14px;overflow:hidden;height:260px;margin:8px 0;position:relative;",
-    });
-    items.forEach((m, i) => grid.appendChild(_makeGridCell(m, false, items, i, postId)));
-    if (song) _wireStandaloneSong(grid);
-    return grid;
-  }
-
-  // ── 3 items: 1 large left + 2 stacked right ────────────────────
-  if (items.length === 3) {
-    const grid = el("div", {
-      class: "post-media",
-      style: "display:grid;grid-template-columns:2fr 1fr;grid-template-rows:130px 130px;gap:3px;border-radius:14px;overflow:hidden;margin:8px 0;position:relative;",
-    });
-    items.forEach((m, i) => grid.appendChild(_makeGridCell(m, i === 0, items, i, postId)));
-    if (song) _wireStandaloneSong(grid);
-    return grid;
-  }
-
-  // ── 4+ items: Facebook-style 2×2 grid with "+N more" overflow ─
-  const show = items.slice(0, 4);
-  const overflow = items.length - 4;
-  const grid = el("div", {
-    class: "post-media",
-    style: "display:grid;grid-template-columns:1fr 1fr;grid-template-rows:130px 130px;gap:3px;border-radius:14px;overflow:hidden;margin:8px 0;position:relative;",
+  // ── 2+ items: Drop-style swipe carousel, never a grid ─────────
+  const track = el("div", {
+    class: "post-image-track",
+    style: "display:flex;width:100%;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;",
   });
-  show.forEach((m, i) => {
-    const cell = _makeGridCell(m, false, items, i, postId);
-    if (i === 3 && overflow > 0) {
-      const moreOverlay = el("div", {
-        style: "position:absolute;inset:0;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;cursor:pointer;",
-        onclick: (e) => { e.stopPropagation(); if (postId) location.hash = `#post/${postId}`; },
-      }, el("span", {
-        style: "color:#fff;font-size:22px;font-weight:700;font-family:var(--font-display);letter-spacing:-0.02em;",
-      }, `+${overflow}`));
-      cell.appendChild(moreOverlay);
+  let sawVideo = false;
+
+  items.forEach((m) => {
+    const cell = el("div", {
+      class: "carousel-cell",
+      style: "flex:0 0 100%;width:100%;scroll-snap-align:start;position:relative;overflow:hidden;",
+    });
+    if (m.type === "video") {
+      sawVideo = true;
+      const player = buildVideoPlayer(m.url, { song, overlays: m.overlays });
+      player.style.borderRadius = "0";
+      player.style.width = "100%";
+      cell.appendChild(player);
+    } else {
+      const img = el("img", {
+        src: m.url,
+        loading: "lazy",
+        style: "width:100%;display:block;aspect-ratio:4/5;object-fit:cover;cursor:zoom-in;",
+      });
+      img.addEventListener("click", () => openImageZoom(m.url));
+      cell.appendChild(img);
     }
-    grid.appendChild(cell);
+    track.appendChild(cell);
   });
-  if (song) _wireStandaloneSong(grid);
-  return grid;
+
+  const counter = el("div", { class: "carousel-counter" }, `1/${items.length}`);
+  const dots = el("div", { class: "carousel-dots" },
+    ...items.map((_, index) => el("span", {
+      class: `carousel-dot${index === 0 ? " active" : ""}`,
+    })),
+  );
+  track.addEventListener("scroll", () => {
+    const index = Math.round(track.scrollLeft / Math.max(track.clientWidth, 1));
+    counter.textContent = `${Math.min(items.length, index + 1)}/${items.length}`;
+    dots.querySelectorAll(".carousel-dot").forEach((dot, dotIndex) => {
+      dot.classList.toggle("active", dotIndex === index);
+    });
+  }, { passive: true });
+
+  const carousel = el("div", {
+    class: "post-media post-image-wrap carousel",
+    style: "position:relative;overflow:hidden;border-radius:14px;margin:8px 0;",
+  }, track, counter, dots);
+  if (song && !sawVideo) _wireStandaloneSong(carousel);
+  return carousel;
 };
 
 const postIsHidden = (p) => (state.me?.hiddenPosts || []).includes(p.id);
@@ -2392,6 +2375,142 @@ const openPostMenu = (p, author, isMine) => {
   requestAnimationFrame(() => sheet.classList.add("is-visible"));
 };
 
+// =========================================================================
+// DROP-STYLE POST REACTIONS
+// =========================================================================
+// Orbit keeps its native "Orbit" interaction, while posts also support the
+// same compact reaction chips used by Drop. Reactions are stored as numeric
+// counters in posts/{postId}.reactions and the current user's selection is
+// stored in posts/{postId}.userReactions/{uid}.
+const DROP_REACTIONS = [
+  { key: "fire", emoji: "🔥" },
+  { key: "love", emoji: "❤️" },
+  { key: "lol",  emoji: "😂" },
+  { key: "wow",  emoji: "😮" },
+  { key: "clap", emoji: "👏" },
+];
+
+const dropReactionCount = (value) =>
+  Array.isArray(value) ? value.length : Math.max(0, Number(value) || 0);
+
+const renderDropReactionRow = (p, postId) => {
+  const reactions = p.reactions || {};
+  const myReaction = (p.userReactions || {})[state.uid] || null;
+  const row = el("div", { class: "reactions-row drop-reactions-row" });
+
+  DROP_REACTIONS.forEach(({ key, emoji }) => {
+    const count = dropReactionCount(reactions[key]);
+    if (!count && myReaction !== key) return;
+    const chip = el("button", {
+      type: "button",
+      class: `reaction-chip${myReaction === key ? " active" : ""}`,
+      "data-reaction": key,
+      "aria-label": `${emoji} reaction`,
+      onclick: async (event) => {
+        event.stopPropagation();
+        await toggleDropReaction(postId, key, chip);
+      },
+    },
+      el("span", { class: "emoji" }, emoji),
+      count ? el("span", { class: "count" }, String(count)) : null,
+    );
+    row.appendChild(chip);
+  });
+
+  const picker = el("button", {
+    type: "button",
+    class: "reaction-picker",
+    "aria-label": "Add reaction",
+    onclick: (event) => {
+      event.stopPropagation();
+      showDropReactionPicker(event.currentTarget, postId);
+    },
+  },
+    el("span", { class: "reaction-picker-emoji" }, "😊"),
+    el("span", { class: "reaction-picker-plus" }, "+"),
+  );
+  row.appendChild(picker);
+  return row;
+};
+
+const patchDropReactionRows = (postId, reactions, myReaction) => {
+  const fakePost = {
+    id: postId,
+    reactions,
+    userReactions: { [state.uid]: myReaction || null },
+  };
+  document.querySelectorAll(`.tfb-post[data-post-id="${postId}"] .reactions-row`).forEach((row) => {
+    row.replaceWith(renderDropReactionRow(fakePost, postId));
+  });
+};
+
+const toggleDropReaction = async (postId, reactionKey, anchorEl) => {
+  const ref = doc(db, "posts", postId);
+  const snap = await getDoc(ref).catch(() => null);
+  if (!snap?.exists()) return;
+  const postData = snap.data();
+  const reactions = { ...(postData.reactions || {}) };
+  const previous = (postData.userReactions || {})[state.uid] || null;
+  const updates = {};
+
+  if (previous === reactionKey) {
+    updates[`reactions.${reactionKey}`] = increment(-1);
+    updates[`userReactions.${state.uid}`] = deleteField();
+  } else {
+    if (previous) updates[`reactions.${previous}`] = increment(-1);
+    updates[`reactions.${reactionKey}`] = increment(1);
+    updates[`userReactions.${state.uid}`] = reactionKey;
+  }
+
+  if (previous !== reactionKey) {
+    const selected = DROP_REACTIONS.find((item) => item.key === reactionKey);
+    if (selected) spawnFloatingReaction(selected.emoji, anchorEl);
+  }
+
+  const optimistic = { ...reactions };
+  if (previous && previous !== reactionKey) {
+    optimistic[previous] = Math.max(0, dropReactionCount(optimistic[previous]) - 1);
+  }
+  if (previous === reactionKey) {
+    optimistic[reactionKey] = Math.max(0, dropReactionCount(optimistic[reactionKey]) - 1);
+  } else {
+    optimistic[reactionKey] = dropReactionCount(optimistic[reactionKey]) + 1;
+  }
+  patchDropReactionRows(postId, optimistic, previous === reactionKey ? null : reactionKey);
+
+  try {
+    await updateDoc(ref, updates);
+  } catch (error) {
+    console.warn("toggleDropReaction:", error);
+    patchDropReactionRows(postId, reactions, previous);
+    toast("Could not update reaction");
+  }
+};
+
+const showDropReactionPicker = (anchorEl, postId) => {
+  document.getElementById("orbit-drop-reaction-pop")?.remove();
+  const pop = el("div", { id: "orbit-drop-reaction-pop", class: "reaction-pop" });
+  DROP_REACTIONS.forEach(({ key, emoji }) => {
+    const button = el("button", {
+      type: "button",
+      "aria-label": `React ${emoji}`,
+      onclick: async (event) => {
+        event.stopPropagation();
+        await toggleDropReaction(postId, key, button);
+        pop.remove();
+      },
+    }, emoji);
+    pop.appendChild(button);
+  });
+  document.body.appendChild(pop);
+  const rect = anchorEl.getBoundingClientRect();
+  pop.style.top = `${window.scrollY + rect.top - pop.offsetHeight - 8}px`;
+  pop.style.left = `${Math.max(8, window.scrollX + rect.left)}px`;
+  setTimeout(() => {
+    document.addEventListener("click", () => pop.remove(), { once: true });
+  }, 0);
+};
+
 const renderPost = (p, author, opts = {}) => {
   const iOrbited = (p.orbits || []).includes(state.uid);
   const isMine = p.authorUid === state.uid;
@@ -2407,7 +2526,10 @@ const renderPost = (p, author, opts = {}) => {
     }
   }
 
-  const post = el("article", { class: "tfb-post", data: { postId: p.id } });
+  const post = el("article", {
+    class: `tfb-post post-card drop-post${_detailView ? " post-detail-post" : ""}`,
+    data: { postId: p.id },
+  });
 
   // ── Header: avatar ring + name + timestamp + menu ────────────────
   const menuBtn = el("button", { class: "icon-btn tfb-menu", onclick: (e) => {
@@ -2415,21 +2537,21 @@ const renderPost = (p, author, opts = {}) => {
     openPostMenu(p, author, isMine);
   }}, el("i", { class: "ri-more-2-line" }));
 
-  const header = el("div", { class: "tfb-header" },
+  const header = el("div", { class: "tfb-header post-header" },
     el("div", {
-      class: "tfb-avatar-ring",
+      class: "tfb-avatar-ring post-avatar",
       onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${author?.uid}`; },
     },
       el("img", { src: avatarFor(author) }),
     ),
-    el("div", { class: "tfb-header-text" },
-      el("span", { class: "tfb-name" },
+    el("div", { class: "tfb-header-text post-header-text" },
+      el("span", { class: "tfb-name post-username" },
         author?.name || "User",
         author?.verified
           ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' })
           : null,
       ),
-      el("span", { class: "tfb-sub" }, `@${author?.username || "user"} · ${fmtTime(p.createdAt)}`),
+      el("span", { class: "tfb-sub post-time" }, `@${author?.username || "user"} · ${fmtTime(p.createdAt)}`),
     ),
     !isMine && author?.uid
       ? el("button", {
@@ -2481,11 +2603,19 @@ const renderPost = (p, author, opts = {}) => {
 
   // ── Caption ──────────────────────────────────────────────────────
   if (p.text) {
-    const caption = el("div", { class: "tfb-caption" });
+    const caption = el("div", { class: "tfb-caption post-caption" });
+    const attachCaptionAuthor = () => {
+      if (!caption.querySelector(".post-caption-author")) {
+        caption.prepend(el("span", { class: "post-caption-author" }, `${author?.name || "User"} `));
+      }
+    };
     if (p.text.includes("```")) {
       import("./features.js")
-        .then((m) => caption.appendChild(m.renderTextWithCode(p.text)))
-        .catch(() => { caption.innerHTML = linkify(p.text); });
+        .then((m) => {
+          caption.appendChild(m.renderTextWithCode(p.text));
+          attachCaptionAuthor();
+        })
+        .catch(() => { caption.innerHTML = linkify(p.text); attachCaptionAuthor(); });
     } else {
       const TRUNC_LEN = 280;
       if (!_detailView && p.text.length > TRUNC_LEN) {
@@ -2493,6 +2623,7 @@ const renderPost = (p, author, opts = {}) => {
         const shortText = p.text.slice(0, TRUNC_LEN).trim();
         const paint = () => {
           caption.innerHTML = linkify(expanded ? p.text : shortText + "… ");
+            attachCaptionAuthor();
           const moreBtn = el("span", { class: "see-more-btn", text: expanded ? "See less" : "See more" });
           moreBtn.addEventListener("click", (e) => { e.stopPropagation(); expanded = !expanded; paint(); });
           caption.appendChild(moreBtn);
@@ -2500,6 +2631,7 @@ const renderPost = (p, author, opts = {}) => {
         paint();
       } else {
         caption.innerHTML = linkify(p.text);
+        attachCaptionAuthor();
         caption.onclick = (e) => {
           if (!e.target.closest("button,a")) location.hash = `#post/${p.id}`;
         };
@@ -2513,7 +2645,7 @@ const renderPost = (p, author, opts = {}) => {
   if (mediaNode) {
     // Swap post-media class for tfb-media
     mediaNode.classList.remove("post-media");
-    mediaNode.classList.add("tfb-media");
+    mediaNode.classList.add("tfb-media", "post-image-wrap");
     post.appendChild(mediaNode);
   }
 
@@ -2568,13 +2700,13 @@ const renderPost = (p, author, opts = {}) => {
   const cmtCountEl = el("span", {});
   cmtCountEl.textContent = " " + String(p.commentCount || 0);
 
-  const actions = el("div", { class: "tfb-actions" },
-    el("button", { class: "tfb-act", onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; } },
+  const actions = el("div", { class: "tfb-actions post-actions" },
+    el("button", { class: "tfb-act post-action", onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; } },
       el("i", { class: "ri-chat-1-line" }),
       cmtCountEl,
     ),
     el("button", {
-      class: "tfb-act",
+      class: "tfb-act post-action",
       onclick: async (e) => {
         e.stopPropagation();
         await openPostShareModal(p, author);
@@ -2582,7 +2714,7 @@ const renderPost = (p, author, opts = {}) => {
     },
       el("i", { class: "ri-share-forward-line" }), " Share",
     ),
-    el("button", { class: `tfb-act save-post-btn${_saved ? " saved" : ""}`, onclick: async (e) => {
+    el("button", { class: `tfb-act post-action save-post-btn${_saved ? " saved" : ""}`, onclick: async (e) => {
       e.stopPropagation();
       _saved = !_saved;
       saveIconEl.className = _saved ? "ri-bookmark-fill" : "ri-bookmark-line";
@@ -2594,16 +2726,17 @@ const renderPost = (p, author, opts = {}) => {
       saveIconEl,
     ),
     el("span", { class: "spacer" }),
-    el("span", { class: "tfb-act", style: "cursor:default;pointer-events:none;" },
+    el("span", { class: "tfb-act post-action", style: "cursor:default;pointer-events:none;" },
       el("i", { class: "ri-eye-line" }), " " + String(p.views || 0),
     ),
     orbitBtn,
   );
   post.appendChild(actions);
+  post.appendChild(renderDropReactionRow(p, p.id));
 
   // ── Comments (feed preview — top 5) ─────────────────────────────
   if (!hideComments) {
-    const cBox = el("div", { class: "comments hidden" });
+    const cBox = el("div", { class: "comments drop-comments hidden" });
     post.appendChild(cBox);
 
     let _replyTo = null;
@@ -2695,8 +2828,8 @@ const renderPost = (p, author, opts = {}) => {
       } catch { toast("Microphone access denied"); }
     });
 
-    const cForm = el("form", { class: "comment-form" });
-    const cFormRow = el("div", { class: "comment-form-row" },
+    const cForm = el("form", { class: "comment-form drop-comment-form" });
+    const cFormRow = el("div", { class: "comment-form-row drop-comment-form-row" },
       el("img", { class: "avatar xs", src: avatarFor(state.me), style: "cursor:pointer;", onclick: () => location.hash = `#profile/${state.uid}` }),
       el("input", { type: "text", placeholder: "Add your echo…" }),
       cmtMediaBtn,
@@ -2731,7 +2864,7 @@ const renderPost = (p, author, opts = {}) => {
       replyBanner.classList.add("hidden"); input.placeholder = "Add your echo…";
       clearCmtAttach();
       cBox.classList.remove("hidden");
-      cBox.appendChild(el("div", { class: "comment" },
+       cBox.appendChild(el("div", { class: "comment drop-comment" },
         el("img", { class: "avatar xs", src: avatarFor(state.me), onclick: () => location.hash = `#profile/${state.uid}` }),
         el("div", { class: "body" },
           el("div", { class: "name" }, state.me?.name || "User"),
@@ -2792,7 +2925,7 @@ const renderPost = (p, author, opts = {}) => {
         cForm.querySelector("input").focus();
       }}, "Reply");
 
-      return el("div", { class: "comment" },
+       return el("div", { class: "comment drop-comment" },
         el("img", { class: "avatar xs", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
         el("div", { class: "body" },
           el("div", { class: "name" }, a?.name || "User",
@@ -3072,9 +3205,9 @@ const renderPostDetail = async (root, postId) => {
       },
     }, el("i", { class: "ri-share-forward-line" }));
 
-    return el("div", { class: "tw-comment" },
-      el("img", { class: "avatar xs tw-cmt-avatar", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
-      el("div", { class: "tw-cmt-body" },
+    return el("div", { class: "tw-comment detail-comment" },
+      el("img", { class: "avatar xs tw-cmt-avatar detail-comment-avatar", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
+      el("div", { class: "tw-cmt-body detail-comment-body" },
         el("div", { class: "tw-cmt-header" },
           el("span", { class: "tw-cmt-name" }, a?.name || "User",
             a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
@@ -3228,10 +3361,10 @@ const renderPostDetail = async (root, postId) => {
     } catch { toast("Microphone access denied"); }
   });
 
-  const cForm = el("form", { class: "comment-form detail-cmt-form" });
+  const cForm = el("form", { class: "comment-form detail-cmt-form post-detail-composer" });
   cForm.appendChild(dCmtMediaInput);
   cForm.appendChild(dCmtAttachPreview);
-  const dFormRow = el("div", { class: "comment-form-row" },
+  const dFormRow = el("div", { class: "comment-form-row post-detail-composer-row" },
     el("img", { class: "avatar xs", src: avatarFor(state.me), style: "cursor:pointer;", onclick: () => location.hash = `#profile/${state.uid}` }),
     el("input", { type: "text", placeholder: "Add your echo…" }),
     dCmtMediaBtn,
