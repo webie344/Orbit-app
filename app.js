@@ -3096,11 +3096,6 @@ const renderPostDetail = async (root, postId) => {
         el("span", {}, `@${author?.username || "user"}`),
       ),
     ),
-    el("div", { class: "detail-topbar-stats" },
-      el("span", {}, el("i", { class: "ri-fire-line" }), ` ${p.orbitCount || 0}`),
-      el("span", {}, el("i", { class: "ri-eye-line" }), ` ${p.views || 0}`),
-      el("span", {}, el("i", { class: "ri-chat-1-line" }), ` ${p.commentCount || 0}`),
-    ),
   );
 
   root.appendChild(el("div", { class: "product-detail-heading" },
