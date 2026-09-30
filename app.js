@@ -1129,7 +1129,7 @@ const applyTheme = (theme) => {
                    : "ri-contrast-2-line"; // glass
   }
 };
-const initTheme = () => applyTheme(localStorage.getItem("orbit:theme") || "dark");
+const initTheme = () => applyTheme(localStorage.getItem("orbit:theme") || "light");
 const toggleTheme = () => {
   const cur = document.documentElement.getAttribute("data-theme") || "dark";
   applyTheme(cur === "dark" ? "light" : cur === "light" ? "glass" : "dark");
@@ -1490,13 +1490,13 @@ const toggleNotifPanel = () => {
   getDocs(query(collection(db, "notifications", state.uid, "items"), orderBy("createdAt", "desc"), limit(30)))
   .then((snap) => {
     if (snap.empty) { panel.appendChild(el("div", { class: "notif-empty" }, "No notifications yet.")); return; }
-    const iconMap = { orbit:"ri-fire-fill", follow:"ri-user-follow-fill", message:"ri-chat-1-fill", comment:"ri-chat-4-fill", commentLike:"ri-heart-fill", groupMessage:"ri-group-2-fill", call:"ri-phone-fill", newPost:"ri-file-add-fill", postConfirm:"ri-checkbox-circle-fill" };
-    const colMap  = { orbit:"var(--grad-2)", follow:"var(--primary)", message:"var(--good)", comment:"var(--grad-3)", commentLike:"var(--danger)", groupMessage:"var(--good)", call:"var(--primary)", newPost:"var(--grad-1)", postConfirm:"var(--good)" };
+    const iconMap = { orbit:"ri-thumb-up-fill", follow:"ri-user-follow-fill", message:"ri-chat-1-fill", comment:"ri-chat-4-fill", commentLike:"ri-thumb-up-fill", groupMessage:"ri-group-2-fill", call:"ri-phone-fill", newPost:"ri-file-add-fill", postConfirm:"ri-checkbox-circle-fill" };
+    const colMap  = { orbit:"#0866ff", follow:"var(--primary)", message:"var(--good)", comment:"var(--grad-3)", commentLike:"#0866ff", groupMessage:"var(--good)", call:"var(--primary)", newPost:"var(--grad-1)", postConfirm:"var(--good)" };
     snap.docs.forEach((d) => {
       const n = { id: d.id, ...d.data() };
       const ic = iconMap[n.type] || "ri-notification-3-fill";
       const co = colMap[n.type]  || "var(--primary)";
-      const txt = n.text || (n.fromName || "Someone") + " " + ({ orbit:"orbited your post", follow:"followed you", message:"sent you a message", comment:"commented on your post", commentLike:"liked your comment", groupMessage:"sent a message in your group", call:"called you", newPost:"shared a new post", postConfirm:"Your post is live!" }[n.type] || "interacted");
+      const txt = n.text || (n.fromName || "Someone") + " " + ({ orbit:"liked your post", follow:"followed you", message:"sent you a message", comment:"commented on your post", commentLike:"liked your comment", groupMessage:"sent a message in your group", call:"called you", newPost:"shared a new post", postConfirm:"Your post is live!" }[n.type] || "interacted");
       const item = el("div", { class: "notif-item" + (n.read ? "" : " unread") },
         el("i", { class: ic, style: "color:" + co + ";font-size:20px;flex-shrink:0;margin-top:2px;" }),
         el("div", { style: "min-width:0;" }, el("div", { class: "ni-text" }, txt), el("div", { class: "ni-time" }, fmtTime(n.createdAt))),
@@ -2344,6 +2344,10 @@ const openPostMenu = (p, author, isMine) => {
     sheet.appendChild(btn);
   };
   action("ri-share-forward-line", "Share to chats", () => openPostShareModal(p, author));
+  const isSaved = (state.me?.saved || []).includes(p.id);
+  action(isSaved ? "ri-bookmark-fill" : "ri-bookmark-line",
+    isSaved ? "Remove from Saved" : "Save post",
+    () => toggleSave(p.id, !isSaved));
   if (!isMine) {
     action("ri-eye-off-line", "Not interested — hide this post", async () => {
       await updateDoc(doc(db, "users", state.uid), { hiddenPosts: arrayUnion(p.id) });
@@ -2505,12 +2509,24 @@ const renderPost = (p, author, opts = {}) => {
   }
 
   // ── Actions row ──────────────────────────────────────────────────
-  const orbitIcon  = el("i", { class: iOrbited ? "ri-fire-fill" : "ri-fire-line" });
-  const orbitCount = el("span", { text: String(p.orbitCount || 0) });
+  const orbitIcon = el("i", { class: iOrbited ? "ri-thumb-up-fill" : "ri-thumb-up-line" });
+  const likeTotal = el("span", { class: "tfb-like-total", text: p.orbitCount ? String(p.orbitCount) : "" });
+  const likeSummary = el("div", { class: `tfb-like-summary${p.orbitCount ? "" : " hidden"}` },
+    el("span", { class: "tfb-reaction-bubble" }, el("i", { class: "ri-thumb-up-fill" })),
+    likeTotal,
+  );
+  const cmtCountEl = el("span", { class: "tfb-comment-total", text: p.commentCount ? String(p.commentCount) : "" });
+  const cmtCountLabel = el("span", { class: "tfb-comment-label" }, p.commentCount === 1 ? " comment" : " comments");
+  const commentSummaryBtn = el("button", {
+    class: `tfb-comment-summary${p.commentCount ? "" : " hidden"}`,
+    onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; },
+  }, cmtCountEl, cmtCountLabel);
   let _iOrbited = iOrbited;
 
   const orbitBtn = el("button", {
-    class: `tfb-badge${iOrbited ? " active" : ""}`,
+    class: `tfb-badge tfb-act tfb-like-btn${iOrbited ? " active" : ""}`,
+    title: "Like",
+    "aria-pressed": String(iOrbited),
     onclick: async (e) => {
       e.stopPropagation();
       _iOrbited = !_iOrbited;
@@ -2518,9 +2534,12 @@ const renderPost = (p, author, opts = {}) => {
       orbitBtn.classList.remove("orbit-burst");
       void orbitBtn.offsetWidth;
       orbitBtn.classList.add("orbit-burst");
-      orbitIcon.className   = _iOrbited ? "ri-fire-fill" : "ri-fire-line";
-      orbitCount.textContent = String((p.orbitCount || 0) + (_iOrbited ? 1 : -1));
+      orbitIcon.className = _iOrbited ? "ri-thumb-up-fill" : "ri-thumb-up-line";
+      p.orbitCount = Math.max(0, (p.orbitCount || 0) + (_iOrbited ? 1 : -1));
+      likeTotal.textContent = p.orbitCount ? String(p.orbitCount) : "";
+      likeSummary.classList.toggle("hidden", !p.orbitCount);
       orbitBtn.classList.toggle("active", _iOrbited);
+      orbitBtn.setAttribute("aria-pressed", String(_iOrbited));
       await updateDoc(doc(db, "posts", p.id), {
         orbits:     _iOrbited ? arrayUnion(state.uid)   : arrayRemove(state.uid),
         orbitCount: increment(_iOrbited ? 1 : -1),
@@ -2528,28 +2547,21 @@ const renderPost = (p, author, opts = {}) => {
       if (_iOrbited && author?.uid && author.uid !== state.uid) {
         writeNotif(author.uid, "orbit", {
           postId: p.id,
-          text: `${state.me?.name || "Someone"} orbited your post`,
+          text: `${state.me?.name || "Someone"} liked your post`,
         }).catch(() => {});
         const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
         import("./notifications.js").then(({ notifyUser }) =>
-          notifyUser(author.uid, state.me?.name || "Someone", "orbited your post",
+          notifyUser(author.uid, state.me?.name || "Someone", "liked your post",
             "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
         ).catch(() => {});
       }
     },
-  }, orbitIcon, orbitCount);
-
-  let _saved = (state.me?.saved || []).includes(p.id);
-  const saveIconEl = el("i", { class: _saved ? "ri-bookmark-fill" : "ri-bookmark-line" });
-
-  // Live-updatable comment count element — updated by the feed onSnapshot below
-  const cmtCountEl = el("span", {});
-  cmtCountEl.textContent = " " + String(p.commentCount || 0);
+  }, orbitIcon, el("span", {}, "Like"));
 
   const actions = el("div", { class: "tfb-actions" },
+    orbitBtn,
     el("button", { class: "tfb-act", onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; } },
-      el("i", { class: "ri-chat-1-line" }),
-      cmtCountEl,
+      el("i", { class: "ri-chat-1-line" }), "Comment",
     ),
     el("button", {
       class: "tfb-act",
@@ -2560,23 +2572,8 @@ const renderPost = (p, author, opts = {}) => {
     },
       el("i", { class: "ri-share-forward-line" }), " Share",
     ),
-    el("button", { class: `tfb-act save-post-btn${_saved ? " saved" : ""}`, onclick: async (e) => {
-      e.stopPropagation();
-      _saved = !_saved;
-      saveIconEl.className = _saved ? "ri-bookmark-fill" : "ri-bookmark-line";
-      e.currentTarget.classList.toggle("saved", _saved);
-      e.currentTarget.classList.add("save-burst");
-      setTimeout(() => e.currentTarget.classList.remove("save-burst"), 420);
-      await toggleSave(p.id, _saved);
-    } },
-      saveIconEl,
-    ),
-    el("span", { class: "spacer" }),
-    el("span", { class: "tfb-act", style: "cursor:default;pointer-events:none;" },
-      el("i", { class: "ri-eye-line" }), " " + String(p.views || 0),
-    ),
-    orbitBtn,
   );
+  post.appendChild(el("div", { class: "tfb-post-stats" }, likeSummary, commentSummaryBtn));
   post.appendChild(actions);
 
   // ── Comments (feed preview — top 5) ─────────────────────────────
@@ -2591,7 +2588,7 @@ const renderPost = (p, author, opts = {}) => {
       el("button", { class: "reply-cancel-btn", onclick: () => {
         _replyTo = null;
         replyBanner.classList.add("hidden");
-        cForm.querySelector("input").placeholder = "Add your echo…";
+        cForm.querySelector("input").placeholder = "Write a comment…";
         cForm.querySelector("input").value = "";
       }}, el("i", { class: "ri-close-line" })),
     );
@@ -2676,7 +2673,7 @@ const renderPost = (p, author, opts = {}) => {
     const cForm = el("form", { class: "comment-form" });
     const cFormRow = el("div", { class: "comment-form-row" },
       el("img", { class: "avatar xs", src: avatarFor(state.me), style: "cursor:pointer;", onclick: () => location.hash = `#profile/${state.uid}` }),
-      el("input", { type: "text", placeholder: "Add your echo…" }),
+      el("input", { type: "text", placeholder: "Write a comment…" }),
       cmtMediaBtn,
       cmtMicBtn,
       el("button", { class: "icon-btn", type: "submit" }, el("i", { class: "ri-send-plane-fill" })),
@@ -2706,7 +2703,7 @@ const renderPost = (p, author, opts = {}) => {
         }
       } catch { toast("Media upload failed"); submitBtn.disabled = false; return; }
       input.value = ""; _replyTo = null;
-      replyBanner.classList.add("hidden"); input.placeholder = "Add your echo…";
+      replyBanner.classList.add("hidden"); input.placeholder = "Write a comment…";
       clearCmtAttach();
       cBox.classList.remove("hidden");
       cBox.appendChild(el("div", { class: "comment" },
@@ -2742,13 +2739,14 @@ const renderPost = (p, author, opts = {}) => {
     const renderFeedComment = (c, a) => {
       const isLiked = (c.likes || []).includes(state.uid);
       const likeCountEl = el("span", { text: String((c.likes || []).length || "") });
-      const likeIconEl  = el("i", { class: isLiked ? "ri-heart-fill" : "ri-heart-line", style: isLiked ? "color:var(--danger);" : "" });
+      const likeIconEl = el("i", { class: isLiked ? "ri-thumb-up-fill" : "ri-thumb-up-line", style: isLiked ? "color:#0866ff;" : "" });
       let _liked = isLiked;
-      const likeBtn = el("button", { class: "cmt-like-btn", onclick: async (e) => {
+      const likeBtn = el("button", { class: `cmt-like-btn${_liked ? " liked" : ""}`, onclick: async (e) => {
         e.stopPropagation();
         _liked = !_liked;
-        likeIconEl.className   = _liked ? "ri-heart-fill" : "ri-heart-line";
-        likeIconEl.style.color = _liked ? "var(--danger)" : "";
+        likeIconEl.className = _liked ? "ri-thumb-up-fill" : "ri-thumb-up-line";
+        likeIconEl.style.color = _liked ? "#0866ff" : "";
+        likeBtn.classList.toggle("liked", _liked);
         const newCount = (c.likes?.length || 0) + (_liked ? 1 : -1);
         likeCountEl.textContent = newCount > 0 ? String(newCount) : "";
         await updateDoc(doc(db, "posts", p.id, "comments", c.id), {
@@ -2760,7 +2758,7 @@ const renderPost = (p, author, opts = {}) => {
             notifyUser(a.uid, state.me?.name || "Someone", "liked your comment", "/#post/" + p.id, state.me?.photoURL || "")
           ).catch(() => {});
         }
-      }}, likeIconEl, likeCountEl);
+      }}, likeIconEl, el("span", {}, "Like"), likeCountEl);
 
       const replyBtn = el("button", { class: "cmt-reply-btn", onclick: () => {
         _replyTo = { uid: a?.uid, name: a?.name || "user", username: a?.username || "" };
@@ -2815,7 +2813,9 @@ const renderPost = (p, author, opts = {}) => {
         const map      = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
         comments.forEach((c) => cBox.appendChild(renderFeedComment(c, map[c.authorUid])));
         // Keep the feed comment count badge in sync with live comment data
-        cmtCountEl.textContent = " " + String(snap.size);
+        cmtCountEl.textContent = snap.size ? String(snap.size) : "";
+        cmtCountLabel.textContent = snap.size === 1 ? " comment" : " comments";
+        commentSummaryBtn.classList.toggle("hidden", snap.size === 0);
       },
     );
 
@@ -2950,7 +2950,7 @@ const renderPostDetail = async (root, postId) => {
       ),
     ),
     el("div", { class: "detail-topbar-stats" },
-      el("span", {}, el("i", { class: "ri-fire-line" }), ` ${p.orbitCount || 0}`),
+      el("span", {}, el("i", { class: "ri-thumb-up-line" }), ` ${p.orbitCount || 0} likes`),
       el("span", {}, el("i", { class: "ri-eye-line" }), ` ${p.views || 0}`),
       el("span", {}, el("i", { class: "ri-chat-1-line" }), ` ${p.commentCount || 0}`),
     ),
@@ -2963,7 +2963,7 @@ const renderPostDetail = async (root, postId) => {
   const cmtSection = el("div", { class: "detail-comments" });
   root.appendChild(cmtSection);
 
-  const cmtHead = el("div", { class: "detail-cmt-head" }, "Echoes");
+  const cmtHead = el("div", { class: "detail-cmt-head" }, "Comments");
   cmtSection.appendChild(cmtHead);
 
   const cList = el("div", { class: "detail-cmt-list" });
@@ -2984,7 +2984,7 @@ const renderPostDetail = async (root, postId) => {
     _detailReplyTo = null;
     detailReplyBanner.classList.add("hidden");
     const inp = cmtSection.querySelector("input[type='text']");
-    if (inp) { inp.placeholder = "Add your echo…"; inp.value = ""; }
+    if (inp) { inp.placeholder = "Write a comment…"; inp.value = ""; }
   }}, el("i", { class: "ri-close-line" }));
   detailReplyBanner.appendChild(_replyBannerClose);
   cmtSection.appendChild(detailReplyBanner);
@@ -2993,7 +2993,7 @@ const renderPostDetail = async (root, postId) => {
     const isLiked = (c.likes || []).includes(state.uid);
     const likeCount = (c.likes || []).length;
     const likeCountEl = el("span", { class: "tw-cmt-act-count", text: likeCount > 0 ? String(likeCount) : "" });
-    const likeIconEl  = el("i", { class: isLiked ? "ri-heart-fill" : "ri-heart-line" });
+    const likeIconEl = el("i", { class: isLiked ? "ri-thumb-up-fill" : "ri-thumb-up-line" });
     let _liked = isLiked;
 
     const likeBtn = el("button", {
@@ -3001,7 +3001,7 @@ const renderPostDetail = async (root, postId) => {
       onclick: async (ev) => {
         ev.stopPropagation();
         _liked = !_liked;
-        likeIconEl.className = _liked ? "ri-heart-fill" : "ri-heart-line";
+        likeIconEl.className = _liked ? "ri-thumb-up-fill" : "ri-thumb-up-line";
         likeBtn.classList.toggle("liked", _liked);
         const newCount = (c.likes?.length || 0) + (_liked ? 1 : -1);
         likeCountEl.textContent = newCount > 0 ? String(newCount) : "";
@@ -3015,7 +3015,7 @@ const renderPostDetail = async (root, postId) => {
           ).catch(() => {});
         }
       },
-    }, likeIconEl, likeCountEl);
+    }, likeIconEl, "Like", likeCountEl);
 
     const replyBtn = el("button", {
       class: "tw-cmt-act-btn",
@@ -3027,7 +3027,7 @@ const renderPostDetail = async (root, postId) => {
         const inp = cmtSection.querySelector("input[type='text']");
         if (inp) { inp.placeholder = `Reply to @${handle}…`; inp.focus(); }
       },
-    }, el("i", { class: "ri-chat-1-line" }));
+    }, el("i", { class: "ri-chat-1-line" }), "Reply");
 
     const shareBtn = el("button", {
       class: "tw-cmt-act-btn",
@@ -3048,36 +3048,38 @@ const renderPostDetail = async (root, postId) => {
           }
         }
       },
-    }, el("i", { class: "ri-share-forward-line" }));
+    }, el("i", { class: "ri-share-forward-line" }), "Share");
 
     return el("div", { class: "tw-comment" },
       el("img", { class: "avatar xs tw-cmt-avatar", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
       el("div", { class: "tw-cmt-body" },
-        el("div", { class: "tw-cmt-header" },
-          el("span", { class: "tw-cmt-name" }, a?.name || "User",
-            a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
+        el("div", { class: "tw-cmt-bubble" },
+          el("div", { class: "tw-cmt-header" },
+            el("span", { class: "tw-cmt-name" }, a?.name || "User",
+              a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
+            ),
+            el("span", { class: "tw-cmt-username" }, `@${a?.username || "user"}`),
+            el("span", { class: "tw-cmt-dot" }, "·"),
+            el("span", { class: "tw-cmt-time" }, fmtTime(c.createdAt)),
           ),
-          el("span", { class: "tw-cmt-username" }, `@${a?.username || "user"}`),
-          el("span", { class: "tw-cmt-dot" }, "·"),
-          el("span", { class: "tw-cmt-time" }, fmtTime(c.createdAt)),
+          (c.replyToUsername || c.replyToName) ? el("div", { class: "reply-to-label" },
+            el("i", { class: "ri-corner-down-right-line" }),
+            el("a", { class: "mention", href: `#profile-u/${c.replyToUsername || c.replyToName}` }, `@${c.replyToUsername || c.replyToName}`)
+          ) : null,
+          c.text ? el("div", { class: "tw-cmt-text" }, c.text) : null,
+          c.mediaUrl ? el("div", { class: "cmt-media", onclick: (ev) => { ev.stopPropagation(); c.mediaType === "video" ? openVideoViewer([{ type: "video", url: c.mediaUrl }], 0) : openImageZoom(c.mediaUrl); }},
+            c.mediaType === "video"
+              ? el("div", { class: "cmt-media-video-wrap" },
+                  el("video", { src: c.mediaUrl, muted: "", preload: "metadata", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;border-radius:10px;" }),
+                  el("div", { class: "cmt-media-video-play", html: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>` }),
+                )
+              : el("img", { src: c.mediaUrl, loading: "lazy", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;border-radius:10px;margin-top:8px;" }),
+          ) : null,
+          c.audioUrl ? el("div", { class: "cmt-voice-note" },
+            el("span", { html: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>` }),
+            el("audio", { src: c.audioUrl, controls: true, style: "height:28px;max-width:150px;" }),
+          ) : null,
         ),
-        (c.replyToUsername || c.replyToName) ? el("div", { class: "reply-to-label" },
-          el("i", { class: "ri-corner-down-right-line" }),
-          el("a", { class: "mention", href: `#profile-u/${c.replyToUsername || c.replyToName}` }, `@${c.replyToUsername || c.replyToName}`)
-        ) : null,
-        c.text ? el("div", { class: "tw-cmt-text" }, c.text) : null,
-        c.mediaUrl ? el("div", { class: "cmt-media", onclick: (ev) => { ev.stopPropagation(); c.mediaType === "video" ? openVideoViewer([{ type: "video", url: c.mediaUrl }], 0) : openImageZoom(c.mediaUrl); }},
-          c.mediaType === "video"
-            ? el("div", { class: "cmt-media-video-wrap" },
-                el("video", { src: c.mediaUrl, muted: "", preload: "metadata", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;border-radius:10px;" }),
-                el("div", { class: "cmt-media-video-play", html: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>` }),
-              )
-            : el("img", { src: c.mediaUrl, loading: "lazy", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;border-radius:10px;margin-top:8px;" }),
-        ) : null,
-        c.audioUrl ? el("div", { class: "cmt-voice-note" },
-          el("span", { html: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>` }),
-          el("audio", { src: c.audioUrl, controls: true, style: "height:28px;max-width:150px;" }),
-        ) : null,
         el("div", { class: "tw-cmt-actions" }, replyBtn, shareBtn, likeBtn),
       ),
     );
@@ -3211,7 +3213,7 @@ const renderPostDetail = async (root, postId) => {
   cForm.appendChild(dCmtAttachPreview);
   const dFormRow = el("div", { class: "comment-form-row" },
     el("img", { class: "avatar xs", src: avatarFor(state.me), style: "cursor:pointer;", onclick: () => location.hash = `#profile/${state.uid}` }),
-    el("input", { type: "text", placeholder: "Add your echo…" }),
+    el("input", { type: "text", placeholder: "Write a comment…" }),
     dCmtMediaBtn,
     dCmtMicBtn,
     el("button", { class: "icon-btn", type: "submit" }, el("i", { class: "ri-send-plane-fill" })),
@@ -3246,7 +3248,7 @@ const renderPostDetail = async (root, postId) => {
       }
     } catch { toast("Media upload failed"); submitBtn.disabled = false; return; }
     input.value = ""; _detailReplyTo = null;
-    detailReplyBanner.classList.add("hidden"); input.placeholder = "Add your echo…";
+    detailReplyBanner.classList.add("hidden"); input.placeholder = "Write a comment…";
     clearDCmtAttach(); sfxComment(); submitBtn.disabled = false;
     await addDoc(collection(db, "posts", p.id, "comments"), commentData);
     await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
