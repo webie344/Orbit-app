@@ -499,6 +499,13 @@
           <label class="pem-label">Name<input id="editName" type="text" maxlength="60" /></label>
           <label class="pem-label">Username<input id="editUsername" type="text" maxlength="30" /></label>
           <label class="pem-label">Bio<textarea id="editBio" rows="3" maxlength="200"></textarea></label>
+          <label class="pem-label">Birthday<input id="editBirthday" type="date" />
+            <span class="pem-help">Only the month and day are saved and shown on your profile; your birth year is not stored.</span>
+          </label>
+          <label class="pem-birthday-optin">
+            <input id="editBirthdayAnnounce" type="checkbox" />
+            <span>Let my followers know when it’s my birthday</span>
+          </label>
           <div class="pem-actions">
             <button class="btn ghost" id="editProfileCancel">Cancel</button>
             <button class="btn primary" id="editProfileSave"><span id="editSaveText">Save changes</span></button>

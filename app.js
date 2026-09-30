@@ -1282,6 +1282,9 @@ const ensureUserDoc = async (user, extras = {}) => {
       email: user.email || null,
       photoURL: user.photoURL || `https://api.dicebear.com/7.x/shapes/svg?seed=${user.uid}`,
       bio: "",
+      birthday: null,
+      birthdayAnnounceEnabled: false,
+      birthdayAnnouncedYear: null,
       verified: false,                // becomes true after location grant
       verifiedAt: null,
       location: null,                 // { lat, lng, city }
@@ -1313,6 +1316,48 @@ const ensureUserDoc = async (user, extras = {}) => {
   return { uid: user.uid, ...snap.data(), online: true };
 };
 
+const announceBirthdayIfDue = async () => {
+  const uid = state.uid;
+  if (!uid) return;
+  const userRef = doc(db, "users", uid);
+  const snap = await getDoc(userRef);
+  if (!snap.exists()) return;
+  const profile = { uid, ...snap.data() };
+  const birthday = String(profile.birthday || "");
+  if (!profile.birthdayAnnounceEnabled || !/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(birthday)) return;
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const today = `${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  if (birthday !== today || Number(profile.birthdayAnnouncedYear) === year) return;
+
+  const followers = [...new Set((profile.followers || []).filter((followerUid) => followerUid && followerUid !== uid))];
+  const notificationId = `birthday_${uid}_${year}`;
+  if (!followers.length) {
+    await updateDoc(userRef, { birthdayAnnouncedYear: year });
+    state.me = { ...state.me, birthdayAnnouncedYear: year };
+    return;
+  }
+
+  for (let offset = 0; offset < followers.length; offset += 400) {
+    const batch = writeBatch(db);
+    const chunk = followers.slice(offset, offset + 400);
+    chunk.forEach((followerUid) => {
+      batch.set(doc(db, "notifications", followerUid, "items", notificationId), {
+        type: "birthday",
+        fromUid: uid,
+        profileUid: uid,
+        text: `${profile.name || "Someone"} is celebrating a birthday today!`,
+        read: false,
+        createdAt: serverTimestamp(),
+      });
+    });
+    if (offset + chunk.length >= followers.length) batch.update(userRef, { birthdayAnnouncedYear: year });
+    await batch.commit();
+  }
+  state.me = { ...state.me, birthdayAnnouncedYear: year };
+};
+
 onAuthStateChanged(auth, async (user) => {
   if (!user) {
     state.me = null; state.uid = null;
@@ -1327,6 +1372,7 @@ onAuthStateChanged(auth, async (user) => {
   state.me = await ensureUserDoc(user);
   $("#meAvatar").src = avatarFor(state.me);
   showApp(); // calls hideOrbitLoader() internally
+  announceBirthdayIfDue().catch((err) => console.warn("Birthday announcement failed:", err));
   startMyProfileListener();
   startNotifListener();
   startSuggestions();
@@ -1490,8 +1536,8 @@ const toggleNotifPanel = () => {
   getDocs(query(collection(db, "notifications", state.uid, "items"), orderBy("createdAt", "desc"), limit(30)))
   .then((snap) => {
     if (snap.empty) { panel.appendChild(el("div", { class: "notif-empty" }, "No notifications yet.")); return; }
-    const iconMap = { orbit:"ri-thumb-up-fill", follow:"ri-user-follow-fill", message:"ri-chat-1-fill", comment:"ri-chat-4-fill", commentLike:"ri-thumb-up-fill", groupMessage:"ri-group-2-fill", call:"ri-phone-fill", newPost:"ri-file-add-fill", postConfirm:"ri-checkbox-circle-fill" };
-    const colMap  = { orbit:"#0866ff", follow:"var(--primary)", message:"var(--good)", comment:"var(--grad-3)", commentLike:"#0866ff", groupMessage:"var(--good)", call:"var(--primary)", newPost:"var(--grad-1)", postConfirm:"var(--good)" };
+     const iconMap = { orbit:"ri-thumb-up-fill", follow:"ri-user-follow-fill", message:"ri-chat-1-fill", comment:"ri-chat-4-fill", commentLike:"ri-thumb-up-fill", groupMessage:"ri-group-2-fill", call:"ri-phone-fill", newPost:"ri-file-add-fill", postConfirm:"ri-checkbox-circle-fill", birthday:"ri-cake-2-fill" };
+     const colMap  = { orbit:"#0866ff", follow:"var(--primary)", message:"var(--good)", comment:"var(--grad-3)", commentLike:"#0866ff", groupMessage:"var(--good)", call:"var(--primary)", newPost:"var(--grad-1)", postConfirm:"var(--good)", birthday:"var(--grad-2)" };
     snap.docs.forEach((d) => {
       const n = { id: d.id, ...d.data() };
       const ic = iconMap[n.type] || "ri-notification-3-fill";
@@ -1504,7 +1550,8 @@ const toggleNotifPanel = () => {
       item.addEventListener("click", () => {
         updateDoc(doc(db, "notifications", state.uid, "items", n.id), { read: true }).catch(() => {});
         panel.remove();
-        if (n.type === "message" && n.fromUid) location.hash = "#chats/" + n.fromUid;
+         if (n.type === "birthday" && (n.profileUid || n.fromUid)) location.hash = "#profile/" + (n.profileUid || n.fromUid);
+         else if (n.type === "message" && n.fromUid) location.hash = "#chats/" + n.fromUid;
         else if (n.type === "groupMessage" && n.groupId) location.hash = "#chats/" + n.groupId;
         else if (n.type === "follow"  && n.fromUid) location.hash = "#profile/" + n.fromUid;
         else if ((n.type === "comment" || n.type === "commentLike" || n.type === "newPost" || n.type === "postConfirm") && n.postId) location.hash = "#post/" + n.postId;
@@ -2411,7 +2458,10 @@ const renderPost = (p, author, opts = {}) => {
           ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' })
           : null,
       ),
-      el("span", { class: "tfb-sub" }, `@${author?.username || "user"} · ${fmtTime(p.createdAt)}`),
+      el("div", { class: "tfb-sub-row" },
+        el("span", { class: "tfb-sub" }, `@${author?.username || "user"} · ${fmtTime(p.createdAt)}`),
+        p.isSponsored ? el("span", { class: "tfb-sponsored-pill" }, el("i", { class: "ri-advertisement-line" }), "Sponsored") : null,
+      ),
     ),
     !isMine && author?.uid
       ? el("button", {
@@ -2497,6 +2547,27 @@ const renderPost = (p, author, opts = {}) => {
     mediaNode.classList.remove("post-media");
     mediaNode.classList.add("tfb-media");
     post.appendChild(mediaNode);
+  }
+
+  if (p.isSponsored) {
+    let destinationUrl = "";
+    try {
+      const parsedUrl = new URL(p.ad?.destinationUrl || "");
+      if (["http:", "https:"].includes(parsedUrl.protocol)) destinationUrl = parsedUrl.href;
+    } catch {}
+    const adHeadline = String(p.ad?.headline || "").trim();
+    const adCta = ["Learn more", "Shop now", "Sign up", "Contact us"].includes(p.ad?.cta) ? p.ad.cta : "Learn more";
+    if (adHeadline || destinationUrl) {
+      post.appendChild(el("div", { class: "tfb-ad-promo" },
+        adHeadline ? el("strong", { class: "tfb-ad-headline" }, adHeadline) : null,
+        destinationUrl ? el("a", {
+          class: "tfb-ad-cta",
+          href: destinationUrl,
+          target: "_blank",
+          rel: "noopener noreferrer",
+        }, adCta, el("i", { class: "ri-arrow-right-up-line" })) : null,
+      ));
+    }
   }
 
   // ── Build / project extra detail block ───────────────────────────
@@ -3896,6 +3967,14 @@ const renderSaved = (root) => {
 // listener running and the visible tab always reflects Firestore live.
 let _profileTabUnsub = null;
 
+const formatProfileBirthday = (value) => {
+  const match = /^(\d{2})-(\d{2})$/.exec(String(value || ""));
+  if (!match) return "";
+  const date = new Date(2000, Number(match[1]) - 1, Number(match[2]), 12);
+  if (date.getMonth() !== Number(match[1]) - 1 || date.getDate() !== Number(match[2])) return "";
+  return date.toLocaleDateString(undefined, { month: "long", day: "numeric" });
+};
+
 const renderProfile = async (root, uid) => {
   // Always use fresh data for own profile (bypass stale cache after Pro activation)
   let u;
@@ -3988,6 +4067,9 @@ const renderProfile = async (root, uid) => {
           el("div", { class: "stat" }, el("strong", {}, String((u.following || []).length)), el("span", {}, "following")),
         ),
         u.bio ? el("div", { class: "bio", text: u.bio }) : null,
+        u.birthday && formatProfileBirthday(u.birthday)
+          ? el("div", { class: "profile-birthday" }, el("i", { class: "ri-cake-2-line" }), `Birthday ${formatProfileBirthday(u.birthday)}`)
+          : null,
         el("div", { class: "profile-actions" },
           isMe
             ? el("button", { class: "btn ghost", onclick: () => openProfileEditModal() }, el("i", { class: "ri-edit-line" }), "Edit profile")
@@ -4200,6 +4282,14 @@ const openProfileEditModal = () => {
   const ni = document.getElementById("editName");    if (ni) ni.value = state.me.name || "";
   const ui = document.getElementById("editUsername"); if (ui) ui.value = state.me.username || "";
   const bi = document.getElementById("editBio");      if (bi) bi.value = state.me.bio || "";
+  const birthdayInput = document.getElementById("editBirthday");
+  if (birthdayInput) {
+    const birthday = String(state.me.birthday || "");
+    const monthDay = /^\d{2}-\d{2}$/.test(birthday) ? birthday : /^\d{4}-\d{2}-\d{2}$/.test(birthday) ? birthday.slice(5) : "";
+    birthdayInput.value = monthDay ? `2000-${monthDay}` : "";
+  }
+  const birthdayAnnounce = document.getElementById("editBirthdayAnnounce");
+  if (birthdayAnnounce) birthdayAnnounce.checked = state.me.birthdayAnnounceEnabled === true;
   const av = document.getElementById("editAvatar");   if (av) av.src = state.me.photoURL || avatarFor(state.me);
   const cover = document.getElementById("editCover"); if (cover) {
     cover.src = profileCoverFor(state.me) || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='180' viewBox='0 0 640 180'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' x2='1'%3E%3Cstop stop-color='%237c5cff'/%3E%3Cstop offset='1' stop-color='%23ff5cae'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='640' height='180' fill='url(%23g)'/%3E%3C/svg%3E";
@@ -4606,6 +4696,10 @@ const _crFreshState = () => ({
   step: "pick",           // pick | cam | editor | music | details
   slides: [],             // [{ type:'image'|'video', file, url, overlays:[], recordedInApp? }]
   textOnly: false,        // true when publishing a text-only post (no media)
+  isSponsored: false,
+  adHeadline: "",
+  adLink: "",
+  adCta: "Learn more",
   song: null,             // { id, name, artist, url, duration }
   caption: "",
   location: null,
@@ -4672,7 +4766,7 @@ function crGoto(step) {
   stepsWrap.innerHTML = "";
   backBtn.style.display = step === "pick" ? "none" : "";
   nextBtn.style.display = "none";
-  if (step === "pick") { title.textContent = "New post"; stepsWrap.appendChild(crBuildPickStep()); }
+   if (step === "pick") { title.textContent = crState.isSponsored ? "New sponsored ad" : "New post"; stepsWrap.appendChild(crBuildPickStep()); }
   else if (step === "cam") { title.textContent = "Record video"; stepsWrap.appendChild(crBuildCamStep()); }
   else if (step === "editor") {
     title.textContent = "Edit";
@@ -4683,9 +4777,9 @@ function crGoto(step) {
     stepsWrap.appendChild(crBuildMusicStep());
     nextBtn.style.display = ""; nextBtn.textContent = "Next"; nextBtn.onclick = () => crGoto("details");
   } else if (step === "details") {
-    title.textContent = "Share";
+     title.textContent = crState.isSponsored ? "Create ad" : "Share";
     stepsWrap.appendChild(crBuildDetailsStep());
-    nextBtn.style.display = ""; nextBtn.textContent = "Post"; nextBtn.onclick = () => crSubmitPost(nextBtn);
+     nextBtn.style.display = ""; nextBtn.textContent = crState.isSponsored ? "Create ad" : "Post"; nextBtn.onclick = () => crSubmitPost(nextBtn);
   }
 }
 
@@ -4693,6 +4787,19 @@ function crGoto(step) {
 function crBuildPickStep() {
   crState.textOnly = false;
   const fileInput = el("input", { type: "file", accept: "image/*,video/*", multiple: true, hidden: true });
+  const sponsoredInput = el("input", { type: "checkbox" });
+  sponsoredInput.checked = crState.isSponsored === true;
+  sponsoredInput.addEventListener("change", () => {
+    crState.isSponsored = sponsoredInput.checked;
+    if (_crShellRefs?.title) _crShellRefs.title.textContent = crState.isSponsored ? "New sponsored ad" : "New post";
+  });
+  const sponsoredToggle = el("label", { class: "cr-ad-mode-toggle" },
+    sponsoredInput,
+    el("span", {},
+      el("strong", {}, "Create this as an ad"),
+      el("small", {}, "Adds a Sponsored label and a destination link. No ad budget or paid placement is set up."),
+    ),
+  );
   fileInput.addEventListener("change", (e) => {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
@@ -4719,6 +4826,7 @@ function crBuildPickStep() {
         el("button", { class: "cr-pick-opt", onclick: () => { crState.textOnly = true; crState.slides = []; crGoto("details"); } },
           el("i", { class: "ri-text" }), el("span", {}, "Text post")),
       ),
+      sponsoredToggle,
       el("div", { class: "cr-pick-hint" }, "Pick multiple photos to make a swipeable carousel. Music can be added to videos you record in-app."),
       fileInput,
     ),
@@ -5076,6 +5184,30 @@ function crBuildDetailsStep() {
   caption.value = crState.caption;
   caption.addEventListener("input", () => { crState.caption = caption.value; });
 
+  let sponsoredFields = null;
+  if (crState.isSponsored) {
+    const headline = el("input", { type: "text", maxlength: "80", placeholder: "Ad headline (optional)" });
+    headline.value = crState.adHeadline || "";
+    headline.addEventListener("input", () => { crState.adHeadline = headline.value; });
+    const destination = el("input", { type: "url", placeholder: "https://your-site.com" });
+    destination.value = crState.adLink || "";
+    destination.addEventListener("input", () => { crState.adLink = destination.value; });
+    const cta = el("select", {},
+      el("option", { value: "Learn more" }, "Learn more"),
+      el("option", { value: "Shop now" }, "Shop now"),
+      el("option", { value: "Sign up" }, "Sign up"),
+      el("option", { value: "Contact us" }, "Contact us"),
+    );
+    cta.value = crState.adCta || "Learn more";
+    cta.addEventListener("change", () => { crState.adCta = cta.value; });
+    sponsoredFields = el("div", { class: "cr-ad-fields" },
+      el("div", { class: "cr-ad-fields-title" }, el("i", { class: "ri-advertisement-line" }), "Sponsored ad details"),
+      el("label", {}, "Headline", headline),
+      el("label", {}, "Destination link (required)", destination),
+      el("label", {}, "Button text", cta),
+    );
+  }
+
   const locRow = el("div", { class: "cr-details-row" },
     el("div", { class: "l" }, el("i", { class: "ri-map-pin-line" }), "Tag location"),
     el("div", { class: "v" }, crState.location?.city || "Not tagged"),
@@ -5111,6 +5243,7 @@ function crBuildDetailsStep() {
           crState.slides.length > 1 ? `${crState.slides.length} photos in this post` : (thumbSlide.type === "video" ? "1 video" : "1 photo")),
       ),
       caption,
+      sponsoredFields,
       locRow,
       musicRow,
     ),
@@ -5156,7 +5289,21 @@ function crFlattenImageSlide(slide) {
 async function crSubmitPost(btn) {
   if (!crState.textOnly && !crState.slides.length) { toast("Pick a photo or video first"); return; }
   if (crState.textOnly && !crState.caption.trim()) { toast("Write something first"); return; }
-  btn.disabled = true; btn.textContent = "Posting…";
+  const isSponsored = crState.isSponsored === true;
+  let adDestinationUrl = "";
+  if (isSponsored) {
+    if (!crState.adLink?.trim()) { toast("Add a destination link for your ad"); return; }
+    if (!crState.caption.trim() && !crState.adHeadline?.trim()) { toast("Add ad text or a headline"); return; }
+    try {
+      const parsedUrl = new URL(crState.adLink.trim());
+      if (!["http:", "https:"].includes(parsedUrl.protocol)) throw new Error("Unsupported link");
+      adDestinationUrl = parsedUrl.href;
+    } catch {
+      toast("Enter a valid link starting with https://");
+      return;
+    }
+  }
+  btn.disabled = true; btn.textContent = isSponsored ? "Creating ad…" : "Posting…";
   try {
     let media;
     if (!crState.textOnly) {
@@ -5183,15 +5330,23 @@ async function crSubmitPost(btn) {
     if (media) postData.media = media;
     if (crState.location) postData.location = crState.location;
     if (crState.song) postData.song = crState.song;
+    if (isSponsored) {
+      postData.isSponsored = true;
+      postData.ad = {
+        headline: crState.adHeadline.trim(),
+        destinationUrl: adDestinationUrl,
+        cta: crState.adCta || "Learn more",
+      };
+    }
     const newPostRef = await addDoc(collection(db, "posts"), postData);
     sfxPost();
-    toast("Posted!");
+    toast(isSponsored ? "Ad created and marked Sponsored" : "Posted!");
     showPostSuccess();
     crClose();
     addDoc(collection(db, "notifications", state.uid, "items"), {
       type: "postConfirm", postId: newPostRef.id, text: "Your post is live!", read: false, createdAt: serverTimestamp(),
     }).catch(() => {});
-    (async () => {
+    if (!isSponsored) (async () => {
       let followers = state.me?.followers || [];
       try {
         const freshSnap = await getDoc(doc(db, "users", state.uid));
@@ -5209,7 +5364,7 @@ async function crSubmitPost(btn) {
     })().catch(() => {});
   } catch (err) {
     toast("Failed to post: " + (err.message || "unknown error"));
-    btn.disabled = false; btn.textContent = "Post";
+    btn.disabled = false; btn.textContent = isSponsored ? "Create ad" : "Post";
   }
 }
 
@@ -5852,13 +6007,22 @@ $("#globalSearch").addEventListener("keydown", async (e) => {
     const nameV = (document.getElementById("editName")?.value || "").trim();
     const userV = (document.getElementById("editUsername")?.value || "").trim().toLowerCase().replace(/[^a-z0-9_]/g, "");
     const bioV  = (document.getElementById("editBio")?.value || "").trim();
+    const birthdayDate = document.getElementById("editBirthday")?.value || "";
+    const birthday = /^\d{4}-(\d{2}-\d{2})$/.exec(birthdayDate)?.[1] || null;
+    const birthdayAnnounceEnabled = !!birthday && document.getElementById("editBirthdayAnnounce")?.checked === true;
     if (!nameV) { toast("Name cannot be empty"); return; }
     const st = document.getElementById("editSaveText"); if (st) st.textContent = "Saving..."; save.disabled = true;
     try {
-      const updates = { name: nameV, bio: bioV, username: userV || state.me.username };
+      const updates = {
+        name: nameV, bio: bioV, username: userV || state.me.username,
+        birthday, birthdayAnnounceEnabled,
+      };
       if (pendingAvFile) { toast("Uploading photo..."); const up = await uploadToCloudinary(pendingAvFile, "image"); updates.photoURL = up.url; }
       if (pendingCoverFile) { toast("Uploading cover photo..."); const up = await uploadToCloudinary(pendingCoverFile, "image"); updates.coverURL = up.url; }
       await updateDoc(doc(db, "users", state.uid), updates);
+      state.me = { ...state.me, ...updates };
+      state.cache.users.delete(state.uid);
+      announceBirthdayIfDue().catch((err) => console.warn("Birthday announcement failed:", err));
       toast("Profile updated"); closeModal(); router();
     } catch (err) { toast("Save failed: " + (err.message || "unknown")); }
     finally { save.disabled = false; if (st) st.textContent = "Save changes"; }
