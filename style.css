@@ -4567,17 +4567,20 @@ html[data-theme="glass"] .detail-comments .tw-comment {
 
 /* Keep the full video controls and image/video canvas inside narrow feed cards. */
 @media (max-width: 640px) {
-  .content, .tfb-feed, .tfb-post, .tfb-media { min-width: 0; }
-  .tfb-feed, .tfb-post { width: 100%; max-width: 100%; box-sizing: border-box; }
-  .tfb-media { max-width: calc(100% + 32px); box-sizing: border-box; }
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  .content, .feed-wrap, .tfb-feed, .tfb-post, .tfb-media { min-width: 0; max-width: 100%; }
+  .feed-wrap, .tfb-feed, .tfb-post { width: 100%; box-sizing: border-box; }
+  /* Keep media inside the card padding on phones; the old negative-margin
+     edge-to-edge treatment could extend a wide video beyond the viewport. */
+  .tfb-media { width: 100% !important; margin: 0 0 4px !important; box-sizing: border-box; }
   .tfb-media .vid-player,
   .tfb-media .post-media-stack,
-  .tfb-media .carousel-track { width: 100% !important; min-width: 0 !important; max-width: 100% !important; }
+  .tfb-media .carousel-track,
+  .tfb-media .carousel-slide { width: 100% !important; min-width: 0 !important; max-width: 100% !important; }
   .tfb-media .vid-player video,
-  .tfb-media video { display: block; width: 100% !important; min-width: 0 !important; max-width: 100% !important; height: auto; }
+  .tfb-media video { display: block; width: 100% !important; min-width: 0 !important; max-width: 100% !important; height: auto !important; }
 }
 @media (max-width: 420px) {
-  .tfb-media { max-width: calc(100% + 24px); }
   .tfb-ad-promo { align-items: flex-start; flex-direction: column; gap: 9px; }
   .tfb-ad-cta { width: 100%; }
 }
