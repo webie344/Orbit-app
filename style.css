@@ -1201,7 +1201,7 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
   position: fixed; left: 50%; bottom: 100px; transform: translateX(-50%);
   background: var(--bg-elev-2); border: 1px solid var(--line); color: var(--text);
   padding: 12px 18px; border-radius: var(--radius-pill); box-shadow: var(--shadow);
-  z-index: 200; max-width: 88%; text-align: center;
+  z-index: 1200; max-width: 88%; text-align: center;
   animation: slide-up 200ms var(--ease);
 }
 

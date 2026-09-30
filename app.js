@@ -4741,7 +4741,7 @@ function crRenderShell(root) {
   const closeBtn = el("button", { class: "cr-head-close", onclick: () => crClose() }, el("i", { class: "ri-close-line" }));
   const backBtn = el("button", { class: "cr-head-close", style: "display:none;", onclick: () => crBack() }, el("i", { class: "ri-arrow-left-line" }));
   const title = el("div", { class: "cr-head-title", text: "New post" });
-  const nextBtn = el("button", { class: "cr-head-btn primary", style: "display:none;" }, "Next");
+  const nextBtn = el("button", { class: "cr-head-btn primary", type: "button", style: "display:none;" }, "Next");
   const head = el("div", { class: "cr-head" }, el("div", { style: "display:flex;align-items:center;gap:8px;" }, backBtn, closeBtn), title, nextBtn);
   const stepsWrap = el("div", { class: "cr-steps" });
   root.appendChild(head);
