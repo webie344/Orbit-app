@@ -13,7 +13,7 @@ import {
 import {
   doc, setDoc, getDoc, updateDoc, addDoc, deleteDoc,
   collection, query, where, orderBy, limit, onSnapshot, getDocs,
-  serverTimestamp, increment, arrayUnion, arrayRemove, deleteField,
+  serverTimestamp, increment, arrayUnion, arrayRemove, deleteField, writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 
 import { sfxSend, sfxNotification, sfxTyping } from "./sounds.js";
@@ -69,6 +69,7 @@ const buildVoicePlayer = (url) => {
   const bar     = el("div", { class: "vnp-bar" }, played);
   const timeEl  = el("span", { class: "vnp-time", text: "0:00" });
   const wrap    = el("div", { class: "voice-note-player" }, playBtn, bar, timeEl);
+  wrap._audio = audio;
   playBtn.onclick = () => { audio.paused ? audio.play() : audio.pause(); };
   audio.addEventListener("play",  () => { playI.className = "ri-pause-fill"; });
   audio.addEventListener("pause", () => { playI.className = "ri-play-fill";  });
@@ -271,11 +272,166 @@ const EMOJIS = "😀 😅 😂 🤣 😊 😍 🥰 😘 😎 🤩 🤔 😴 🤤
 // =========================================================================
 document.addEventListener("orbit:open-chats", (e) => openChats(e.detail?.peerUid || null));
 
+const _chatDomCache = new Map();
+const _chatSnapshotSignatures = new Map();
+const _chatMessageFingerprints = new Map();
+const _maxCachedChatViews = 6;
+let _activeChatOpenRequest = 0;
+let _typingUnsub = null;
+const _pendingReadIds = new Set();
+
+const _chatCacheKey = (isGroup, chatId) => `${isGroup ? "group" : "dm"}:${chatId}`;
+
+const _cacheActiveChatDom = () => {
+  const view = $("#chatView");
+  const key = view?.dataset.chatKey;
+  const messages = view?.querySelector("#messages");
+  if (!key || !messages) return;
+  messages.querySelectorAll("video").forEach((video) => video.pause());
+  messages.querySelectorAll(".voice-note-player").forEach((player) => player._audio?.pause());
+  _rememberChatMessages(key, messages);
+};
+
+const _rememberChatMessages = (key, root) => {
+  _chatDomCache.delete(key);
+  _chatDomCache.set(key, root);
+  while (_chatDomCache.size > _maxCachedChatViews) {
+    const oldestKey = _chatDomCache.keys().next().value;
+    _chatDomCache.delete(oldestKey);
+    _chatSnapshotSignatures.delete(oldestKey);
+    _chatMessageFingerprints.delete(oldestKey);
+  }
+};
+
+const _messageSnapshotState = (snap) => {
+  const fingerprints = new Map();
+  const signatureParts = [];
+  for (const d of snap.docs) {
+    const data = { ...d.data() };
+    delete data.readBy;
+    const fingerprint = JSON.stringify(data);
+    fingerprints.set(d.id, fingerprint);
+    signatureParts.push(`${d.id}:${fingerprint}`);
+  }
+  return { signature: signatureParts.join("|"), fingerprints };
+};
+
+const _markChatSnapshotRead = (snap, isGroup, chatId, cacheKey) => {
+  const unreadDocs = snap.docs.filter((d) => {
+    const data = d.data();
+    const pendingKey = `${cacheKey}:${d.id}`;
+    return !data.readBy?.includes(state.uid) && !_pendingReadIds.has(pendingKey);
+  });
+  if (!unreadDocs.length) return;
+
+  const batch = writeBatch(db);
+  const pendingKeys = unreadDocs.map((d) => `${cacheKey}:${d.id}`);
+  pendingKeys.forEach((key) => _pendingReadIds.add(key));
+  for (const message of unreadDocs) {
+    const path = isGroup
+      ? ["groups", chatId, "messages", message.id]
+      : ["chats", chatId, "messages", message.id];
+    batch.update(doc(db, ...path), { readBy: arrayUnion(state.uid) });
+  }
+  batch.commit()
+    .catch(() => {})
+    .finally(() => pendingKeys.forEach((key) => _pendingReadIds.delete(key)));
+};
+
+const _syncReadReceipts = (root, snap) => {
+  const rows = new Map([...root.querySelectorAll(".msg-row[data-id]")].map((row) => [row.dataset.id, row]));
+  for (const message of snap.docs) {
+    const data = message.data();
+    if (data.authorUid !== state.uid) continue;
+    const receipt = rows.get(message.id)?.querySelector(".meta .read");
+    if (!receipt) continue;
+    const seen = (data.readBy || []).some((uid) => uid !== state.uid);
+    receipt.innerHTML = seen
+      ? '<i class="ri-check-double-line"></i>'
+      : '<i class="ri-check-line"></i>';
+  }
+};
+
+const _ensureChatMotionStyles = () => {
+  if (document.getElementById("orbit-chat-motion-styles")) return;
+  const style = document.createElement("style");
+  style.id = "orbit-chat-motion-styles";
+  style.textContent = `
+    .chat-view.orbit-chat-swipe-dragging { transition: none !important; will-change: transform; }
+    .chat-view.orbit-chat-swipe-settling { transition: transform 210ms cubic-bezier(.22,.75,.25,1) !important; will-change: transform; }
+    .chat-view.orbit-chat-switching { animation: orbitChatSwitchIn 150ms ease-out both; }
+    @keyframes orbitChatSwitchIn { from { opacity: .72; } to { opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) {
+      .chat-view.orbit-chat-swipe-settling { transition-duration: 1ms !important; }
+      .chat-view.orbit-chat-switching { animation-duration: 1ms; }
+    }
+  `;
+  document.head.appendChild(style);
+};
+
+const _installChatSwipeBack = (route, view) => {
+  let gesture = null;
+  const edgeSize = 30;
+  const thresholdFor = () => Math.max(84, Math.min(130, window.innerWidth * 0.22));
+  const blockedTarget = (target) => target instanceof Element && !!target.closest(
+    "input, textarea, button, a, [contenteditable='true'], video, audio, .vid-player, .voice-note-player, .msg-actions"
+  );
+
+  view.addEventListener("touchstart", (e) => {
+    if (!route.classList.contains("is-open") || e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    const coarse = window.matchMedia?.("(max-width: 900px), (pointer: coarse)")?.matches;
+    if (!coarse || touch.clientX < window.innerWidth - edgeSize || blockedTarget(e.target)) return;
+    gesture = { x: touch.clientX, y: touch.clientY, dx: 0, dy: 0, dragging: false };
+  }, { passive: true });
+
+  view.addEventListener("touchmove", (e) => {
+    if (!gesture || e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    gesture.dx = touch.clientX - gesture.x;
+    gesture.dy = touch.clientY - gesture.y;
+    if (gesture.dx > 0 || Math.abs(gesture.dy) > Math.max(12, Math.abs(gesture.dx) * 0.9)) {
+      gesture = null;
+      return;
+    }
+    if (gesture.dx < -8) {
+      gesture.dragging = true;
+      view.classList.add("orbit-chat-swipe-dragging");
+      view.style.transform = `translate3d(${Math.max(gesture.dx, -window.innerWidth)}px, 0, 0)`;
+    }
+  }, { passive: true });
+
+  const finishGesture = (commit) => {
+    if (!gesture) return;
+    const shouldClose = commit && gesture.dragging && gesture.dx <= -thresholdFor();
+    gesture = null;
+    view.classList.remove("orbit-chat-swipe-dragging");
+    view.classList.add("orbit-chat-swipe-settling");
+    if (shouldClose) {
+      view.style.transform = `translate3d(-${window.innerWidth}px, 0, 0)`;
+      window.setTimeout(() => {
+        route.classList.remove("is-open");
+        view.style.transform = "";
+        view.classList.remove("orbit-chat-swipe-settling");
+      }, 220);
+    } else {
+      view.style.transform = "";
+      window.setTimeout(() => view.classList.remove("orbit-chat-swipe-settling"), 230);
+    }
+  };
+
+  view.addEventListener("touchend", () => finishGesture(true), { passive: true });
+  view.addEventListener("touchcancel", () => finishGesture(false), { passive: true });
+};
+
 // =========================================================================
 // 3. SHELL
 // =========================================================================
 const openChats = (target) => {
   const content = $("#content");
+  _cacheActiveChatDom();
+  if (state.chatUnsub) { state.chatUnsub(); state.chatUnsub = null; }
+  if (_typingUnsub) { _typingUnsub(); _typingUnsub = null; }
   content.innerHTML = "";
 
   // Lock the content container so the chat grid owns all scrolling
@@ -283,12 +439,16 @@ const openChats = (target) => {
 
   // Clean up when user navigates away
   const removeActive = () => {
+    _cacheActiveChatDom();
     content.classList.remove("chat-active");
+    if (state.chatUnsub) { state.chatUnsub(); state.chatUnsub = null; }
+    if (_typingUnsub) { _typingUnsub(); _typingUnsub = null; }
   };
   window.addEventListener("hashchange", removeActive, { once: true });
 
   const route = el("div", { class: "chats-route", id: "chatsRoute" });
   content.appendChild(route);
+  _ensureChatMotionStyles();
 
   // Left: chat list
   const list = el("div", { class: "chats-list" },
@@ -315,6 +475,7 @@ const openChats = (target) => {
       el("div", { style: "margin-top:6px;color:var(--text-mute);font-size:13px;" }, "or tap the pencil icon to start a new one")),
   );
   route.appendChild(view);
+  _installChatSwipeBack(route, view);
 
   loadChatsList();
 
@@ -396,8 +557,8 @@ const renderChatRow = (c) => {
 
   const row = el("div", {
     class: `chat-row ${pinned ? "pinned" : ""} ${state.activeChat === c.id ? "active" : ""}`,
-    data: { search: (name + " " + preview).toLowerCase() },
-    onclick: () => openChatById(isGroup ? c.id : c.peerUid),
+    data: { search: (name + " " + preview).toLowerCase(), chatId: c.id },
+    onclick: () => openChatById(isGroup ? c.id : c.peerUid, c),
     oncontextmenu: (e) => { e.preventDefault(); chatRowMenu(c); },
   },
     el("div", { class: "av" },
@@ -458,39 +619,56 @@ const openNewChatPicker = async () => {
 // =========================================================================
 const dmChatId = (a, b) => [a, b].sort().join("__"); // deterministic doc id
 
-const openChatById = async (target) => {
+const openChatById = async (target, knownChat = null) => {
   if (!target) return;
 
-  // Check if target is a group
+  const requestId = ++_activeChatOpenRequest;
   let isGroup = false;
-  let chatId = null;
+  let chatId;
   let peer = null;
+  let group = null;
 
-  const groupSnap = await getDoc(doc(db, "groups", target));
-  if (groupSnap.exists()) {
-    isGroup = true; chatId = target;
-  } else {
-    peer = await fetchUser(target);
-    if (!peer) { toast("User not found"); return; }
+  // A tapped row already contains the peer/group data; render immediately
+  // instead of waiting on a series of Firestore reads before showing the chat.
+  if (knownChat?.kind === "group") {
+    isGroup = true;
+    chatId = knownChat.id;
+    group = knownChat;
+  } else if (knownChat?.kind === "dm" && knownChat.peer) {
+    peer = knownChat.peer;
     chatId = dmChatId(state.uid, peer.uid);
-    // Ensure my chat-meta exists
-    const myChatRef = doc(db, "users", state.uid, "chats", chatId);
-    const exists = (await getDoc(myChatRef)).exists();
-    if (!exists) {
-      await setDoc(myChatRef, {
-        peerUid: peer.uid, lastMessage: "", lastFromMe: false, unread: 0,
-        createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
-      });
+  } else {
+    const groupSnap = await getDoc(doc(db, "groups", target));
+    if (requestId !== _activeChatOpenRequest) return;
+    if (groupSnap.exists()) {
+      isGroup = true;
+      chatId = target;
+      group = { id: groupSnap.id, ...groupSnap.data() };
+    } else {
+      peer = await fetchUser(target);
+      if (requestId !== _activeChatOpenRequest) return;
+      if (!peer) { toast("User not found"); return; }
+      chatId = dmChatId(state.uid, peer.uid);
     }
-    // Reset unread for me
-    await updateDoc(myChatRef, { unread: 0 });
   }
 
+  if (requestId !== _activeChatOpenRequest || !$("#chatView")) return;
   state.activeChat = chatId;
   $("#chatsRoute")?.classList.add("is-open");
-  renderChatView({ isGroup, chatId, peer, group: isGroup ? { id: groupSnap.id, ...groupSnap.data() } : null });
-  // Mark active in list
-  $$("#chatsScroll .chat-row").forEach((r) => r.classList.remove("active"));
+  renderChatView({ isGroup, chatId, peer, group });
+  $$("#chatsScroll .chat-row").forEach((r) => r.classList.toggle("active", r.dataset.chatId === chatId));
+
+  // Clear unread state in the background so storage latency never delays opening.
+  if (!isGroup && peer) {
+    const myChatRef = doc(db, "users", state.uid, "chats", chatId);
+    getDoc(myChatRef).then((snap) => {
+      if (snap.exists()) return updateDoc(myChatRef, { unread: 0 });
+      return setDoc(myChatRef, {
+        peerUid: peer.uid, lastMessage: "", lastFromMe: false, unread: 0,
+        createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+      }, { merge: true });
+    }).catch(() => {});
+  }
 };
 
 // =========================================================================
@@ -501,7 +679,25 @@ let replyingTo = null;
 
 const renderChatView = ({ isGroup, chatId, peer, group }) => {
   const view = $("#chatView");
+  const cacheKey = _chatCacheKey(isGroup, chatId);
+  if (view.dataset.chatKey === cacheKey && view.querySelector("#messages")) return;
+
+  const previousKey = view.dataset.chatKey;
+  const previousMessages = view.querySelector("#messages");
+  if (previousKey && previousKey !== cacheKey && previousMessages) {
+    _rememberChatMessages(previousKey, previousMessages);
+  }
+  if (state.chatUnsub) { state.chatUnsub(); state.chatUnsub = null; }
+  if (_typingUnsub) { _typingUnsub(); _typingUnsub = null; }
+  clearTimeout(typingDebounce);
   view.innerHTML = "";
+  view.dataset.chatKey = cacheKey;
+  view.classList.remove("orbit-chat-switching");
+  void view.offsetWidth;
+  view.classList.add("orbit-chat-switching");
+  window.setTimeout(() => {
+    if (view.dataset.chatKey === cacheKey) view.classList.remove("orbit-chat-switching");
+  }, 180);
 
   const messagesPath = isGroup ? ["groups", chatId, "messages"] : ["chats", chatId, "messages"];
 
@@ -552,7 +748,13 @@ const renderChatView = ({ isGroup, chatId, peer, group }) => {
   view.appendChild(head);
 
   // MESSAGES
-  const messages = el("div", { class: "messages", id: "messages" });
+  const cachedMessages = _chatDomCache.get(cacheKey);
+  if (cachedMessages) {
+    _chatDomCache.delete(cacheKey);
+    _chatDomCache.set(cacheKey, cachedMessages);
+  }
+  const messages = cachedMessages || el("div", { class: "messages", id: "messages" });
+  messages.id = "messages";
   view.appendChild(messages);
 
   // BOTTOM BAR — one grid child wrapping all bottom UI (reply, attach preview, composer)
@@ -658,15 +860,55 @@ const renderChatView = ({ isGroup, chatId, peer, group }) => {
   }
 
   // Live messages listener
-  if (state.chatUnsub) state.chatUnsub();
+  let isFirstMessageSnapshot = true;
   state.chatUnsub = onSnapshot(
-    query(collection(db, ...messagesPath), orderBy("createdAt", "asc"), limit(200)),
-    async (snap) => await renderMessages(messages, snap, { isGroup, chatId, peer }),
+    query(collection(db, ...messagesPath), orderBy("createdAt", "desc"), limit(200)),
+    async (snap) => {
+      if (view.dataset.chatKey !== cacheKey) return;
+      const { signature, fingerprints } = _messageSnapshotState(snap);
+      const isFirstSnapshot = isFirstMessageSnapshot;
+      isFirstMessageSnapshot = false;
+      _markChatSnapshotRead(snap, isGroup, chatId, cacheKey);
+      if (messages.dataset.rendered === "true" && _chatSnapshotSignatures.get(cacheKey) === signature) {
+        _syncReadReceipts(messages, snap);
+        return;
+      }
+
+      const previousFingerprints = _chatMessageFingerprints.get(cacheKey);
+      let addedDocs = [];
+      let removedOrModified = false;
+      if (messages.dataset.rendered === "true" && previousFingerprints) {
+        addedDocs = snap.docs.filter((d) => !previousFingerprints.has(d.id));
+        removedOrModified = [...previousFingerprints].some(([id, fingerprint]) =>
+          fingerprints.get(id) !== fingerprint
+        );
+        const hasRemoved = [...previousFingerprints.keys()].some((id) => !fingerprints.has(id));
+        removedOrModified ||= hasRemoved;
+      }
+      const appendOnly = !!previousFingerprints &&
+        messages.dataset.rendered === "true" &&
+        addedDocs.length > 0 &&
+        !removedOrModified;
+      const renderSnap = appendOnly
+        ? {
+            docs: addedDocs,
+            empty: false,
+            docChanges: () => addedDocs.map((doc) => ({ type: "added", doc })),
+          }
+        : snap;
+      await renderMessages(messages, renderSnap, {
+        isGroup, chatId, peer, isFirstSnapshot: isFirstSnapshot && !appendOnly, appendOnly,
+      });
+      _syncReadReceipts(messages, snap);
+      messages.dataset.rendered = "true";
+      _chatSnapshotSignatures.set(cacheKey, signature);
+      _chatMessageFingerprints.set(cacheKey, fingerprints);
+    },
   );
 
   // Typing/online indicator (DM only)
   if (!isGroup) {
-    onSnapshot(doc(db, "chats", chatId), async (s) => {
+    _typingUnsub = onSnapshot(doc(db, "chats", chatId), async (s) => {
       const d = s.data() || {};
       const peerTyping = d.typing && d.typing[peer.uid];
       const ts = peerTyping?.toMillis?.() || 0;
@@ -868,7 +1110,9 @@ const _showVoiceDraft = (blob, chatId, isGroup) => {
 
 // 8. RENDER MESSAGES (with day dividers, bubbles, reactions, replies)
 // =========================================================================
-const renderMessages = async (root, snap, { isGroup, chatId, peer }) => {
+const renderMessages = async (root, snap, {
+  isGroup, chatId, peer, isFirstSnapshot = false, appendOnly = false,
+}) => {
   const wasNearBottom = root.scrollTop + root.clientHeight >= root.scrollHeight - 80;
 
   // Play receive sound when new incoming messages arrive
@@ -876,34 +1120,48 @@ const renderMessages = async (root, snap, { isGroup, chatId, peer }) => {
     c.type === "added" && c.doc.data().authorUid !== state.uid
   );
   // Only sound if this isn't the very first load (root already has content)
-  if (newIncoming.length > 0 && root.childElementCount > 0) {
+  if (!isFirstSnapshot && newIncoming.length > 0 && root.childElementCount > 0) {
     sfxNotification();
   }
 
   // Save existing video players keyed by src so they don't re-buffer on re-render
   const _savedVids = {};
-  root.querySelectorAll(".vid-player").forEach((vp) => {
-    const v = vp.querySelector("video");
-    if (v?.src) _savedVids[v.src] = vp;
-  });
-  root.innerHTML = "";
+  if (!appendOnly) {
+    root.querySelectorAll(".vid-player").forEach((vp) => {
+      const v = vp.querySelector("video");
+      if (v?.src) _savedVids[v.src] = vp;
+    });
+    root.innerHTML = "";
+    root.dataset.lastDayKey = "";
+    root.dataset.lastAuthor = "";
+  } else {
+    root.querySelector(".chat-empty")?.remove();
+  }
 
   if (snap.empty) {
     root.appendChild(el("div", { class: "chat-empty", style: "height:100%;" },
       el("i", { class: "ri-emotion-laugh-line" }),
       el("div", {}, "No messages yet — send the first one")));
+    root.dataset.lastDayKey = "";
+    root.dataset.lastAuthor = "";
     return;
   }
 
-  const msgs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  const msgs = snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => {
+      const aTime = a.createdAt?.toMillis?.() ?? 0;
+      const bTime = b.createdAt?.toMillis?.() ?? 0;
+      return aTime - bTime;
+    });
   // Resolve authors for groups
   const authorsNeeded = isGroup ? [...new Set(msgs.map((m) => m.authorUid).filter(Boolean))] : [];
   const authorMap = isGroup
     ? Object.fromEntries((await Promise.all(authorsNeeded.map(fetchUser))).filter(Boolean).map((u) => [u.uid, u]))
     : { [peer?.uid]: peer, [state.uid]: state.me };
 
-  let lastDayKey = null;
-  let lastAuthor = null;
+  let lastDayKey = appendOnly ? (root.dataset.lastDayKey || null) : null;
+  let lastAuthor = appendOnly ? (root.dataset.lastAuthor || null) : null;
 
   for (const m of msgs) {
     const ts = m.createdAt?.toDate?.() || new Date();
@@ -923,12 +1181,6 @@ const renderMessages = async (root, snap, { isGroup, chatId, peer }) => {
     const isForwarded = m.forwarded || m.type === "forwarded";
     const author = authorMap[m.authorUid];
     const showAv = isGroup && !fromMe && lastAuthor !== m.authorUid;
-
-    // Mark as read by me
-    if (!m.readBy?.includes(state.uid)) {
-      const path = isGroup ? ["groups", chatId, "messages", m.id] : ["chats", chatId, "messages", m.id];
-      updateDoc(doc(db, ...path), { readBy: arrayUnion(state.uid) }).catch(() => {});
-    }
 
     const bubble = el("div", { class: "bubble" });
     if (isGroup && !fromMe) bubble.appendChild(el("div", { class: "sender", text: author?.name || "User" }));
@@ -1180,6 +1432,8 @@ const renderMessages = async (root, snap, { isGroup, chatId, peer }) => {
     lastAuthor = m.authorUid;
   }
 
+  root.dataset.lastDayKey = lastDayKey || "";
+  root.dataset.lastAuthor = lastAuthor || "";
   if (wasNearBottom) root.scrollTop = root.scrollHeight;
 };
 
