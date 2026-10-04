@@ -371,7 +371,7 @@ const _ensureChatMotionStyles = () => {
 
 const _installChatSwipeBack = (route, view) => {
   let gesture = null;
-  const edgeSize = 30;
+  const leftStartZone = () => Math.min(220, Math.max(110, window.innerWidth * 0.5));
   const thresholdFor = () => Math.max(84, Math.min(130, window.innerWidth * 0.22));
   const blockedTarget = (target) => target instanceof Element && !!target.closest(
     "input, textarea, button, a, [contenteditable='true'], video, audio, .vid-player, .voice-note-player, .msg-actions"
@@ -381,7 +381,7 @@ const _installChatSwipeBack = (route, view) => {
     if (!route.classList.contains("is-open") || e.touches.length !== 1) return;
     const touch = e.touches[0];
     const coarse = window.matchMedia?.("(max-width: 900px), (pointer: coarse)")?.matches;
-    if (!coarse || touch.clientX < window.innerWidth - edgeSize || blockedTarget(e.target)) return;
+    if (!coarse || touch.clientX > leftStartZone() || blockedTarget(e.target)) return;
     gesture = { x: touch.clientX, y: touch.clientY, dx: 0, dy: 0, dragging: false };
   }, { passive: true });
 
@@ -1421,7 +1421,8 @@ const renderMessages = async (root, snap, {
         if (row._tx == null) return;
         const dx = (e.changedTouches[0].clientX - row._tx);
         row.style.transform = "";
-        if (Math.abs(dx) > 60) setReply(m, author?.name);
+        const isSwipeBack = !!row.closest(".chat-view")?.classList.contains("orbit-chat-swipe-dragging");
+        if (Math.abs(dx) > 60 && !isSwipeBack) setReply(m, author?.name);
         row._tx = null;
       },
     });
