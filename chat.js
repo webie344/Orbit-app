@@ -360,6 +360,31 @@ const _ensureChatMotionStyles = () => {
     .chat-view.orbit-chat-swipe-dragging { transition: none !important; will-change: transform; }
     .chat-view.orbit-chat-swipe-settling { transition: transform 210ms cubic-bezier(.22,.75,.25,1) !important; will-change: transform; }
     .chat-view.orbit-chat-switching { animation: orbitChatSwitchIn 150ms ease-out both; }
+    @media (max-width: 640px) {
+      .chats-route.orbit-chat-swipe-reveal-list {
+        position: relative !important;
+        overflow: hidden !important;
+        isolation: isolate;
+        background: var(--bg);
+      }
+      .chats-route.orbit-chat-swipe-reveal-list .chats-list {
+        display: flex !important;
+        position: absolute !important;
+        inset: 0 !important;
+        z-index: 0 !important;
+        width: 100% !important;
+        height: 100% !important;
+        transform: none !important;
+      }
+      .chats-route.orbit-chat-swipe-reveal-list .chat-view {
+        position: absolute !important;
+        inset: 0 !important;
+        z-index: 1 !important;
+        width: 100% !important;
+        height: 100% !important;
+        background: var(--bg) !important;
+      }
+    }
     @keyframes orbitChatSwitchIn { from { opacity: .72; } to { opacity: 1; } }
     @media (prefers-reduced-motion: reduce) {
       .chat-view.orbit-chat-swipe-settling { transition-duration: 1ms !important; }
@@ -392,16 +417,19 @@ const _installChatSwipeBack = (route, view) => {
     gesture.dx = touch.clientX - gesture.x;
     gesture.dy = touch.clientY - gesture.y;
     if (gesture.dx > 0 && gesture.x > leftEdgeBackZone) {
-      gesture = null;
+      if (gesture.dragging) finishGesture(false);
+      else gesture = null;
       return;
     }
     if (Math.abs(gesture.dy) > Math.max(12, Math.abs(gesture.dx) * 0.9)) {
-      gesture = null;
+      if (gesture.dragging) finishGesture(false);
+      else gesture = null;
       return;
     }
     if (Math.abs(gesture.dx) > 8) {
       gesture.dragging = true;
       view.classList.add("orbit-chat-swipe-dragging");
+      route.classList.add("orbit-chat-swipe-reveal-list");
       const offset = Math.max(-window.innerWidth, Math.min(window.innerWidth, gesture.dx));
       view.style.transform = `translate3d(${offset}px, 0, 0)`;
     }
@@ -420,10 +448,14 @@ const _installChatSwipeBack = (route, view) => {
         route.classList.remove("is-open");
         view.style.transform = "";
         view.classList.remove("orbit-chat-swipe-settling");
+        route.classList.remove("orbit-chat-swipe-reveal-list");
       }, 220);
     } else {
       view.style.transform = "";
-      window.setTimeout(() => view.classList.remove("orbit-chat-swipe-settling"), 230);
+      window.setTimeout(() => {
+        view.classList.remove("orbit-chat-swipe-settling");
+        route.classList.remove("orbit-chat-swipe-reveal-list");
+      }, 230);
     }
   };
 
