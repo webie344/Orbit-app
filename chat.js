@@ -372,9 +372,10 @@ const _ensureChatMotionStyles = () => {
 const _installChatSwipeBack = (route, view) => {
   let gesture = null;
   const leftStartZone = () => Math.min(220, Math.max(110, window.innerWidth * 0.5));
-  const thresholdFor = () => Math.max(84, Math.min(130, window.innerWidth * 0.22));
+  const leftEdgeBackZone = 32;
+  const thresholdFor = (g) => Math.min(84, Math.max(32, (g.dx < 0 ? g.x : window.innerWidth - g.x) * 0.78));
   const blockedTarget = (target) => target instanceof Element && !!target.closest(
-    "input, textarea, button, a, [contenteditable='true'], video, audio, .vid-player, .voice-note-player, .msg-actions"
+    "input, textarea, button:not(.back), a, [contenteditable='true'], video, audio, .vid-player, .voice-note-player, .msg-actions"
   );
 
   view.addEventListener("touchstart", (e) => {
@@ -390,25 +391,31 @@ const _installChatSwipeBack = (route, view) => {
     const touch = e.touches[0];
     gesture.dx = touch.clientX - gesture.x;
     gesture.dy = touch.clientY - gesture.y;
-    if (gesture.dx > 0 || Math.abs(gesture.dy) > Math.max(12, Math.abs(gesture.dx) * 0.9)) {
+    if (gesture.dx > 0 && gesture.x > leftEdgeBackZone) {
       gesture = null;
       return;
     }
-    if (gesture.dx < -8) {
+    if (Math.abs(gesture.dy) > Math.max(12, Math.abs(gesture.dx) * 0.9)) {
+      gesture = null;
+      return;
+    }
+    if (Math.abs(gesture.dx) > 8) {
       gesture.dragging = true;
       view.classList.add("orbit-chat-swipe-dragging");
-      view.style.transform = `translate3d(${Math.max(gesture.dx, -window.innerWidth)}px, 0, 0)`;
+      const offset = Math.max(-window.innerWidth, Math.min(window.innerWidth, gesture.dx));
+      view.style.transform = `translate3d(${offset}px, 0, 0)`;
     }
   }, { passive: true });
 
   const finishGesture = (commit) => {
     if (!gesture) return;
-    const shouldClose = commit && gesture.dragging && gesture.dx <= -thresholdFor();
+    const shouldClose = commit && gesture.dragging && Math.abs(gesture.dx) >= thresholdFor(gesture);
+    const exitDirection = gesture.dx < 0 ? -1 : 1;
     gesture = null;
     view.classList.remove("orbit-chat-swipe-dragging");
     view.classList.add("orbit-chat-swipe-settling");
     if (shouldClose) {
-      view.style.transform = `translate3d(-${window.innerWidth}px, 0, 0)`;
+      view.style.transform = `translate3d(${exitDirection * window.innerWidth}px, 0, 0)`;
       window.setTimeout(() => {
         route.classList.remove("is-open");
         view.style.transform = "";
