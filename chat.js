@@ -1004,7 +1004,9 @@ const renderChatView = ({ isGroup, chatId, peer, group }) => {
         readBy: [state.uid],
         createdAt: serverTimestamp(),
       };
-      await addDoc(collection(db, ...messagesPath), msg);
+      const messageRef = doc(collection(db, ...messagesPath));
+      optEl.dataset.id = messageRef.id;
+      await setDoc(messageRef, msg);
       sfxSend();
 
       if (isGroup) {
@@ -1153,6 +1155,9 @@ const renderMessages = async (root, snap, {
   isGroup, chatId, peer, isFirstSnapshot = false, appendOnly = false,
 }) => {
   const wasNearBottom = root.scrollTop + root.clientHeight >= root.scrollHeight - 80;
+  const optimisticRows = appendOnly
+    ? new Map([...root.querySelectorAll(".msg-row.optimistic[data-id]")].map((row) => [row.dataset.id, row]))
+    : new Map();
 
   // Play receive sound when new incoming messages arrive
   const newIncoming = snap.docChanges().filter(c =>
@@ -1203,6 +1208,7 @@ const renderMessages = async (root, snap, {
   let lastAuthor = appendOnly ? (root.dataset.lastAuthor || null) : null;
 
   for (const m of msgs) {
+    optimisticRows.get(m.id)?.remove();
     const ts = m.createdAt?.toDate?.() || new Date();
     const dayKey = ts.toDateString();
     if (dayKey !== lastDayKey) {
