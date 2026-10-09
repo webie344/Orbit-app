@@ -2074,18 +2074,86 @@ const renderTrendingCard = (p, author) => {
 };
 
 // =========================================================================
-// 8a. MEDIA CAROUSEL
+// 8a. MEDIA CAROUSEL / GRID
 // 1 item  → single full-width image or video player
-// 2+      → Drop-style swipeable carousel
+// 2 items → side-by-side grid
+// 3 items → one large image with two stacked alongside
+// 4+      → Facebook-style 2×2 grid with overflow count
 // =========================================================================
+const _makeGridCell = (m, spanRows = false, _allItems = [], _idx = 0, _postId = null) => {
+  const cellStyle = [
+    "position:relative;overflow:hidden;cursor:pointer;",
+    spanRows ? "grid-row:1/3;" : "",
+  ].join("");
+  const cell = el("div", { style: cellStyle });
+  const navigateToPost = (e) => {
+    e.stopPropagation();
+    if (_postId) location.hash = `#post/${_postId}`;
+  };
+
+  if (m.type === "video") {
+    const video = el("video", {
+      src: m.url,
+      poster: _cloudPoster(m.url),
+      preload: "metadata",
+      playsinline: "",
+      style: "width:100%;height:100%;object-fit:cover;display:block;cursor:pointer;",
+    });
+    const overlay = el("div", {
+      class: "media-grid-play",
+      style: "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.18);",
+    }, el("i", { class: "ri-play-circle-fill", style: "font-size:44px;color:#fff;filter:drop-shadow(0 2px 10px rgba(0,0,0,0.5));" }));
+    video.addEventListener("click", navigateToPost);
+    overlay.addEventListener("click", navigateToPost);
+    cell.appendChild(video);
+    cell.appendChild(overlay);
+  } else {
+    const image = el("img", {
+      src: m.url,
+      loading: "lazy",
+      style: "width:100%;height:100%;object-fit:cover;display:block;",
+    });
+    image.addEventListener("click", navigateToPost);
+    cell.appendChild(image);
+  }
+  return cell;
+};
+
 const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
-  const { song = null } = opts;
+  const { detailView = false, song = null } = opts;
   const items = Array.isArray(mediaRaw) ? mediaRaw : (mediaRaw ? [mediaRaw] : []);
   if (!items.length) return null;
   // A song attaches at the post level; if the media itself isn't a single
   // video (which syncs playback directly), sync the song to the whole
   // media block scrolling into view instead.
   const _wireStandaloneSong = (node) => { if (song) _wireSongPlayback(node, song, null); return node; };
+
+  // Post detail shows every attached item in a vertical stack.
+  if (detailView && items.length > 1) {
+    const stack = el("div", {
+      class: "post-media-stack",
+      style: "display:flex;flex-direction:column;gap:4px;position:relative;",
+    });
+    let sawVideo = false;
+    items.forEach((item) => {
+      if (item.type === "video") {
+        sawVideo = true;
+        const player = buildVideoPlayer(item.url, { song, overlays: item.overlays });
+        player.style.borderRadius = "14px";
+        stack.appendChild(player);
+      } else {
+        const image = el("img", {
+          src: item.url,
+          loading: "lazy",
+          style: "width:100%;display:block;max-height:520px;object-fit:cover;cursor:zoom-in;border-radius:0;",
+        });
+        image.addEventListener("click", () => openImageZoom(item.url));
+        stack.appendChild(image);
+      }
+    });
+    if (song && !sawVideo) _wireStandaloneSong(stack);
+    return stack;
+  }
 
   // ── Single item ────────────────────────────────────────────────
   if (items.length === 1) {
@@ -2106,56 +2174,43 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
     return wrap;
   }
 
-  // ── 2+ items: Drop-style swipe carousel, never a grid ─────────
-  const track = el("div", {
-    class: "post-image-track",
-    style: "display:flex;width:100%;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;",
-  });
-  let sawVideo = false;
-
-  items.forEach((m) => {
-    const cell = el("div", {
-      class: "carousel-cell",
-      style: "flex:0 0 100%;width:100%;scroll-snap-align:start;position:relative;overflow:hidden;",
+  if (items.length === 2) {
+    const grid = el("div", {
+      class: "post-media",
+      style: "display:grid;grid-template-columns:1fr 1fr;gap:3px;border-radius:14px;overflow:hidden;height:260px;margin:8px 0;position:relative;",
     });
-    if (m.type === "video") {
-      sawVideo = true;
-      const player = buildVideoPlayer(m.url, { song, overlays: m.overlays });
-      player.style.borderRadius = "0";
-      player.style.width = "100%";
-      cell.appendChild(player);
-    } else {
-      const img = el("img", {
-        src: m.url,
-        loading: "lazy",
-        style: "width:100%;display:block;aspect-ratio:4/5;object-fit:cover;cursor:zoom-in;",
-      });
-      img.addEventListener("click", () => openImageZoom(m.url));
-      cell.appendChild(img);
+    items.forEach((item, index) => grid.appendChild(_makeGridCell(item, false, items, index, postId)));
+    return _wireStandaloneSong(grid);
+  }
+
+  if (items.length === 3) {
+    const grid = el("div", {
+      class: "post-media",
+      style: "display:grid;grid-template-columns:2fr 1fr;grid-template-rows:130px 130px;gap:3px;border-radius:14px;overflow:hidden;margin:8px 0;position:relative;",
+    });
+    items.forEach((item, index) => grid.appendChild(_makeGridCell(item, index === 0, items, index, postId)));
+    return _wireStandaloneSong(grid);
+  }
+
+  const visibleItems = items.slice(0, 4);
+  const overflow = items.length - visibleItems.length;
+  const grid = el("div", {
+    class: "post-media",
+    style: "display:grid;grid-template-columns:1fr 1fr;grid-template-rows:130px 130px;gap:3px;border-radius:14px;overflow:hidden;margin:8px 0;position:relative;",
+  });
+  visibleItems.forEach((item, index) => {
+    const cell = _makeGridCell(item, false, items, index, postId);
+    if (index === 3 && overflow > 0) {
+      cell.appendChild(el("div", {
+        style: "position:absolute;inset:0;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;cursor:pointer;",
+        onclick: (event) => { event.stopPropagation(); if (postId) location.hash = `#post/${postId}`; },
+      }, el("span", {
+        style: "color:#fff;font-size:22px;font-weight:700;font-family:var(--font-display);letter-spacing:-0.02em;",
+      }, `+${overflow}`)));
     }
-    track.appendChild(cell);
+    grid.appendChild(cell);
   });
-
-  const counter = el("div", { class: "carousel-counter" }, `1/${items.length}`);
-  const dots = el("div", { class: "carousel-dots" },
-    ...items.map((_, index) => el("span", {
-      class: `carousel-dot${index === 0 ? " active" : ""}`,
-    })),
-  );
-  track.addEventListener("scroll", () => {
-    const index = Math.round(track.scrollLeft / Math.max(track.clientWidth, 1));
-    counter.textContent = `${Math.min(items.length, index + 1)}/${items.length}`;
-    dots.querySelectorAll(".carousel-dot").forEach((dot, dotIndex) => {
-      dot.classList.toggle("active", dotIndex === index);
-    });
-  }, { passive: true });
-
-  const carousel = el("div", {
-    class: "post-media post-image-wrap carousel",
-    style: "position:relative;overflow:hidden;border-radius:14px;margin:8px 0;",
-  }, track, counter, dots);
-  if (song && !sawVideo) _wireStandaloneSong(carousel);
-  return carousel;
+  return _wireStandaloneSong(grid);
 };
 
 const postIsHidden = (p) => (state.me?.hiddenPosts || []).includes(p.id);
@@ -2487,10 +2542,7 @@ const renderPost = (p, author, opts = {}) => {
     }
   }
 
-  const post = el("article", {
-    class: `tfb-post post-card drop-post${_detailView ? " post-detail-post" : ""}`,
-    data: { postId: p.id },
-  });
+  const post = el("article", { class: "tfb-post", data: { postId: p.id } });
 
   // ── Header: avatar ring + name + timestamp + menu ────────────────
   const menuBtn = el("button", { class: "icon-btn tfb-menu", onclick: (e) => {
@@ -2498,18 +2550,21 @@ const renderPost = (p, author, opts = {}) => {
     openPostMenu(p, author, isMine);
   }}, el("i", { class: "ri-more-2-line" }));
 
-  const header = el("div", { class: "tfb-header post-header" },
+  const header = el("div", { class: "tfb-header" },
     el("div", {
-      class: "tfb-avatar-ring post-avatar",
+      class: "tfb-avatar-ring",
       onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${author?.uid}`; },
     },
       el("img", { src: avatarFor(author) }),
     ),
-    el("div", { class: "tfb-header-text post-header-text" },
-      el("span", { class: "tfb-name post-username" },
-         `@${author?.username || "user"}`,
+    el("div", { class: "tfb-header-text" },
+      el("span", { class: "tfb-name" },
+        author?.name || "User",
+        author?.verified
+          ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' })
+          : null,
       ),
-       el("span", { class: "tfb-sub post-time" }, fmtTime(p.createdAt)),
+      el("span", { class: "tfb-sub" }, `@${author?.username || "user"} · ${fmtTime(p.createdAt)}`),
     ),
     !isMine && author?.uid
       ? el("button", {
@@ -2559,23 +2614,13 @@ const renderPost = (p, author, opts = {}) => {
     ));
   }
 
-  // ── Caption (Drop places this below media/actions/reactions) ─────
-  let captionNode = null;
+  // ── Caption ──────────────────────────────────────────────────────
   if (p.text) {
-    const caption = el("div", { class: "tfb-caption post-caption" });
-    captionNode = caption;
-    const attachCaptionAuthor = () => {
-      if (!caption.querySelector(".post-caption-author")) {
-        caption.prepend(el("span", { class: "post-caption-author" }, `@${author?.username || "user"} `));
-      }
-    };
+    const caption = el("div", { class: "tfb-caption" });
     if (p.text.includes("```")) {
       import("./features.js")
-        .then((m) => {
-          caption.appendChild(m.renderTextWithCode(p.text));
-          attachCaptionAuthor();
-        })
-        .catch(() => { caption.innerHTML = linkify(p.text); attachCaptionAuthor(); });
+        .then((m) => caption.appendChild(m.renderTextWithCode(p.text)))
+        .catch(() => { caption.innerHTML = linkify(p.text); });
     } else {
       const TRUNC_LEN = 280;
       if (!_detailView && p.text.length > TRUNC_LEN) {
@@ -2583,7 +2628,6 @@ const renderPost = (p, author, opts = {}) => {
         const shortText = p.text.slice(0, TRUNC_LEN).trim();
         const paint = () => {
           caption.innerHTML = linkify(expanded ? p.text : shortText + "… ");
-            attachCaptionAuthor();
           const moreBtn = el("span", { class: "see-more-btn", text: expanded ? "See less" : "See more" });
           moreBtn.addEventListener("click", (e) => { e.stopPropagation(); expanded = !expanded; paint(); });
           caption.appendChild(moreBtn);
@@ -2591,12 +2635,12 @@ const renderPost = (p, author, opts = {}) => {
         paint();
       } else {
         caption.innerHTML = linkify(p.text);
-        attachCaptionAuthor();
         caption.onclick = (e) => {
           if (!e.target.closest("button,a")) location.hash = `#post/${p.id}`;
         };
       }
     }
+    post.appendChild(caption);
   }
 
   // ── Media ────────────────────────────────────────────────────────
@@ -2604,7 +2648,7 @@ const renderPost = (p, author, opts = {}) => {
   if (mediaNode) {
     // Swap post-media class for tfb-media
     mediaNode.classList.remove("post-media");
-    mediaNode.classList.add("tfb-media", "post-image-wrap");
+    mediaNode.classList.add("tfb-media");
     post.appendChild(mediaNode);
   }
 
@@ -2617,16 +2661,13 @@ const renderPost = (p, author, opts = {}) => {
     }).catch(() => {});
   }
 
-  // ── Drop action row: like/orbit, comment, share ──────────────────
-  // Orbit keeps its native orbit persistence, but uses Drop's heart
-  // treatment and three-button row so the post structure matches Drop.
-  const orbitIcon  = el("span", { class: "heart" }, iOrbited ? "♥" : "♡");
+  // ── Actions row ──────────────────────────────────────────────────
+  const orbitIcon  = el("i", { class: iOrbited ? "ri-fire-fill" : "ri-fire-line" });
   const orbitCount = el("span", { text: String(p.orbitCount || 0) });
   let _iOrbited = iOrbited;
 
   const orbitBtn = el("button", {
-    class: `post-action like-btn orbit-action${iOrbited ? " liked active" : ""}`,
-    "aria-label": "Like",
+    class: `tfb-badge${iOrbited ? " active" : ""}`,
     onclick: async (e) => {
       e.stopPropagation();
       _iOrbited = !_iOrbited;
@@ -2634,9 +2675,8 @@ const renderPost = (p, author, opts = {}) => {
       orbitBtn.classList.remove("orbit-burst");
       void orbitBtn.offsetWidth;
       orbitBtn.classList.add("orbit-burst");
-      orbitIcon.textContent = _iOrbited ? "♥" : "♡";
+      orbitIcon.className   = _iOrbited ? "ri-fire-fill" : "ri-fire-line";
       orbitCount.textContent = String((p.orbitCount || 0) + (_iOrbited ? 1 : -1));
-      orbitBtn.classList.toggle("liked", _iOrbited);
       orbitBtn.classList.toggle("active", _iOrbited);
       await updateDoc(doc(db, "posts", p.id), {
         orbits:     _iOrbited ? arrayUnion(state.uid)   : arrayRemove(state.uid),
@@ -2656,43 +2696,46 @@ const renderPost = (p, author, opts = {}) => {
     },
   }, orbitIcon, orbitCount);
 
+  let _saved = (state.me?.saved || []).includes(p.id);
+  const saveIconEl = el("i", { class: _saved ? "ri-bookmark-fill" : "ri-bookmark-line" });
+
   // Live-updatable comment count element — updated by the feed onSnapshot below
   const cmtCountEl = el("span", {});
   cmtCountEl.textContent = " " + String(p.commentCount || 0);
 
-  const actions = el("div", { class: "tfb-actions post-actions" },
-    orbitBtn,
-    el("button", { class: "tfb-act post-action", onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; } },
+  const actions = el("div", { class: "tfb-actions" },
+    el("button", { class: "tfb-act", onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; } },
       el("i", { class: "ri-chat-1-line" }),
       cmtCountEl,
     ),
     el("button", {
-      class: "tfb-act post-action",
+      class: "tfb-act",
       onclick: async (e) => {
         e.stopPropagation();
         await openPostShareModal(p, author);
       },
     },
-      el("i", { class: "ri-share-forward-line" }),
+      el("i", { class: "ri-share-forward-line" }), " Share",
     ),
+    el("button", { class: `tfb-act save-post-btn${_saved ? " saved" : ""}`, onclick: async (e) => {
+      e.stopPropagation();
+      _saved = !_saved;
+      saveIconEl.className = _saved ? "ri-bookmark-fill" : "ri-bookmark-line";
+      e.currentTarget.classList.toggle("saved", _saved);
+      e.currentTarget.classList.add("save-burst");
+      setTimeout(() => e.currentTarget.classList.remove("save-burst"), 420);
+      await toggleSave(p.id, _saved);
+    } }, saveIconEl),
+    el("span", { class: "spacer" }),
+    el("span", { class: "tfb-act", style: "cursor:default;pointer-events:none;" },
+      el("i", { class: "ri-eye-line" }), " " + String(p.views || 0)),
+    orbitBtn,
   );
   post.appendChild(actions);
-  post.appendChild(renderDropReactionRow(p, p.id));
-
-  // Drop order: media → actions → reactions → caption → view comments.
-  if (captionNode) post.appendChild(captionNode);
-  const initialCommentCount = Number(p.commentCount || 0);
-  const viewCommentsBtn = !_detailView
-    ? el("button", {
-        class: `post-view-comments${initialCommentCount ? "" : " hidden"}`,
-        onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; },
-      }, `View all ${initialCommentCount} comment${initialCommentCount === 1 ? "" : "s"}`)
-    : null;
-  if (viewCommentsBtn) post.appendChild(viewCommentsBtn);
 
   // ── Comments (feed preview — top 5) ─────────────────────────────
   if (!hideComments) {
-    const cBox = el("div", { class: "comments drop-comments hidden" });
+    const cBox = el("div", { class: "comments hidden" });
     post.appendChild(cBox);
 
     let _replyTo = null;
@@ -2784,8 +2827,8 @@ const renderPost = (p, author, opts = {}) => {
       } catch { toast("Microphone access denied"); }
     });
 
-    const cForm = el("form", { class: "comment-form drop-comment-form" });
-    const cFormRow = el("div", { class: "comment-form-row drop-comment-form-row" },
+    const cForm = el("form", { class: "comment-form" });
+    const cFormRow = el("div", { class: "comment-form-row" },
       el("img", { class: "avatar xs", src: avatarFor(state.me), style: "cursor:pointer;", onclick: () => location.hash = `#profile/${state.uid}` }),
       el("input", { type: "text", placeholder: "Add your echo…" }),
       cmtMediaBtn,
@@ -2820,7 +2863,7 @@ const renderPost = (p, author, opts = {}) => {
       replyBanner.classList.add("hidden"); input.placeholder = "Add your echo…";
       clearCmtAttach();
       cBox.classList.remove("hidden");
-       cBox.appendChild(el("div", { class: "comment drop-comment" },
+      cBox.appendChild(el("div", { class: "comment" },
         el("img", { class: "avatar xs", src: avatarFor(state.me), onclick: () => location.hash = `#profile/${state.uid}` }),
         el("div", { class: "body" },
           el("div", { class: "name" }, state.me?.name || "User"),
@@ -2881,7 +2924,7 @@ const renderPost = (p, author, opts = {}) => {
         cForm.querySelector("input").focus();
       }}, "Reply");
 
-       return el("div", { class: "comment drop-comment" },
+      return el("div", { class: "comment" },
         el("img", { class: "avatar xs", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
         el("div", { class: "body" },
           el("div", { class: "name" }, a?.name || "User",
@@ -2925,13 +2968,8 @@ const renderPost = (p, author, opts = {}) => {
         const authors  = await Promise.all([...new Set(comments.map((c) => c.authorUid))].map(fetchUser));
         const map      = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
         comments.forEach((c) => cBox.appendChild(renderFeedComment(c, map[c.authorUid])));
-        // Keep the action count and Drop-style view-comments affordance live.
-        const liveCount = Math.max(snap.size, Number(p.commentCount || 0));
-        cmtCountEl.textContent = " " + String(liveCount);
-        if (viewCommentsBtn) {
-          viewCommentsBtn.textContent = `View all ${liveCount} comment${liveCount === 1 ? "" : "s"}`;
-          viewCommentsBtn.classList.toggle("hidden", liveCount === 0);
-        }
+        // Keep the feed comment count badge in sync with live comment data.
+        cmtCountEl.textContent = " " + String(snap.size);
       },
     );
 
@@ -3076,10 +3114,10 @@ const renderPostDetail = async (root, postId) => {
   root.appendChild(renderPost(p, author, { hideComments: true, detailView: true }));
 
   // Full comments section
-  const cmtSection = el("div", { class: "detail-comments post-detail-comments" });
+  const cmtSection = el("div", { class: "detail-comments" });
   root.appendChild(cmtSection);
 
-  const cmtHead = el("h3", { class: "detail-cmt-head" }, "Comments");
+  const cmtHead = el("div", { class: "detail-cmt-head" }, "Echoes");
   cmtSection.appendChild(cmtHead);
 
   const cList = el("div", { class: "detail-cmt-list" });
@@ -3166,9 +3204,9 @@ const renderPostDetail = async (root, postId) => {
       },
     }, el("i", { class: "ri-share-forward-line" }));
 
-    return el("div", { class: "tw-comment detail-comment" },
-      el("img", { class: "avatar xs tw-cmt-avatar detail-comment-avatar", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
-      el("div", { class: "tw-cmt-body detail-comment-body" },
+    return el("div", { class: "tw-comment" },
+      el("img", { class: "avatar xs tw-cmt-avatar", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
+      el("div", { class: "tw-cmt-body" },
         el("div", { class: "tw-cmt-header" },
           el("span", { class: "tw-cmt-name" }, a?.name || "User",
             a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
@@ -3322,10 +3360,10 @@ const renderPostDetail = async (root, postId) => {
     } catch { toast("Microphone access denied"); }
   });
 
-  const cForm = el("form", { class: "comment-form detail-cmt-form post-detail-composer" });
+  const cForm = el("form", { class: "comment-form detail-cmt-form" });
   cForm.appendChild(dCmtMediaInput);
   cForm.appendChild(dCmtAttachPreview);
-  const dFormRow = el("div", { class: "comment-form-row post-detail-composer-row" },
+  const dFormRow = el("div", { class: "comment-form-row" },
     el("img", { class: "avatar xs", src: avatarFor(state.me), style: "cursor:pointer;", onclick: () => location.hash = `#profile/${state.uid}` }),
     el("input", { type: "text", placeholder: "Add your echo…" }),
     dCmtMediaBtn,
