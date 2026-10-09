@@ -45,12 +45,17 @@ const findFallbackWaveBone = (root) => {
  * Mounts a small, scroll-aware 3D character in a profile avatar slot.
  * The existing profile image remains visible until Soldier.glb loads.
  * Returns a disposer for route changes.
+ *
+ * rotationY defaults to 0 so the character faces the viewer (correct for
+ * profile cards where the camera sits in front of the model).
+ * Pass Math.PI for game-style third-person views, or ±Math.PI/2 for
+ * two avatars that should face each other.
  */
 export function mountProfileCharacter(host, {
   photoURL = "",
   alt = "3D character avatar",
   scrollRoot = null,
-  rotationY = Math.PI,
+  rotationY = 0,
   waveOnInitialView = false,
 } = {}) {
   if (!host) return () => {};
@@ -153,7 +158,8 @@ export function mountProfileCharacter(host, {
 
   const setupModel = (asset, waveOnReady = false) => {
     const model = cloneSkinnedModel(asset.scene);
-    // Match the exact Soldier.glb orientation used by game.js.
+    // Facing direction — 0 means the character faces the camera.
+    // For game-style views pass Math.PI, for two facing avatars pass ±Math.PI/2.
     model.rotation.y = rotationY;
     model.updateMatrixWorld(true);
 
