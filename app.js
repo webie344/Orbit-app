@@ -4653,6 +4653,8 @@ import("./character.js?v=orbit-avatar-1").then(({ mountProfileCharacter }) => {
 // 13. SETTINGS — theme, verification, notifications
 // =========================================================================
 const renderSettings = async (root) => {
+  const routeRenderToken = root._routeRenderToken;
+  root.innerHTML = "";
   const settingSwitch = (key, title, description, onChange = null) => {
     const defaultValue = !["privateAccount", "hideSensitive"].includes(key);
     const current = state.me?.[key] ?? defaultValue;
@@ -4680,11 +4682,12 @@ const renderSettings = async (root) => {
       el("div", { class: "label" }, el("div", { class: "t" }, title), el("div", { class: "d" }, description)),
       sw,
     );
-  };
 
-  const wrap = el("div", { class: "settings" },
+
+
+};
+const wrap = el("div", { class: "settings" },
     el("h2", { style: "margin-top:0;font-family:var(--font-display);" }, "Settings"),
-
     el("div", { class: "group" },
       el("h3", {}, "Appearance"),
       el("div", { class: "row" },
@@ -4918,10 +4921,11 @@ const renderSettings = async (root) => {
       ),
     ),
   );
-  // ── Custom avatar section ──────────────────────────────────────────
+// ── Custom avatar section ──────────────────────────────────────────
 const avatarSettingsCard = await mountAvatarSettingsCard();
+if (routeRenderToken !== root._routeRenderToken) return;
 wrap.appendChild(avatarSettingsCard);
-  root.appendChild(wrap);
+root.appendChild(wrap);
 };
 
 // Verification by location (one-time geolocation)
