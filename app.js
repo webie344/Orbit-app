@@ -1592,13 +1592,14 @@ const router = () => {
   const hash = (location.hash || "#feed").replace(/^#/, "");
   const [route, ...rest] = hash.split("/");
   const target = routes.includes(route) ? route : "feed";
+  document.body.classList.toggle("groups-experience-active", target === "groups");
   const prevRoute = content._currentRoute;
 
   $$(".nav-item, .bn").forEach((b) => b.classList.toggle("active", b.dataset.route === target));
 
-  // Hide bottom nav in post detail, restore on all other routes
+  // Hide bottom nav in detail views, including the group member room.
   const _bnEl = document.querySelector(".bottomnav");
-  if (_bnEl) _bnEl.classList.toggle("detail-hidden", target === "post");
+  if (_bnEl) _bnEl.classList.toggle("detail-hidden", target === "post" || (target === "groups" && !!rest[0]));
 
   // ── Leaving the feed ──────────────────────────────────────────────────
   if (prevRoute === "feed") {
@@ -1624,6 +1625,8 @@ const router = () => {
     content._unsub = null;
   }
 
+  if (content._groupCityCleanup) { content._groupCityCleanup(); content._groupCityCleanup = null; }
+  if (content._groupRoomCleanup) { content._groupRoomCleanup(); content._groupRoomCleanup = null; }
   content.innerHTML = "";
   content._currentRoute = target;
 
@@ -1663,7 +1666,7 @@ const router = () => {
       break;
     case "friends":    renderFriends(content, rest[0] || null); break;
     case "ai-chat":    renderAIChat(content); break;
-    case "groups":     renderGroups(content); break;
+    case "groups":     rest[0] ? renderGroupRoom(content, rest[0]) : renderGroups(content); break;
     case "explore":    renderExplore(content, rest[0] === "tag" ? rest[1] : null); break;
     case "saved":      renderSaved(content); break;
     case "settings":   renderSettings(content); break;
@@ -3360,276 +3363,1146 @@ const toggleSave = async (postId, shouldSave = null) => {
 };
 
 // =========================================================================
-// 10. GROUPS
+// 10. GROUP CITY + GROUP ROOMS
 // =========================================================================
-const renderGroups = (root) => {
-  const wrap = el("div", { class: "grp-wrap" });
-  root.appendChild(wrap);
+// Reuse the same local Kenney building models and Three.js modules as game.js.
+// The model loader resolves building-*.glb against the same page-relative paths.
+let _orbitThreeModulePromise = null;
+let _orbitGLTFLoaderPromise = null;
+let _orbitSkeletonUtilsPromise = null;
+const loadOrbitThree = () => {
+  if (!_orbitThreeModulePromise) {
+    _orbitThreeModulePromise = import("three")
+      .catch((error) => { _orbitThreeModulePromise = null; throw error; });
+  }
+  return _orbitThreeModulePromise;
+};
+const loadOrbitGLTFLoader = () => {
+  if (!_orbitGLTFLoaderPromise) {
+    _orbitGLTFLoaderPromise = import("three/addons/loaders/GLTFLoader.js")
+      .catch((error) => { _orbitGLTFLoaderPromise = null; throw error; });
+  }
+  return _orbitGLTFLoaderPromise;
+};
+const loadOrbitSkeletonUtils = () => {
+  if (!_orbitSkeletonUtilsPromise) {
+    _orbitSkeletonUtilsPromise = import("three/addons/utils/SkeletonUtils.js")
+      .catch((error) => { _orbitSkeletonUtilsPromise = null; throw error; });
+  }
+  return _orbitSkeletonUtilsPromise;
+};
+const GROUP_CITY_BUILDING_MODELS = [
+  "building-a.glb", "building-b.glb", "building-c.glb", "building-d.glb", "building-e.glb",
+  "building-f.glb", "building-g.glb", "building-h.glb", "building-i.glb", "building-j.glb",
+  "building-k.glb", "building-l.glb", "building-m.glb", "building-n.glb", "building-o.glb",
+  "building-p.glb", "building-q.glb", "building-r.glb", "building-s.glb", "building-t.glb",
+];
 
-  // 1. Header ──────────────────────────────────────────────────────────────
-  const searchBox   = el("div", { class: "grp-search-box hidden" });
-  const searchInput = el("input", { type: "text", placeholder: "Search groups…" });
-  searchBox.appendChild(searchInput);
+const groupSeed = (value = "") => {
+  let n = 2166136261;
+  for (let i = 0; i < value.length; i++) n = Math.imul(n ^ value.charCodeAt(i), 16777619);
+  return n >>> 0;
+};
 
-  const searchIcon = el("span", { class: "grp-search" }, "🔍");
-  searchIcon.onclick = () => {
-    searchBox.classList.toggle("hidden");
-    if (!searchBox.classList.contains("hidden")) searchInput.focus();
-  };
-
-  wrap.appendChild(el("div", { class: "grp-header" },
-    el("span", { class: "grp-back", onclick: () => history.back() }, "←"),
-    el("h1", {}, "Groups"),
-    el("div", { style: "display:flex;align-items:center;gap:14px;" },
-      searchIcon,
-      el("button", { class: "grp-new-btn", onclick: () => openCompose("group") },
-        el("i", { class: "ri-add-line" }),
-      ),
-    ),
-  ));
-  wrap.appendChild(searchBox);
-
-  // 2. Filter tabs ──────────────────────────────────────────────────────────
-  const GRP_CATEGORIES = ["Tech", "Gaming", "Music", "Art", "Sports", "Lifestyle", "Business", "Education", "Food", "Travel", "Science"];
-  let allGroups     = [];
-  let activeFilter  = "all";
-  let activeCategory = null;
-
-  const listContainer = el("div", { class: "grp-list-container" });
-  const catChips      = el("div", { class: "grp-cat-chips hidden" });
-
-  const getFilteredGroups = (q = "") => {
-    let groups = allGroups;
-    const lq = q.trim().toLowerCase();
-    if (lq) groups = groups.filter((g) => (g.name || "").toLowerCase().includes(lq) || (g.description || "").toLowerCase().includes(lq));
-    switch (activeFilter) {
-      case "trending":  return groups.filter((g) => g.isTrending);
-      case "categories": return activeCategory ? groups.filter((g) => (g.category || "").toLowerCase() === activeCategory.toLowerCase()) : groups;
-      case "mygroups":  return groups.filter((g) => (g.members || []).includes(state.uid));
-      default:          return groups;
-    }
-  };
-
-  const buildGroupRow = (g) => {
-    const member = (g.members || []).includes(state.uid);
-    const canManage = (g.admins || []).includes(state.uid) || g.ownerUid === state.uid;
-    const icon = g.iconUrl
-      ? el("img", { class: "grp-icon", src: g.iconUrl })
-      : el("div", { class: "grp-icon grp-icon-letter" }, (g.name || "?")[0].toUpperCase());
-
-    const joinBtn = el("button", {
-      class: "grp-join-btn",
-      "data-group-id": g.id,
-      "data-joined": member ? "true" : "false",
-      style: member ? "opacity:0.55;" : "",
-    }, member ? "Joined" : "Join");
-
-    joinBtn.onclick = async () => {
-      const wasMember = (g.members || []).includes(state.uid);
-      const ref = doc(db, "groups", g.id);
-      const actionsDiv = joinBtn.parentElement;
-      if (wasMember) {
-        g.members = (g.members || []).filter((id) => id !== state.uid);
-        joinBtn.textContent = "Join";
-        joinBtn.dataset.joined = "false";
-        joinBtn.style.opacity = "";
-        actionsDiv.querySelector(".grp-open-btn")?.remove();
-        await updateDoc(ref, { members: arrayRemove(state.uid) }).catch(() => {});
-        toast("Left group");
-      } else {
-        g.members = [...(g.members || []), state.uid];
-        joinBtn.textContent = "Joined";
-        joinBtn.dataset.joined = "true";
-        joinBtn.style.opacity = "0.55";
-        if (!actionsDiv.querySelector(".grp-open-btn")) {
-          actionsDiv.appendChild(el("button", {
-            class: "grp-open-btn",
-            onclick: () => location.hash = `#chats/${g.id}`,
-          }, el("i", { class: "ri-chat-3-line" })));
-        }
-        await updateDoc(ref, { members: arrayUnion(state.uid) }).catch(() => {});
-        toast("Joined!");
+class OrbitGroupsCity {
+  constructor(stage, groups, onNearby) {
+    this.stage = stage;
+    this.groups = groups;
+    this.onNearby = onNearby;
+    this.disposed = false;
+    this.keys = new Set();
+    this.moveX = 0;
+    this.moveY = 0;
+    this.joystickPointer = null;
+    this.swipePointer = null;
+    this.lastSwipeX = 0;
+    this.lastSwipeY = 0;
+    this.yaw = 0;
+    this.pitch = 0.34;
+    this.speed = 0.36;
+    this.nearbyId = null;
+    this.lastFrame = 0;
+    this.init().catch((error) => {
+      if (this.disposed || !this.stage.isConnected) return;
+      console.error("Orbit groups city failed to start:", error);
+      const loading = this.stage.querySelector(".grp-city-loading");
+      if (loading) {
+        loading.innerHTML = "<strong>City view unavailable</strong><span>Check your connection or WebGL support, then reload Groups.</span>";
+        loading.classList.remove("hidden");
       }
-      countEl.textContent = `${g.members.length} member${g.members.length !== 1 ? "s" : ""}`;
-      if (activeFilter === "mygroups") renderGroupList();
-    };
-
-    const countEl = el("span", { class: "grp-members" }, `${(g.members || []).length} member${(g.members || []).length !== 1 ? "s" : ""}`);
-
-    const row = el("div", { class: "grp-row" },
-      icon,
-      el("div", { class: "grp-info" },
-        el("span", { class: "grp-name" }, g.name || "Unnamed group"),
-        countEl,
-        g.about ? el("span", { class: "grp-desc" }, g.about.slice(0, 80)) : null,
-        g.groupLink ? el("a", {
-          class: "grp-link",
-          href: g.groupLink,
-          target: "_blank",
-          rel: "noopener noreferrer",
-          onclick: (e) => e.stopPropagation(),
-        }, el("i", { class: "ri-link" }), " Group link") : null,
-      ),
-      el("div", { class: "grp-row-actions" },
-        joinBtn,
-        canManage ? el("button", {
-          class: "grp-open-btn",
-          title: "Manage group",
-          onclick: () => openGroupAdmin(g.id),
-        }, el("i", { class: "ri-admin-line" })) : null,
-        (g.members || []).includes(state.uid)
-          ? el("button", { class: "grp-open-btn", onclick: () => location.hash = `#chats/${g.id}` },
-              el("i", { class: "ri-chat-3-line" })) : null,
-      ),
-    );
-    return row;
-  };
-
-  const renderGroupList = () => {
-    const q = searchInput.value;
-    const groups = getFilteredGroups(q);
-    listContainer.innerHTML = "";
-    if (!groups.length) {
-      listContainer.appendChild(el("div", { class: "grp-empty-state" },
-        el("i", { class: "ri-group-2-line" }),
-        el("div", {}, activeFilter === "mygroups" ? "You haven't joined any groups yet." : "No groups here yet."),
-      ));
-      return;
-    }
-
-    // If "All" or non-category filter: Popular Right Now + New & Growing split
-    if (activeFilter === "all" || activeFilter === "trending") {
-      const sorted = [...groups].sort((a, b) => (b.members?.length || 0) - (a.members?.length || 0));
-      const popular = sorted.slice(0, Math.ceil(sorted.length / 2));
-      const growing = sorted.slice(Math.ceil(sorted.length / 2));
-
-      if (popular.length) {
-        listContainer.appendChild(el("div", { class: "grp-section-header" },
-          el("h3", {}, activeFilter === "trending" ? "Trending Groups 🔥" : "Popular Right Now"),
-          el("span", { class: "grp-see-all" }, "See all"),
-        ));
-        popular.forEach((g) => listContainer.appendChild(buildGroupRow(g)));
-      }
-      if (growing.length && activeFilter !== "trending") {
-        listContainer.appendChild(el("div", { class: "grp-section-header", style: "margin-top:8px;" },
-          el("h3", {}, "New & Growing"),
-          el("span", { class: "grp-see-all" }, "See all"),
-        ));
-        growing.forEach((g) => listContainer.appendChild(buildGroupRow(g)));
-      }
-    } else {
-      // My Groups / Categories: flat list
-      const header = activeFilter === "mygroups" ? "My Groups"
-        : activeCategory ? `#${activeCategory}` : "All Categories";
-      listContainer.appendChild(el("div", { class: "grp-section-header" },
-        el("h3", {}, header),
-      ));
-      groups.forEach((g) => listContainer.appendChild(buildGroupRow(g)));
-    }
-  };
-
-  // Tab row
-  const tabDefs = [
-    { label: "All",        filter: "all" },
-    { label: "Trending",   filter: "trending" },
-    { label: "Categories", filter: "categories" },
-    { label: "My Groups",  filter: "mygroups" },
-  ];
-  const tabEls = tabDefs.map(({ label, filter }) => {
-    const tab = el("button", { class: "grp-tab" + (filter === "all" ? " active" : ""), "data-filter": filter }, label);
-    tab.onclick = () => {
-      tabEls.forEach((t) => t.classList.remove("active"));
-      tab.classList.add("active");
-      activeFilter = filter;
-      activeCategory = null;
-      if (filter === "categories") {
-        catChips.classList.remove("hidden");
-      } else {
-        catChips.classList.add("hidden");
-      }
-      renderGroupList();
-    };
-    return tab;
-  });
-  const tabRow = el("div", { class: "grp-tabs" });
-  tabEls.forEach((t) => tabRow.appendChild(t));
-  wrap.appendChild(tabRow);
-
-  // Category chips (shown when "Categories" tab is active)
-  GRP_CATEGORIES.forEach((cat) => {
-    const chip = el("span", { class: "grp-cat-chip" }, cat);
-    chip.onclick = () => {
-      catChips.querySelectorAll(".grp-cat-chip").forEach((c) => c.classList.remove("active"));
-      chip.classList.add("active");
-      activeCategory = cat;
-      renderGroupList();
-    };
-    catChips.appendChild(chip);
-  });
-  wrap.appendChild(catChips);
-
-  // Search input wires to live-filter
-  let _sd = null;
-  searchInput.addEventListener("input", () => { clearTimeout(_sd); _sd = setTimeout(renderGroupList, 180); });
-
-  // 3. Hero banner ──────────────────────────────────────────────────────────
-  const heroAvatarGrid = el("div", { class: "grp-hero-avatars" });
-  const hero = el("div", { class: "grp-hero" },
-    el("div", { class: "grp-hero-text" },
-      el("h2", {}, "Find your people.\nJoin the conversation."),
-      el("p", {}, "Thousands of communities around everything you love."),
-    ),
-    heroAvatarGrid,
-  );
-  wrap.appendChild(hero);
-
-  // Pull 4 real user avatars for hero
-  getDocs(query(collection(db, "users"), limit(8))).then((snap) => {
-    snap.docs.slice(0, 4).forEach((d) => {
-      const u = { uid: d.id, ...d.data() };
-      heroAvatarGrid.appendChild(el("img", { src: avatarFor(u), alt: u.name || "user" }));
     });
-  }).catch(() => {});
-
-  // 4 & 5. Group list ───────────────────────────────────────────────────────
-  wrap.appendChild(listContainer);
-
-  // Skeleton while loading
-  for (let i = 0; i < 5; i++) {
-    listContainer.appendChild(el("div", { class: "grp-row grp-skel-row" },
-      el("div", { class: "grp-skel-icon" }),
-      el("div", { class: "grp-skel-info" },
-        el("div", { class: "grp-skel-line w60" }),
-        el("div", { class: "grp-skel-line w40" }),
-      ),
-      el("div", { class: "grp-skel-btn" }),
-    ));
   }
 
-  // Firestore: one-time fetch (groups don't need real-time for this page)
-  getDocs(query(collection(db, "groups"), orderBy("createdAt", "desc"), limit(80)))
-    .then((snap) => {
-      listContainer.innerHTML = "";
-      allGroups = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      // Compute isTrending: top-third by member count
-      const sorted = [...allGroups].sort((a, b) => (b.members?.length || 0) - (a.members?.length || 0));
-      const trendCutoff = sorted[Math.floor(sorted.length / 3)]?.members?.length || 1;
-      allGroups.forEach((g) => { g.isTrending = (g.members?.length || 0) >= trendCutoff; });
-      renderGroupList();
-    })
-    .catch(() => {
-      listContainer.innerHTML = "";
-      listContainer.appendChild(el("div", { class: "grp-empty-state" },
-        el("i", { class: "ri-wifi-off-line" }),
-        el("div", {}, "Could not load groups. Check your connection."),
-      ));
-    });
+  async init() {
+    const THREE = await loadOrbitThree();
+    if (this.disposed || !this.stage.isConnected) return;
+    this.THREE = THREE;
+    const count = Math.max(1, this.groups.length);
+    this.cols = Math.min(10, Math.max(3, Math.ceil(Math.sqrt(count * 1.25))));
+    this.rows = Math.ceil(count / this.cols);
+    this.spacingX = 38;
+    this.spacingZ = 42;
+    this.startX = -((this.cols - 1) * this.spacingX) / 2;
+    this.startZ = -((this.rows - 1) * this.spacingZ) / 2;
+    this.mapWidth = this.cols * this.spacingX + 76;
+    this.mapDepth = this.rows * this.spacingZ + 118;
 
-  // FAB — create new group
-  const fab = el("button", { class: "grp-fab", onclick: () => openCompose("group") },
-    el("i", { class: "ri-add-line" }),
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(0x87ceeb);
+    this.scene.fog = new THREE.Fog(0x87ceeb, 115, Math.max(260, this.mapDepth * 1.3));
+    this.camera = new THREE.PerspectiveCamera(62, 1, 0.1, 1200);
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.domElement.className = "grp-city-canvas";
+    this.renderer.domElement.setAttribute("aria-label", "Walkable 3D city of Orbit groups");
+    this.stage.insertBefore(this.renderer.domElement, this.stage.firstChild);
+
+    this.scene.add(new THREE.HemisphereLight(0xdaf3ff, 0x355333, 1.5));
+    const sun = new THREE.DirectionalLight(0xffeed4, 2.1);
+    sun.position.set(65, 100, 50);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(1024, 1024);
+    sun.shadow.camera.left = -150;
+    sun.shadow.camera.right = 150;
+    sun.shadow.camera.top = 150;
+    sun.shadow.camera.bottom = -150;
+    sun.shadow.camera.far = 400;
+    this.scene.add(sun);
+    const fill = new THREE.DirectionalLight(0x91c7ff, 0.55);
+    fill.position.set(-55, 35, -65);
+    this.scene.add(fill);
+
+    this.createLandscape();
+    this.buildings = this.groups.map((group, index) => this.createBuilding(group, index));
+    this.loadBuildingModels().catch((error) => console.warn("Orbit city building models unavailable; showing fallback buildings:", error));
+    this.createPlayer();
+    this.loadPlayerAvatar().catch((error) => console.warn("Could not load the Orbit player avatar:", error));
+    this.playerPos = new THREE.Vector3(0, 0, this.startZ + (this.rows - 1) * this.spacingZ + 27);
+    this.player.position.copy(this.playerPos);
+    this.camera.position.set(this.playerPos.x, 8, this.playerPos.z + 14);
+    this.camera.lookAt(this.playerPos.x, 2, this.playerPos.z);
+
+    this.bindControls();
+    this.resize();
+    this.resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => this.resize()) : null;
+    this.resizeObserver?.observe(this.stage);
+    this.resizeHandler = () => this.resize();
+    window.addEventListener("resize", this.resizeHandler);
+    this.stage.querySelector(".grp-city-loading")?.classList.add("hidden");
+    this.animate();
+  }
+
+  addMesh(geometry, material, x, y, z, parent = this.scene) {
+    const mesh = new this.THREE.Mesh(geometry, material);
+    mesh.position.set(x, y, z);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    parent.add(mesh);
+    return mesh;
+  }
+
+  createLandscape() {
+    const THREE = this.THREE;
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(this.mapWidth, this.mapDepth),
+      new THREE.MeshStandardMaterial({ color: 0x3a7e3a, roughness: 0.92 }),
+    );
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.set(0, -0.12, (this.startZ + this.rows * this.spacingZ / 2) / 2);
+    ground.receiveShadow = true;
+    this.scene.add(ground);
+
+    const roadMaterial = new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.9 });
+    const centerX = this.startX + (this.cols - 1) * this.spacingX / 2;
+    const centerZ = this.startZ + (this.rows - 1) * this.spacingZ / 2;
+    for (let i = 0; i <= this.cols; i++) {
+      const x = this.startX - this.spacingX / 2 + i * this.spacingX;
+      const road = new THREE.Mesh(new THREE.PlaneGeometry(7, this.mapDepth), roadMaterial);
+      road.rotation.x = -Math.PI / 2;
+      road.position.set(x, 0.015, centerZ);
+      road.receiveShadow = true;
+      this.scene.add(road);
+    }
+    for (let i = 0; i <= this.rows; i++) {
+      const z = this.startZ - this.spacingZ / 2 + i * this.spacingZ;
+      const road = new THREE.Mesh(new THREE.PlaneGeometry(this.mapWidth, 7), roadMaterial);
+      road.rotation.x = -Math.PI / 2;
+      road.position.set(centerX, 0.02, z);
+      road.receiveShadow = true;
+      this.scene.add(road);
+    }
+
+    for (let i = 0; i < 90; i++) {
+      const x = Math.sin(i * 12.9898) * (this.mapWidth * 0.47);
+      const z = Math.cos(i * 7.233) * (this.mapDepth * 0.45) + centerZ;
+      const patch = new THREE.Mesh(
+        new THREE.CircleGeometry(2.5 + (i % 5) * 0.7, 7),
+        new THREE.MeshStandardMaterial({ color: i % 2 ? 0x458a43 : 0x4a8e4a, roughness: 1 }),
+      );
+      patch.rotation.x = -Math.PI / 2;
+      patch.position.set(x, 0.025, z);
+      patch.receiveShadow = true;
+      this.scene.add(patch);
+    }
+  }
+
+  createBannerTexture(name) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 512;
+    canvas.height = 128;
+    const ctx = canvas.getContext("2d");
+    const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+    gradient.addColorStop(0, "#39205e");
+    gradient.addColorStop(1, "#c84a8c");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "rgba(255,255,255,.13)";
+    ctx.fillRect(0, 0, 12, canvas.height);
+    ctx.fillRect(canvas.width - 12, 0, 12, canvas.height);
+    ctx.fillStyle = "#ffffff";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    let fontSize = 52;
+    ctx.font = `800 ${fontSize}px system-ui, sans-serif`;
+    while (ctx.measureText(name).width > 465 && fontSize > 22) {
+      fontSize -= 2;
+      ctx.font = `800 ${fontSize}px system-ui, sans-serif`;
+    }
+    ctx.fillText(name, canvas.width / 2, canvas.height / 2, 456);
+    const texture = new this.THREE.CanvasTexture(canvas);
+    texture.colorSpace = this.THREE.SRGBColorSpace;
+    return texture;
+  }
+
+  async loadBuildingModels() {
+    const { GLTFLoader } = await loadOrbitGLTFLoader();
+    if (this.disposed || !this.stage.isConnected) return;
+    const loader = new GLTFLoader();
+    const templates = new Map();
+    const loadTemplate = (filename) => {
+      if (!templates.has(filename)) {
+        templates.set(filename, new Promise((resolve, reject) => {
+          // game.js uses this same relative filename lookup for its buildings.
+          loader.load(filename, (gltf) => resolve(gltf.scene), undefined, reject);
+        }));
+      }
+      return templates.get(filename);
+    };
+    let loaded = 0;
+    await Promise.all(this.buildings.map(async (building) => {
+      try {
+        const template = await loadTemplate(building.modelFile);
+        if (this.disposed || !this.stage.isConnected) return;
+        const model = template.clone(true);
+        model.traverse((node) => {
+          if (node.isMesh) { node.castShadow = true; node.receiveShadow = true; }
+        });
+        model.updateMatrixWorld(true);
+        const rawBounds = new this.THREE.Box3().setFromObject(model);
+        const rawSize = rawBounds.getSize(new this.THREE.Vector3());
+        if (!rawSize.y) return;
+        model.scale.multiplyScalar(building.height / rawSize.y);
+        model.updateMatrixWorld(true);
+        const bounds = new this.THREE.Box3().setFromObject(model);
+        model.position.x -= (bounds.min.x + bounds.max.x) / 2;
+        model.position.y -= bounds.min.y;
+        model.position.z -= (bounds.min.z + bounds.max.z) / 2;
+        building.modelRoot.add(model);
+        building.fallbackRoot.visible = false;
+        loaded++;
+      } catch (error) {
+        console.warn(`Could not load ${building.modelFile}; keeping its fallback building.`, error);
+      }
+    }));
+    if (!this.disposed && loaded) console.info(`Loaded ${loaded} Orbit group buildings from the game.js GLB set.`);
+  }
+
+  createBuilding(group, index) {
+    const THREE = this.THREE;
+    const seed = groupSeed(group.id || group.name || String(index));
+    const width = 15 + (seed % 6);
+    const depth = 15 + ((seed >>> 4) % 6);
+    const height = 11 + ((seed >>> 8) % 11);
+    const x = this.startX + (index % this.cols) * this.spacingX;
+    const z = this.startZ + Math.floor(index / this.cols) * this.spacingZ;
+    const palette = [0xb96f50, 0x8b7c67, 0x6d8790, 0xc19c64, 0x8a6f9d, 0x637966, 0xa56258, 0x8291a0];
+    const color = palette[seed % palette.length];
+    const building = new THREE.Group();
+    building.position.set(x, 0, z);
+    building.rotation.y = Math.floor((seed >>> 12) % 4) * Math.PI / 2;
+    this.scene.add(building);
+    const fallbackRoot = new THREE.Group();
+    const modelRoot = new THREE.Group();
+    const signRoot = new THREE.Group();
+    building.add(fallbackRoot, modelRoot, signRoot);
+
+    this.addMesh(new THREE.BoxGeometry(width + 1.2, 1, depth + 1.2), new THREE.MeshStandardMaterial({ color: 0x6c6a63, roughness: 0.95 }), 0, 0.5, 0, fallbackRoot);
+    this.addMesh(new THREE.BoxGeometry(width, height, depth), new THREE.MeshStandardMaterial({ color, roughness: 0.82 }), 0, height / 2 + 1, 0, fallbackRoot);
+    const roofColor = seed % 2 ? 0x554d49 : 0x4e5256;
+    this.addMesh(new THREE.BoxGeometry(width + 0.8, 0.65, depth + 0.8), new THREE.MeshStandardMaterial({ color: roofColor, roughness: 0.95 }), 0, height + 1.3, 0, fallbackRoot);
+
+    const roofStyle = (seed >>> 16) % 3;
+    if (roofStyle === 0) {
+      this.addMesh(new THREE.BoxGeometry(width * 0.36, 2.8, depth * 0.38), new THREE.MeshStandardMaterial({ color: roofColor, roughness: 0.85 }), -width * 0.17, height + 3, -depth * 0.1, fallbackRoot);
+    } else if (roofStyle === 1) {
+      this.addMesh(new THREE.CylinderGeometry(1.2, 1.2, 2.8, 8), new THREE.MeshStandardMaterial({ color: 0x9c9a8d, metalness: 0.28, roughness: 0.65 }), width * 0.2, height + 2.9, -depth * 0.1, fallbackRoot);
+    } else {
+      this.addMesh(new THREE.BoxGeometry(width * 0.22, 1.2, depth * 0.22), new THREE.MeshStandardMaterial({ color: 0x867e70, roughness: 0.8 }), 0, height + 2.2, 0, fallbackRoot);
+    }
+
+    const windowMaterial = new THREE.MeshStandardMaterial({ color: seed % 3 ? 0x88c4da : 0xf4d89b, emissive: seed % 3 ? 0x152d35 : 0x2d2110, roughness: 0.36, metalness: 0.08 });
+    const floors = Math.max(2, Math.floor(height / 3.2));
+    for (let floor = 0; floor < floors; floor++) {
+      const wy = 2 + floor * (height - 2) / floors;
+      for (let col = -1; col <= 1; col++) {
+        const wx = col * (width * 0.28);
+        this.addMesh(new THREE.BoxGeometry(1.8, 1.35, 0.18), windowMaterial, wx, wy, depth / 2 + 0.1, fallbackRoot);
+        this.addMesh(new THREE.BoxGeometry(0.18, 1.35, 1.8), windowMaterial, width / 2 + 0.1, wy, col * (depth * 0.26), fallbackRoot);
+      }
+    }
+
+    const signWidth = Math.min(width * 0.9, 15);
+    const signTexture = this.createBannerTexture(group.name || "Orbit group");
+    const banner = new THREE.Mesh(
+      new THREE.PlaneGeometry(signWidth, 2.9),
+      new THREE.MeshBasicMaterial({ map: signTexture, side: THREE.DoubleSide }),
+    );
+    banner.position.set(0, height * 0.69 + 1, depth / 2 + 0.55);
+    signRoot.add(banner);
+    const poleMaterial = new THREE.MeshStandardMaterial({ color: 0x453b36, metalness: 0.25, roughness: 0.65 });
+    this.addMesh(new THREE.BoxGeometry(signWidth + 0.6, 0.18, 0.18), poleMaterial, 0, height * 0.69 + 2.55, depth / 2 + 0.55, signRoot);
+
+    return { group, x, z, width, depth, height, mesh: building, modelFile: GROUP_CITY_BUILDING_MODELS[index % GROUP_CITY_BUILDING_MODELS.length], fallbackRoot, modelRoot };
+  }
+
+  createPlayer() {
+    const THREE = this.THREE;
+    this.player = new THREE.Group();
+    // Keep a small ground pointer visible while the user's GLB avatar loads.
+    const marker = new THREE.Mesh(
+      new THREE.CircleGeometry(1.1, 22),
+      new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.32, side: THREE.DoubleSide }),
+    );
+    marker.rotation.x = -Math.PI / 2;
+    marker.position.y = 0.035;
+    this.player.add(marker);
+    const pointer = new THREE.Mesh(
+      new THREE.ConeGeometry(0.48, 1.45, 5),
+      new THREE.MeshStandardMaterial({ color: 0xffd166, roughness: 0.42 }),
+    );
+    pointer.rotation.x = -Math.PI / 2;
+    pointer.position.set(0, 0.12, -1.15);
+    this.player.add(pointer);
+    this.scene.add(this.player);
+  }
+
+  loadModelFile(loader, url) {
+    return new Promise((resolve, reject) => loader.load(url, resolve, undefined, reject));
+  }
+
+  async loadPlayerAvatar() {
+    const { GLTFLoader } = await loadOrbitGLTFLoader();
+    if (this.disposed || !this.stage.isConnected) return;
+    const loader = new GLTFLoader();
+    const customModelURL = state.me?.avatarModelUrl || null;
+    let gltf;
+    try {
+      gltf = await this.loadModelFile(loader, customModelURL || "Soldier.glb");
+    } catch (error) {
+      if (!customModelURL) throw error;
+      console.warn("Orbit profile avatar failed; falling back to the game character.", error);
+      gltf = await this.loadModelFile(loader, "Soldier.glb");
+    }
+    if (this.disposed || !this.stage.isConnected) return;
+
+    const model = gltf.scene;
+    model.rotation.y = Math.PI;
+    model.traverse((node) => {
+      if (node.isMesh) { node.castShadow = true; node.receiveShadow = true; node.frustumCulled = false; }
+    });
+    model.updateMatrixWorld(true);
+    const bounds = new this.THREE.Box3().setFromObject(model);
+    const originalSize = bounds.getSize(new this.THREE.Vector3());
+    if (originalSize.y > 0) {
+      // The default Soldier.glb uses the same scale as game.js; personal Orbit
+      // avatar models are sized to fit the same walking character footprint.
+      model.scale.setScalar(customModelURL ? 3.35 / originalSize.y : 1.163);
+    }
+    model.updateMatrixWorld(true);
+    const scaledBounds = new this.THREE.Box3().setFromObject(model);
+    model.position.y -= scaledBounds.min.y;
+    this.playerAvatarHeight = scaledBounds.getSize(new this.THREE.Vector3()).y;
+    this.player.add(model);
+    this.playerModel = model;
+
+    if (gltf.animations?.length) {
+      this.playerMixer = new this.THREE.AnimationMixer(model);
+      this.playerAnimationClips = gltf.animations;
+      this.setPlayerAnimation(false);
+    }
+    this.addPlayerNameTag();
+  }
+
+  addPlayerNameTag() {
+    const canvas = document.createElement("canvas");
+    canvas.width = 512;
+    canvas.height = 112;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "rgba(17, 21, 34, .84)";
+    ctx.beginPath();
+    ctx.roundRect(10, 12, 492, 88, 38);
+    ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "700 44px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const username = state.me?.username ? `@${String(state.me.username).replace(/^@/, "")}` : (state.me?.name || "You");
+    ctx.fillText(username, 256, 57, 460);
+    const texture = new this.THREE.CanvasTexture(canvas);
+    texture.colorSpace = this.THREE.SRGBColorSpace;
+    const tag = new this.THREE.Sprite(new this.THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }));
+    tag.scale.set(5.4, 1.18, 1);
+    tag.position.set(0, Math.max(3.8, (this.playerAvatarHeight || 3.2) + 0.65), 0);
+    this.player.add(tag);
+    this.playerNameTag = tag;
+  }
+
+  setPlayerAnimation(isMoving) {
+    if (!this.playerMixer || !this.playerAnimationClips?.length) return;
+    const pattern = isMoving ? /run|walk|move/i : /idle|stand|breath/i;
+    const clip = this.playerAnimationClips.find((candidate) => pattern.test(candidate.name))
+      || this.playerAnimationClips.find((candidate) => /idle|stand|breath|run|walk/i.test(candidate.name))
+      || this.playerAnimationClips[0];
+    if (!clip || clip.name === this.playerCurrentAnimation) return;
+    const next = this.playerMixer.clipAction(clip);
+    this.playerActions ||= new Map();
+    this.playerActions.set(clip.name, next);
+    this.playerActions.get(this.playerCurrentAnimation)?.fadeOut(0.14);
+    next.reset().fadeIn(0.14).play();
+    this.playerCurrentAnimation = clip.name;
+  }
+
+  bindControls() {
+    const joystick = this.stage.querySelector(".grp-city-joystick");
+    const thumb = this.stage.querySelector(".grp-city-joystick-thumb");
+    const swipe = this.stage.querySelector(".grp-city-swipe-zone");
+    if (joystick && thumb) {
+      const move = (event) => {
+        if (event.pointerId !== this.joystickPointer) return;
+        event.preventDefault();
+        const rect = joystick.getBoundingClientRect();
+        let dx = event.clientX - (rect.left + rect.width / 2);
+        let dy = event.clientY - (rect.top + rect.height / 2);
+        const max = Math.min(rect.width, rect.height) * 0.34;
+        const dist = Math.hypot(dx, dy);
+        if (dist > max) { dx *= max / dist; dy *= max / dist; }
+        thumb.style.transform = `translate(${dx}px,${dy}px)`;
+        this.moveX = dx / max;
+        this.moveY = -dy / max;
+      };
+      joystick.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (this.joystickPointer !== null) return;
+        this.joystickPointer = event.pointerId;
+        joystick.setPointerCapture?.(event.pointerId);
+        move(event);
+      });
+      joystick.addEventListener("pointermove", move);
+      const release = (event) => {
+        if (event.pointerId !== this.joystickPointer) return;
+        this.joystickPointer = null;
+        this.moveX = this.moveY = 0;
+        thumb.style.transform = "translate(0px,0px)";
+      };
+      joystick.addEventListener("pointerup", release);
+      joystick.addEventListener("pointercancel", release);
+      joystick.addEventListener("lostpointercapture", release);
+    }
+    if (swipe) {
+      swipe.addEventListener("pointerdown", (event) => {
+        if (event.target.closest("button, a")) return;
+        this.swipePointer = event.pointerId;
+        this.lastSwipeX = event.clientX;
+        this.lastSwipeY = event.clientY;
+        swipe.setPointerCapture?.(event.pointerId);
+      });
+      swipe.addEventListener("pointermove", (event) => {
+        if (event.pointerId !== this.swipePointer) return;
+        const dx = event.clientX - this.lastSwipeX;
+        const dy = event.clientY - this.lastSwipeY;
+        this.yaw -= dx * 0.005;
+        this.pitch = Math.max(0.16, Math.min(0.72, this.pitch + dy * 0.003));
+        this.lastSwipeX = event.clientX;
+        this.lastSwipeY = event.clientY;
+      });
+      const stopSwipe = (event) => { if (event.pointerId === this.swipePointer) this.swipePointer = null; };
+      swipe.addEventListener("pointerup", stopSwipe);
+      swipe.addEventListener("pointercancel", stopSwipe);
+      swipe.addEventListener("lostpointercapture", stopSwipe);
+    }
+    this.keyDown = (event) => {
+      if (!this.stage.isConnected || event.target.closest?.("input, textarea, button, a")) return;
+      const key = event.key.toLowerCase();
+      if (["w", "a", "s", "d", "arrowup", "arrowleft", "arrowdown", "arrowright"].includes(key)) {
+        this.keys.add(key);
+        event.preventDefault();
+      }
+    };
+    this.keyUp = (event) => this.keys.delete(event.key.toLowerCase());
+    window.addEventListener("keydown", this.keyDown);
+    window.addEventListener("keyup", this.keyUp);
+  }
+
+  resize() {
+    if (!this.renderer || this.disposed) return;
+    const width = Math.max(1, this.stage.clientWidth);
+    const height = Math.max(1, this.stage.clientHeight);
+    this.camera.aspect = width / height;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(width, height, false);
+  }
+
+  isFree(x, z) {
+    return this.buildings.every((building) =>
+      Math.abs(x - building.x) > building.width / 2 + 1.3 || Math.abs(z - building.z) > building.depth / 2 + 1.3,
+    );
+  }
+
+  animate = (now = performance.now()) => {
+    if (this.disposed || !this.stage.isConnected) { this.destroy(); return; }
+    this.frame = requestAnimationFrame(this.animate);
+    const dt = Math.min(40, this.lastFrame ? now - this.lastFrame : 16.7) / 16.7;
+    this.lastFrame = now;
+    let mx = this.moveX;
+    let my = this.moveY;
+    if (this.keys.has("a") || this.keys.has("arrowleft")) mx -= 1;
+    if (this.keys.has("d") || this.keys.has("arrowright")) mx += 1;
+    if (this.keys.has("w") || this.keys.has("arrowup")) my += 1;
+    if (this.keys.has("s") || this.keys.has("arrowdown")) my -= 1;
+    const magnitude = Math.hypot(mx, my);
+    if (magnitude > 1) { mx /= magnitude; my /= magnitude; }
+    const forwardX = -Math.sin(this.yaw), forwardZ = -Math.cos(this.yaw);
+    const rightX = Math.cos(this.yaw), rightZ = -Math.sin(this.yaw);
+    const dx = (forwardX * my + rightX * mx) * this.speed * dt;
+    const dz = (forwardZ * my + rightZ * mx) * this.speed * dt;
+    const limitX = this.mapWidth / 2 - 4;
+    const centerZ = this.startZ + (this.rows - 1) * this.spacingZ / 2;
+    const limitZ = this.mapDepth / 2 - 4;
+    const nx = Math.max(-limitX, Math.min(limitX, this.playerPos.x + dx));
+    const nz = Math.max(centerZ - limitZ, Math.min(centerZ + limitZ, this.playerPos.z + dz));
+    if (this.isFree(nx, this.playerPos.z)) this.playerPos.x = nx;
+    if (this.isFree(this.playerPos.x, nz)) this.playerPos.z = nz;
+    this.player.position.copy(this.playerPos);
+    this.player.rotation.y = this.yaw;
+    this.setPlayerAnimation(magnitude > 0.05);
+    this.playerMixer?.update(dt * 0.0167);
+
+    const horizontal = 13 * Math.cos(this.pitch);
+    const cameraTarget = new this.THREE.Vector3(
+      this.playerPos.x + Math.sin(this.yaw) * horizontal,
+      this.playerPos.y + 2.2 + 13 * Math.sin(this.pitch),
+      this.playerPos.z + Math.cos(this.yaw) * horizontal,
+    );
+    this.camera.position.lerp(cameraTarget, 0.11);
+    this.camera.lookAt(this.playerPos.x, this.playerPos.y + 1.4, this.playerPos.z);
+
+    let nearest = null;
+    let bestDistance = 18;
+    for (const building of this.buildings) {
+      const distance = Math.hypot(this.playerPos.x - building.x, this.playerPos.z - building.z);
+      if (distance < bestDistance) { nearest = building.group; bestDistance = distance; }
+    }
+    const nextId = nearest?.id || null;
+    if (nextId !== this.nearbyId) {
+      this.nearbyId = nextId;
+      this.onNearby(nearest || null);
+    }
+    this.renderer.render(this.scene, this.camera);
+  };
+
+  destroy() {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.frame) cancelAnimationFrame(this.frame);
+    if (this.keyDown) window.removeEventListener("keydown", this.keyDown);
+    if (this.keyUp) window.removeEventListener("keyup", this.keyUp);
+    if (this.resizeHandler) window.removeEventListener("resize", this.resizeHandler);
+    this.resizeObserver?.disconnect();
+    if (this.scene) this.scene.traverse((node) => {
+      if (node.geometry) node.geometry.dispose();
+      if (node.material) {
+        const materials = Array.isArray(node.material) ? node.material : [node.material];
+        materials.forEach((material) => {
+          material.map?.dispose();
+          material.dispose();
+        });
+      }
+    });
+    this.renderer?.dispose();
+    this.renderer?.domElement.remove();
+  }
+}
+
+const groupMemberCount = (group) => (group.members || []).length;
+const setGroupMembership = async (group, joined) => {
+  if (!state.uid) { toast("Sign in to join this group"); return false; }
+  const ref = doc(db, "groups", group.id);
+  try {
+    if (joined) {
+      await updateDoc(ref, { members: arrayRemove(state.uid) });
+      group.members = (group.members || []).filter((uid) => uid !== state.uid);
+    } else {
+      await updateDoc(ref, { members: arrayUnion(state.uid) });
+      group.members = [...new Set([...(group.members || []), state.uid])];
+    }
+    return true;
+  } catch (error) {
+    toast(error?.message || "Could not update group membership");
+    return false;
+  }
+};
+
+class OrbitGroupRoomScene {
+  constructor(stage, members) {
+    this.stage = stage;
+    this.members = members;
+    this.disposed = false;
+    this.frame = 0;
+    this.lastFrame = 0;
+    this.yaw = 0;
+    this.pitch = 0.32;
+    this.drag = null;
+    this.actors = [];
+    this.modelTemplates = new Map();
+    this.waveIndex = 0;
+    this.nextWaveAt = performance.now() + 2200;
+    this.init().catch((error) => {
+      if (this.disposed || !this.stage.isConnected) return;
+      console.error("Orbit group room failed to start:", error);
+      const loading = this.stage.querySelector(".grp-room-loading");
+      if (loading) loading.textContent = "The room could not be opened. Check WebGL support and your avatar model paths.";
+    });
+  }
+
+  async init() {
+    const [THREE, { GLTFLoader }, skeletonUtils] = await Promise.all([
+      loadOrbitThree(),
+      loadOrbitGLTFLoader(),
+      loadOrbitSkeletonUtils(),
+    ]);
+    if (this.disposed || !this.stage.isConnected) return;
+    this.THREE = THREE;
+    this.SkeletonUtils = skeletonUtils;
+    this.loader = new GLTFLoader();
+    const count = this.members.length;
+    this.rings = Math.max(1, Math.ceil(count / 14));
+    this.roomRadius = Math.max(25, 18 + (this.rings - 1) * 5);
+    this.roomSize = this.roomRadius * 2;
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(0x171923);
+    this.scene.fog = new THREE.Fog(0x171923, this.roomSize * 1.1, this.roomSize * 2.7);
+    this.camera = new THREE.PerspectiveCamera(48, 1, 0.1, 1200);
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.domElement.className = "grp-room-canvas";
+    this.renderer.domElement.setAttribute("aria-label", "Three-dimensional group lounge with member avatars");
+    this.stage.insertBefore(this.renderer.domElement, this.stage.firstChild);
+    this.createInterior();
+    this.resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => this.resize()) : null;
+    this.resizeObserver?.observe(this.stage);
+    this.resizeHandler = () => this.resize();
+    window.addEventListener("resize", this.resizeHandler);
+    this.bindLookControls();
+    this.resize();
+    this.updateCamera();
+    this.loading = this.stage.querySelector(".grp-room-loading");
+    if (!count && this.loading) this.loading.textContent = "This group has no members yet.";
+    this.frame = requestAnimationFrame(this.animate);
+    await Promise.all(this.members.map((member, index) => this.loadMemberAvatar(member, index).catch((error) => {
+      console.warn(`Could not load the GLB avatar for ${member.username || member.uid || "a group member"}:`, error);
+    })));
+    if (this.loading) {
+      if (count) this.loading.classList.add("hidden");
+      else setTimeout(() => this.loading?.classList.add("hidden"), 900);
+    }
+  }
+
+  addMesh(geometry, material, x, y, z, parent = this.scene) {
+    const mesh = new this.THREE.Mesh(geometry, material);
+    mesh.position.set(x, y, z);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    parent.add(mesh);
+    return mesh;
+  }
+
+  createInterior() {
+    const THREE = this.THREE;
+    const half = this.roomSize / 2;
+    const wallHeight = 15;
+    const floor = new THREE.MeshStandardMaterial({ color: 0x695f59, roughness: 0.86 });
+    const wall = new THREE.MeshStandardMaterial({ color: 0x2d3441, roughness: 0.9 });
+    const accent = new THREE.MeshStandardMaterial({ color: 0x65517b, roughness: 0.74 });
+    const glass = new THREE.MeshStandardMaterial({ color: 0x83cbe3, emissive: 0x1e4151, emissiveIntensity: 0.4, roughness: 0.26, metalness: 0.12 });
+    const trim = new THREE.MeshStandardMaterial({ color: 0xd6b982, roughness: 0.66 });
+    const dark = new THREE.MeshStandardMaterial({ color: 0x302a30, roughness: 0.74 });
+    this.scene.add(new THREE.HemisphereLight(0xf2e8ff, 0x3a3028, 1.7));
+    const warm = new THREE.PointLight(0xffd5a2, 110, this.roomSize * 1.1, 2);
+    warm.position.set(0, wallHeight - 1, 0);
+    this.scene.add(warm);
+    const fill = new THREE.DirectionalLight(0xb8d7ff, 1.1);
+    fill.position.set(-half * 0.7, wallHeight * 1.8, half * 0.65);
+    fill.castShadow = true;
+    fill.shadow.mapSize.set(1024, 1024);
+    fill.shadow.camera.left = -half;
+    fill.shadow.camera.right = half;
+    fill.shadow.camera.top = half;
+    fill.shadow.camera.bottom = -half;
+    this.scene.add(fill);
+
+    this.addMesh(new THREE.BoxGeometry(this.roomSize, 1, this.roomSize), floor, 0, -0.5, 0);
+    const rugs = new THREE.MeshStandardMaterial({ color: 0x6a446b, roughness: 0.95 });
+    this.addMesh(new THREE.BoxGeometry(Math.min(17, this.roomSize * 0.35), 0.12, Math.min(14, this.roomSize * 0.29)), rugs, 0, 0.08, 0);
+    this.addMesh(new THREE.BoxGeometry(this.roomSize, wallHeight, 1), wall, 0, wallHeight / 2, -half, this.scene);
+    this.addMesh(new THREE.BoxGeometry(1, wallHeight, this.roomSize), wall, -half, wallHeight / 2, 0, this.scene);
+    this.addMesh(new THREE.BoxGeometry(1, wallHeight, this.roomSize), wall, half, wallHeight / 2, 0, this.scene);
+    // Entry-side walls leave a broad doorway into the lounge.
+    const doorHalf = 4.5;
+    this.addMesh(new THREE.BoxGeometry(half - doorHalf, wallHeight, 1), wall, -(half + doorHalf) / 2, wallHeight / 2, half, this.scene);
+    this.addMesh(new THREE.BoxGeometry(half - doorHalf, wallHeight, 1), wall, (half + doorHalf) / 2, wallHeight / 2, half, this.scene);
+    this.addMesh(new THREE.BoxGeometry(doorHalf * 2, 3.5, 1), accent, 0, wallHeight - 1.75, half, this.scene);
+
+    const windowWidth = Math.min(15, this.roomSize * 0.26);
+    for (const x of [-half * 0.53, 0, half * 0.53]) {
+      if (Math.abs(x) < windowWidth * 0.7 && Math.abs(x) < 1) continue;
+      this.addMesh(new THREE.BoxGeometry(windowWidth, 6, 0.3), glass, x, 8.1, -half + 0.56);
+      this.addMesh(new THREE.BoxGeometry(windowWidth + 0.55, 0.35, 0.42), trim, x, 11.25, -half + 0.5);
+      this.addMesh(new THREE.BoxGeometry(0.24, 6.3, 0.42), trim, x, 8.1, -half + 0.5);
+      this.addMesh(new THREE.BoxGeometry(0.24, 6.3, 0.42), trim, x + windowWidth, 8.1, -half + 0.5);
+    }
+    // Warm wall sconces and a few exposed ceiling beams make the space read as a building interior.
+    for (const side of [-1, 1]) {
+      for (const z of [-half * 0.55, 0, half * 0.48]) {
+        const lamp = new THREE.PointLight(0xffbd79, 19, 25, 2);
+        lamp.position.set(side * (half - 1.5), 7.5, z);
+        this.scene.add(lamp);
+        this.addMesh(new THREE.BoxGeometry(0.34, 1.8, 0.34), trim, side * (half - 1.1), 7.5, z);
+      }
+    }
+    for (const z of [-half * 0.72, -half * 0.2, half * 0.34]) {
+      this.addMesh(new THREE.BoxGeometry(this.roomSize - 1, 0.42, 0.42), dark, 0, wallHeight + 1.3, z);
+    }
+
+    // Low lounge furniture stays around the central rug, leaving the member circle open.
+    const sofaMat = new THREE.MeshStandardMaterial({ color: 0x536274, roughness: 0.92 });
+    const sofaAccent = new THREE.MeshStandardMaterial({ color: 0x82709a, roughness: 0.86 });
+    for (const side of [-1, 1]) {
+      const sofa = new THREE.Group();
+      sofa.position.set(side * 7, 0, -1);
+      sofa.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
+      this.addMesh(new THREE.BoxGeometry(3.6, 1.3, 8), sofaMat, 0, 0.65, 0, sofa);
+      this.addMesh(new THREE.BoxGeometry(3.6, 1.1, 0.7), sofaAccent, 0, 1.35, -3.6, sofa);
+      for (const z of [-2.25, 0, 2.25]) this.addMesh(new THREE.BoxGeometry(3.25, 0.25, 0.18), sofaAccent, 0, 1.25, z, sofa);
+      this.scene.add(sofa);
+    }
+    const tableTop = new THREE.MeshStandardMaterial({ color: 0x8b674b, roughness: 0.78 });
+    this.addMesh(new THREE.CylinderGeometry(2.8, 2.8, 0.42, 12), tableTop, 0, 1.45, 0);
+    this.addMesh(new THREE.CylinderGeometry(0.38, 0.58, 1.3, 8), dark, 0, 0.65, 0);
+    // Potted plants soften each corner without taking member standing space.
+    for (const [x, z] of [[-half + 4, -half + 4], [half - 4, -half + 4], [-half + 4, half - 5], [half - 4, half - 5]]) {
+      this.addMesh(new THREE.CylinderGeometry(0.9, 1.15, 1.35, 8), trim, x, 0.68, z);
+      this.addMesh(new THREE.ConeGeometry(1.7, 4.2, 7), new THREE.MeshStandardMaterial({ color: 0x4d885d, roughness: 1 }), x, 3.25, z);
+    }
+    const grid = new THREE.GridHelper(this.roomSize, Math.max(8, Math.round(this.roomSize / 5)), 0x9c7bad, 0x544e5a);
+    grid.position.y = 0.02;
+    grid.material.transparent = true;
+    grid.material.opacity = 0.18;
+    this.scene.add(grid);
+  }
+
+  getTemplate(url) {
+    if (!this.modelTemplates.has(url)) {
+      this.modelTemplates.set(url, new Promise((resolve, reject) => {
+        this.loader.load(url, resolve, undefined, reject);
+      }).catch((error) => {
+        this.modelTemplates.delete(url);
+        throw error;
+      }));
+    }
+    return this.modelTemplates.get(url);
+  }
+
+  createNameplate(member) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 512;
+    canvas.height = 112;
+    const context = canvas.getContext("2d");
+    context.fillStyle = "rgba(18, 21, 30, .88)";
+    context.beginPath();
+    context.roundRect(8, 8, 496, 96, 34);
+    context.fill();
+    context.fillStyle = "#fff";
+    context.font = "700 38px system-ui, sans-serif";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    const username = `@${String(member.username || member.handle || "member").replace(/^@/, "")}`;
+    context.fillText(username, 256, 57, 470);
+    const texture = new this.THREE.CanvasTexture(canvas);
+    texture.colorSpace = this.THREE.SRGBColorSpace;
+    const sprite = new this.THREE.Sprite(new this.THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }));
+    sprite.scale.set(5.1, 1.12, 1);
+    return sprite;
+  }
+
+  async loadMemberAvatar(member, index) {
+    if (this.disposed) return;
+    const customUrl = member.avatarModelUrl || null;
+    let gltf;
+    try {
+      gltf = await this.getTemplate(customUrl || "Soldier.glb");
+    } catch (error) {
+      if (!customUrl) throw error;
+      gltf = await this.getTemplate("Soldier.glb");
+    }
+    if (this.disposed || !this.stage.isConnected) return;
+    const model = this.SkeletonUtils.clone(gltf.scene);
+    model.rotation.y = Math.PI;
+    model.traverse((node) => {
+      if (node.isMesh) { node.castShadow = true; node.receiveShadow = true; node.frustumCulled = false; }
+    });
+    model.updateMatrixWorld(true);
+    const rawBounds = new this.THREE.Box3().setFromObject(model);
+    const rawSize = rawBounds.getSize(new this.THREE.Vector3());
+    if (rawSize.y > 0) model.scale.setScalar(customUrl ? 3.5 / rawSize.y : 1.163);
+    model.updateMatrixWorld(true);
+    const bounds = new this.THREE.Box3().setFromObject(model);
+    model.position.x -= (bounds.min.x + bounds.max.x) / 2;
+    model.position.y -= bounds.min.y;
+    model.position.z -= (bounds.min.z + bounds.max.z) / 2;
+    const height = bounds.getSize(new this.THREE.Vector3()).y;
+
+    const actor = new this.THREE.Group();
+    actor.add(model);
+    const ringIndex = Math.floor(index / 14);
+    const slot = index % 14;
+    const ringCount = Math.min(14, this.members.length - ringIndex * 14);
+    const angle = Math.PI * 2 * slot / Math.max(1, ringCount);
+    const radius = Math.min(this.roomRadius - 8, 10 + ringIndex * 5);
+    actor.position.set(Math.sin(angle) * radius, 0, Math.cos(angle) * radius);
+    actor.rotation.y = angle;
+    const nameplate = this.createNameplate(member);
+    nameplate.position.y = Math.max(4.6, height + 0.65);
+    actor.add(nameplate);
+    this.scene.add(actor);
+
+    const clips = gltf.animations || [];
+    const mixer = clips.length ? new this.THREE.AnimationMixer(model) : null;
+    const idleClip = clips.find((clip) => /idle|stand|relax|sit|breath/i.test(clip.name)) || clips[0] || null;
+    const waveClip = clips.find((clip) => /wave|hello|greet|welcome/i.test(clip.name)) || null;
+    const idleAction = mixer && idleClip ? mixer.clipAction(idleClip) : null;
+    const waveAction = mixer && waveClip ? mixer.clipAction(waveClip) : null;
+    if (idleAction) idleAction.play();
+    let waveBone = null;
+    let bodyBone = null;
+    model.traverse((node) => {
+      if (!waveBone && node.isBone && /right.*(upper.?arm|arm|shoulder)|upper.?arm.?r|arm.?r|shoulder.?r/i.test(node.name)) waveBone = node;
+      if (!bodyBone && node.isBone && /(hips|spine|chest|torso)/i.test(node.name)) bodyBone = node;
+    });
+    this.actors.push({ actor, mixer, idleAction, waveAction, waveBone, waveBase: waveBone?.rotation.clone(), bodyBone, bodyBase: bodyBone?.rotation.clone(), idlePhase: index * 0.9, waveStart: 0, waveEnd: 0, waved: false });
+  }
+
+  beginWave(actor, now) {
+    if (!actor) return;
+    actor.waveStart = now;
+    actor.waveEnd = now + 2400;
+    actor.waved = true;
+    if (actor.waveAction) {
+      actor.idleAction?.fadeOut(0.2);
+      actor.waveAction.reset();
+      actor.waveAction.setLoop(this.THREE.LoopOnce, 1);
+      actor.waveAction.clampWhenFinished = true;
+      actor.waveAction.fadeIn(0.2).play();
+    }
+  }
+
+  updateWave(actor, now) {
+    if (!actor.waved) return;
+    if (now < actor.waveEnd) {
+      if (!actor.waveAction && actor.waveBone && actor.waveBase) {
+        const phase = (now - actor.waveStart) / 1000;
+        actor.waveBone.rotation.z = actor.waveBase.z + 1.8 + Math.sin(phase * 13) * 0.24;
+        actor.waveBone.rotation.x = actor.waveBase.x + Math.sin(phase * 6) * 0.13;
+      }
+      return;
+    }
+    if (actor.waveBone && actor.waveBase) actor.waveBone.rotation.copy(actor.waveBase);
+    actor.waveAction?.fadeOut(0.2);
+    if (actor.idleAction) actor.idleAction.reset().fadeIn(0.2).play();
+    actor.waved = false;
+  }
+
+  bindLookControls() {
+    const canvas = this.renderer.domElement;
+    this.onPointerDown = (event) => {
+      this.drag = { id: event.pointerId, x: event.clientX, y: event.clientY };
+      canvas.setPointerCapture?.(event.pointerId);
+    };
+    this.onPointerMove = (event) => {
+      if (!this.drag || this.drag.id !== event.pointerId) return;
+      const dx = event.clientX - this.drag.x;
+      const dy = event.clientY - this.drag.y;
+      this.drag.x = event.clientX;
+      this.drag.y = event.clientY;
+      this.yaw -= dx * 0.005;
+      this.pitch = Math.max(0.12, Math.min(0.68, this.pitch + dy * 0.003));
+      this.updateCamera();
+    };
+    this.onPointerUp = () => { this.drag = null; };
+    canvas.addEventListener("pointerdown", this.onPointerDown);
+    canvas.addEventListener("pointermove", this.onPointerMove);
+    canvas.addEventListener("pointerup", this.onPointerUp);
+    canvas.addEventListener("pointercancel", this.onPointerUp);
+  }
+
+  updateCamera() {
+    if (!this.camera || !this.roomSize) return;
+    const distance = this.roomRadius * 0.72;
+    const horizontal = distance * Math.cos(this.pitch);
+    this.camera.position.set(Math.sin(this.yaw) * horizontal, distance * Math.sin(this.pitch) + 6, Math.cos(this.yaw) * horizontal);
+    this.camera.lookAt(0, 4, 0);
+  }
+
+  resize() {
+    if (!this.renderer || this.disposed) return;
+    const width = Math.max(1, this.stage.clientWidth);
+    const height = Math.max(1, this.stage.clientHeight);
+    this.camera.aspect = width / height;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(width, height, false);
+  }
+
+  animate = (now = performance.now()) => {
+    if (this.disposed || !this.stage.isConnected) { this.destroy(); return; }
+    this.frame = requestAnimationFrame(this.animate);
+    const dt = Math.min(50, this.lastFrame ? now - this.lastFrame : 16.7) / 1000;
+    this.lastFrame = now;
+    if (this.actors.length && now >= this.nextWaveAt) {
+      this.beginWave(this.actors[this.waveIndex % this.actors.length], now);
+      this.waveIndex++;
+      this.nextWaveAt = now + 4200 + (this.waveIndex % 3) * 900;
+    }
+    this.actors.forEach((actor) => {
+      actor.mixer?.update(dt);
+      this.updateWave(actor, now);
+      if (!actor.mixer && actor.bodyBone && actor.bodyBase && !actor.waved) {
+        actor.bodyBone.rotation.x = actor.bodyBase.x + Math.sin(now * 0.0015 + actor.idlePhase) * 0.035;
+        actor.actor.position.y = Math.sin(now * 0.0018 + actor.idlePhase) * 0.055;
+      }
+    });
+    this.renderer.render(this.scene, this.camera);
+  };
+
+  destroy() {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.frame) cancelAnimationFrame(this.frame);
+    this.resizeObserver?.disconnect();
+    if (this.resizeHandler) window.removeEventListener("resize", this.resizeHandler);
+    const canvas = this.renderer?.domElement;
+    if (canvas) {
+      canvas.removeEventListener("pointerdown", this.onPointerDown);
+      canvas.removeEventListener("pointermove", this.onPointerMove);
+      canvas.removeEventListener("pointerup", this.onPointerUp);
+      canvas.removeEventListener("pointercancel", this.onPointerUp);
+    }
+    this.scene?.traverse((node) => {
+      if (node.geometry) node.geometry.dispose();
+      if (node.material) {
+        const materials = Array.isArray(node.material) ? node.material : [node.material];
+        materials.forEach((material) => { material.map?.dispose(); material.dispose(); });
+      }
+    });
+    this.renderer?.dispose();
+    canvas?.remove();
+  }
+}
+
+const renderGroupRoom = async (root, groupId) => {
+  const token = root._routeRenderToken;
+  let roomScene = null;
+  root._groupRoomCleanup = () => { roomScene?.destroy(); roomScene = null; };
+  const page = el("div", { class: "grp-room-experience" });
+  const stage = el("div", { class: "grp-room-stage", role: "application", "aria-label": "Group members' shared 3D building room" });
+  const loading = el("div", { class: "grp-room-loading" }, el("span", { class: "grp-city-spinner" }), el("strong", {}, "Opening the building room…"));
+  const top = el("div", { class: "grp-room-hud-top" },
+    el("button", { class: "grp-room-back", onclick: () => { location.hash = "#groups"; } }, el("i", { class: "ri-arrow-left-line" }), " City"),
+    el("div", { class: "grp-room-title-pill" }, "Entering group room…"),
+    el("span", { class: "grp-room-member-count" }, ""),
   );
-  wrap.appendChild(fab);
+  const chatButton = el("button", { class: "grp-room-chat-btn", disabled: true }, el("i", { class: "ri-chat-3-line" }), " Skip to chat");
+  const footer = el("div", { class: "grp-room-hud-bottom" }, el("span", { class: "grp-room-swipe-hint" }, "Swipe to look around"), chatButton);
+  stage.append(loading, top, footer);
+  page.appendChild(stage);
+  root.appendChild(page);
+  try {
+    const snap = await getDoc(doc(db, "groups", groupId));
+    if (root._routeRenderToken !== token || !root.isConnected) return;
+    if (!snap.exists()) {
+      loading.innerHTML = "";
+      loading.append(el("strong", {}, "Group not found"), el("button", { class: "grp-room-back", onclick: () => { location.hash = "#groups"; } }, "Back to city"));
+      return;
+    }
+    const group = { id: groupId, ...snap.data() };
+    const memberIds = [...new Set(group.members || [])];
+    const fetched = await Promise.all(memberIds.map(async (uid) => {
+      try { return await fetchUser(uid) || { uid, name: "Orbit member", username: "member" }; }
+      catch { return { uid, name: "Orbit member", username: "member" }; }
+    }));
+    if (root._routeRenderToken !== token || !root.isConnected) return;
+    const titlePill = page.querySelector(".grp-room-title-pill");
+    titlePill.textContent = group.name || "Orbit group";
+    page.querySelector(".grp-room-member-count").textContent = `${fetched.length} members`;
+    const updateChatButton = () => {
+      const joined = (group.members || []).includes(state.uid);
+      chatButton.disabled = false;
+      chatButton.innerHTML = "";
+      chatButton.appendChild(el("i", { class: "ri-chat-3-line" }));
+      chatButton.appendChild(document.createTextNode(joined ? " Skip to chat" : " Join group & open chat"));
+    };
+    updateChatButton();
+    chatButton.addEventListener("click", async () => {
+      const joined = (group.members || []).includes(state.uid);
+      if (!joined && !(await setGroupMembership(group, false))) return;
+      location.hash = `#chats/${group.id}`;
+    });
+    roomScene = new OrbitGroupRoomScene(stage, fetched);
+  } catch (error) {
+    if (root._routeRenderToken !== token) return;
+    loading.innerHTML = "";
+    loading.append(el("strong", {}, "Could not open this group room"), el("span", {}, error?.message || "Check your connection and try again."), el("button", { class: "grp-room-back", onclick: () => { location.hash = "#groups"; } }, "Back to city"));
+  }
+};
+
+const renderGroups = (root) => {
+  const wrap = el("div", { class: "grp-wrap grp-city-wrap" });
+  const modalHost = el("div", { class: "grp-city-modal-host" });
+  const stage = el("div", { class: "grp-city-stage grp-city-fullscreen", role: "application", "aria-label": "Interactive Orbit group city" });
+  const loading = el("div", { class: "grp-city-loading" },
+    el("span", { class: "grp-city-spinner" }),
+    el("strong", {}, "Loading the city…"),
+  );
+  const nearby = el("div", { class: "grp-city-nearby", "aria-live": "polite" },
+    el("span", { class: "grp-city-nearby-title" }, "Walk around to find a group"),
+    el("span", { class: "grp-city-nearby-hint" }, "Use the joystick to move · swipe to look"),
+  );
+  const enter = el("button", { class: "grp-city-enter hidden", type: "button" }, el("i", { class: "ri-door-open-line" }), " Group info & enter");
+  const joystick = el("div", { class: "grp-city-joystick", role: "application", "aria-label": "Move around the city" },
+    el("span", { class: "grp-city-joystick-arrows" }, "✥"),
+    el("span", { class: "grp-city-joystick-thumb" }),
+  );
+  const swipe = el("div", { class: "grp-city-swipe-zone", "aria-label": "Swipe to turn the view" });
+  stage.append(loading, swipe, nearby, enter, joystick, el("div", { class: "grp-city-control-hint" }, "MOVE"));
+  wrap.append(stage, modalHost);
+  root.appendChild(wrap);
+
+  let allGroups = [];
+  let currentNearby = null;
+  let modalDismissedFor = null;
+
+  const showGroupInfo = (group) => {
+    modalHost.innerHTML = "";
+    const joined = (group.members || []).includes(state.uid);
+    const about = group.about || group.description || "A place for members to meet, share, and keep the conversation going.";
+    const close = () => { modalHost.innerHTML = ""; modalDismissedFor = group.id; };
+    const backdrop = el("div", { class: "grp-city-modal-backdrop", role: "presentation", onclick: (event) => { if (event.target === backdrop) close(); } });
+    const joinButton = el("button", { class: "grp-city-modal-secondary", onclick: async () => {
+      if (!(await setGroupMembership(group, (group.members || []).includes(state.uid)))) return;
+      showGroupInfo(group);
+    } }, joined ? "Leave group" : "Join group");
+    const card = el("section", { class: "grp-city-modal", role: "dialog", "aria-modal": "true", "aria-label": `${group.name || "Group"} information` },
+      el("button", { class: "grp-city-modal-close", type: "button", "aria-label": "Close group info", onclick: close }, el("i", { class: "ri-close-line" })),
+      el("div", { class: "grp-city-modal-mark" }, group.iconUrl ? el("img", { src: group.iconUrl, alt: "" }) : (group.name || "G").trim().charAt(0).toUpperCase()),
+      el("span", { class: "grp-room-eyebrow" }, group.category || "ORBIT COMMUNITY"),
+      el("h2", {}, group.name || "Orbit group"),
+      el("p", { class: "grp-city-modal-about" }, about),
+      el("div", { class: "grp-city-modal-meta" }, el("span", {}, el("i", { class: "ri-group-line" }), ` ${groupMemberCount(group)} members`), joined ? el("span", { class: "grp-city-joined" }, "Joined") : null),
+      el("div", { class: "grp-city-modal-actions" },
+        joinButton,
+        el("button", { class: "grp-city-modal-enter", onclick: () => { location.hash = `#groups/${group.id}`; } }, el("i", { class: "ri-door-open-line" }), " Enter group room"),
+      ),
+    );
+    backdrop.appendChild(card);
+    modalHost.appendChild(backdrop);
+  };
+
+  const onNearby = (group) => {
+    currentNearby = group;
+    if (!group) {
+      nearby.innerHTML = "";
+      nearby.append(el("span", { class: "grp-city-nearby-title" }, "Walk around to find a group"), el("span", { class: "grp-city-nearby-hint" }, "Use the joystick to move · swipe to look"));
+      enter.classList.add("hidden");
+      return;
+    }
+    nearby.innerHTML = "";
+    nearby.append(el("span", { class: "grp-city-nearby-title" }, group.name || "Orbit group"), el("span", { class: "grp-city-nearby-hint" }, `${groupMemberCount(group)} members · nearby`));
+    enter.classList.remove("hidden");
+    if (modalDismissedFor !== group.id) showGroupInfo(group);
+  };
+
+  const renderCity = () => {
+    if (root._groupCityCleanup) { root._groupCityCleanup(); root._groupCityCleanup = null; }
+    stage.innerHTML = "";
+    modalHost.innerHTML = "";
+    currentNearby = null;
+    if (!allGroups.length) {
+      stage.appendChild(el("div", { class: "grp-city-loading" }, el("strong", {}, "No groups to explore yet")));
+      return;
+    }
+    stage.append(
+      el("div", { class: "grp-city-loading" }, el("span", { class: "grp-city-spinner" }), el("strong", {}, "Loading the city…")),
+      el("div", { class: "grp-city-swipe-zone", "aria-label": "Swipe to turn the view" }),
+      nearby,
+      enter,
+      joystick,
+      el("div", { class: "grp-city-control-hint" }, "MOVE"),
+    );
+    const city = new OrbitGroupsCity(stage, allGroups, onNearby);
+    enter.onclick = () => { if (currentNearby) showGroupInfo(currentNearby); };
+    root._groupCityCleanup = () => city.destroy();
+  };
+
+  const loadAllGroups = async () => {
+    const docs = [];
+    let cursor = null;
+    let hasMore = true;
+    while (hasMore) {
+      const constraints = [collection(db, "groups"), orderBy("createdAt", "desc"), limit(80)];
+      if (cursor) constraints.push(startAfter(cursor));
+      const page = await getDocs(query(...constraints));
+      docs.push(...page.docs);
+      cursor = page.docs[page.docs.length - 1] || null;
+      hasMore = page.docs.length === 80 && !!cursor;
+    }
+    return docs;
+  };
+
+  loadAllGroups().then((docs) => {
+    if (!wrap.isConnected) return;
+    allGroups = docs.map((d) => ({ id: d.id, ...d.data() }));
+    renderCity();
+  }).catch((error) => {
+    if (!wrap.isConnected) return;
+    stage.innerHTML = "";
+    stage.appendChild(el("div", { class: "grp-city-loading" }, el("strong", {}, "Could not load the city"), el("span", {}, "Check your connection and try again.")));
+    console.error("Could not load group city:", error);
+  });
 };
 
 // =========================================================================
