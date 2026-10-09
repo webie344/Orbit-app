@@ -4,7 +4,7 @@ import { clone as cloneSkinnedModel } from "three/addons/utils/SkeletonUtils.js"
 
 // game.js loads this same model name from its app directory.
 const MODEL_URL = new URL("./Soldier.glb", import.meta.url).href;
-const CHARACTER_HEIGHT = 1.75;
+const CHARACTER_HEIGHT = 1.85;
 const WAVE_DURATION_MS = 1450;
 
 let characterAssetPromise = null;
@@ -75,7 +75,7 @@ export function mountProfileCharacter(host, { photoURL = "", alt = "3D character
   scene.add(fillLight);
 
   const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 30);
-  camera.position.set(0, 0.94, 3.35);
+  camera.position.set(0, 0.94, 3.0);
   camera.lookAt(0, 0.93, 0);
 
   const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches || false;
@@ -146,7 +146,9 @@ export function mountProfileCharacter(host, { photoURL = "", alt = "3D character
 
   const setupModel = (asset) => {
     const model = cloneSkinnedModel(asset.scene);
-    model.rotation.y = Math.PI;
+    // The profile camera looks at the character from the front; the game
+    // scene's π turn is for its third-person gameplay orientation.
+    model.rotation.y = 0;
     model.updateMatrixWorld(true);
 
     const bounds = new THREE.Box3().setFromObject(model);
