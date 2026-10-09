@@ -4764,3 +4764,349 @@ html[data-theme="glass"] .detail-comments .tw-comment {
   .tfb-ad-promo { align-items: flex-start; flex-direction: column; gap: 9px; }
   .tfb-ad-cta { width: 100%; }
 }
+
+/* ==========================================================================
+   CUSTOM AVATAR CUSTOMISER
+   ========================================================================== */
+
+.orbit-avatar-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: var(--overlay);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  animation: fadeIn 200ms var(--ease);
+}
+
+.orbit-avatar-card {
+  width: min(720px, 100%);
+  max-height: min(85vh, 780px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: pop-in 220ms var(--ease);
+}
+
+.orbit-avatar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.orbit-avatar-head h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.orbit-avatar-head p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--text-mute);
+}
+
+.orbit-avatar-body {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- Step 1: File picker ---------- */
+
+.orbit-avatar-picker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 56px 24px;
+  text-align: center;
+}
+
+.orbit-avatar-picker-icon {
+  width: 88px;
+  height: 88px;
+  border-radius: 28px;
+  background: linear-gradient(135deg, var(--grad-1), var(--grad-2));
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 42px;
+  box-shadow: 0 18px 40px rgba(124, 92, 255, 0.35);
+  margin-bottom: 8px;
+}
+
+.orbit-avatar-picker h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.orbit-avatar-picker p {
+  margin: 0;
+  color: var(--text-mute);
+  font-size: 14px;
+  max-width: 320px;
+  line-height: 1.55;
+}
+
+.orbit-avatar-picker .btn {
+  margin-top: 12px;
+  padding: 12px 24px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.orbit-avatar-hint {
+  font-size: 12px !important;
+  color: var(--text-mute) !important;
+  margin-top: 8px !important;
+}
+
+.orbit-avatar-hint a {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+/* ---------- Step 2: Preview + mapping ---------- */
+
+.orbit-avatar-preview {
+  position: relative;
+  width: 100%;
+  height: 340px;
+  background:
+    radial-gradient(ellipse at 50% 25%, color-mix(in srgb, var(--primary) 22%, var(--bg-elev)) 0%, var(--bg-elev) 72%);
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.orbit-avatar-preview canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.orbit-avatar-mapping {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.orbit-avatar-mapping h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.orbit-avatar-mapping-desc {
+  margin: -6px 0 4px;
+  font-size: 13px;
+  color: var(--text-mute);
+  line-height: 1.5;
+}
+
+.orbit-avatar-map-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.orbit-avatar-map-row label {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  color: var(--text);
+}
+
+.orbit-avatar-map-row label strong {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.orbit-avatar-map-row label small {
+  font-size: 11px;
+  color: var(--text-mute);
+  line-height: 1.4;
+}
+
+.orbit-avatar-required {
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 15%, transparent);
+  padding: 2px 6px;
+  border-radius: 999px;
+}
+
+.orbit-avatar-select {
+  flex: 0 0 42%;
+  min-width: 0;
+  padding: 9px 11px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.orbit-avatar-select:focus {
+  border-color: var(--primary);
+  outline: none;
+}
+
+.orbit-avatar-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+}
+
+/* ---------- Status screens ---------- */
+
+.orbit-avatar-loading,
+.orbit-avatar-success,
+.orbit-avatar-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 64px 24px;
+  text-align: center;
+}
+
+.orbit-avatar-loading i,
+.orbit-avatar-success i,
+.orbit-avatar-error i {
+  font-size: 54px;
+}
+
+.orbit-avatar-loading i {
+  color: var(--primary);
+  animation: spin 1.2s linear infinite;
+}
+
+.orbit-avatar-success i {
+  color: var(--good);
+}
+
+.orbit-avatar-error i {
+  color: var(--danger);
+}
+
+.orbit-avatar-loading span,
+.orbit-avatar-success h3,
+.orbit-avatar-error h3 {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.orbit-avatar-loading span {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--text-mute);
+  font-weight: 500;
+}
+
+.orbit-avatar-success p,
+.orbit-avatar-error p {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-mute);
+  max-width: 340px;
+  line-height: 1.55;
+}
+
+.orbit-avatar-success .btn,
+.orbit-avatar-error .btn {
+  margin-top: 12px;
+}
+
+/* ---------- Settings card ---------- */
+
+.orbit-avatar-settings-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.orbit-avatar-settings-card h3 {
+  margin: 0;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ---------- Mobile ---------- */
+
+@media (max-width: 640px) {
+  .orbit-avatar-modal {
+    padding: 0;
+    align-items: flex-end;
+  }
+  .orbit-avatar-card {
+    border-radius: 24px 24px 0 0;
+    max-height: 92vh;
+    width: 100%;
+  }
+  .orbit-avatar-preview {
+    height: 260px;
+  }
+  .orbit-avatar-map-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .orbit-avatar-select {
+    flex: 1 1 auto;
+  }
+  .orbit-avatar-actions {
+    flex-direction: column-reverse;
+  }
+  .orbit-avatar-actions .btn {
+    width: 100%;
+  }
+}

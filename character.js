@@ -1,24 +1,27 @@
-import * as THREE from "three";
+limport * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { clone as cloneSkinnedModel } from "three/addons/utils/SkeletonUtils.js";
 
-// game.js loads this same model name from its app directory.
-const MODEL_URL = new URL("./Soldier.glb", import.meta.url).href;
+// Default model — used when the user has no custom avatar.
+const DEFAULT_MODEL_URL = new URL("./Soldier.glb", import.meta.url).href;
 const CHARACTER_HEIGHT = 1.85;
 const WAVE_DURATION_MS = 1450;
 
-let characterAssetPromise = null;
+// Cache per-URL so a user's custom model loads once and is reused.
+const _characterAssetCache = new Map();
 
-const loadCharacterAsset = () => {
-  if (!characterAssetPromise) {
-    characterAssetPromise = new GLTFLoader().loadAsync(MODEL_URL)
+const loadCharacterAsset = (modelUrl) => {
+  const url = modelUrl || DEFAULT_MODEL_URL;
+  if (!_characterAssetCache.has(url)) {
+    const promise = new GLTFLoader().loadAsync(url)
       .then((gltf) => ({ scene: gltf.scene, animations: gltf.animations || [] }))
       .catch((error) => {
-        characterAssetPromise = null;
+        _characterAssetCache.delete(url);
         throw error;
       });
+    _characterAssetCache.set(url, promise);
   }
-  return characterAssetPromise;
+  return _characterAssetCache.get(url);
 };
 
 const namedClip = (clips, expression, except = null) =>
@@ -42,14 +45,39 @@ const findFallbackWaveBone = (root) => {
 };
 
 /**
+ * Resolves which animation clip to use for a given slot on a given asset.
+ * Prefers the user's custom map (from customisation.js), falls back to a
+ * name-matching regex so default Soldier.glb and unmapped models still work.
+ */
+const pickClipForSlot = (clips, slot, customMap) => {
+  // 1. Explicit mapping from the user's uploaded avatar config
+  const mappedName = customMap?.[slot];
+  if (mappedName) {
+    const hit = clips.find((c) => c.name === mappedName);
+    if (hit) return hit;
+  }
+  // 2. Fallback regex on the clip name
+  const patterns = {
+    idle:  /idle|stand|breath/i,
+    wave:  /wave|greet|hello/i,
+    run:   /^run$|run_?forward|jog|sprint/i,
+    walk:  /walk|stroll/i,
+    shoot: /shoot|fire|gun_?shoot/i,
+  };
+  const re = patterns[slot];
+  return re ? (clips.find((c) => re.test(c.name)) || null) : null;
+};
+
+/**
  * Mounts a small, scroll-aware 3D character in a profile avatar slot.
- * The existing profile image remains visible until Soldier.glb loads.
+ * The existing profile image remains visible until the model loads.
  * Returns a disposer for route changes.
  *
- * rotationY defaults to 0 so the character faces the viewer (correct for
- * profile cards where the camera sits in front of the model).
- * Pass Math.PI for game-style third-person views, or ±Math.PI/2 for
- * two avatars that should face each other.
+ * Options:
+ *   modelURL       — custom avatar GLB URL, or null for default Soldier.glb
+ *   animationMap   — { idle: "Idle_Gun", wave: "Wave", ... } from user doc
+ *   rotationY      — 0 = face camera (default); ±Math.PI/2 for side-facing
+ *   waveOnInitialView — whether to play the wave animation on first view
  */
 export function mountProfileCharacter(host, {
   photoURL = "",
@@ -57,6 +85,8 @@ export function mountProfileCharacter(host, {
   scrollRoot = null,
   rotationY = 0,
   waveOnInitialView = false,
+  modelURL = null,
+  animationMap = null,
 } = {}) {
   if (!host) return () => {};
 
@@ -159,7 +189,6 @@ export function mountProfileCharacter(host, {
   const setupModel = (asset, waveOnReady = false) => {
     const model = cloneSkinnedModel(asset.scene);
     // Facing direction — 0 means the character faces the camera.
-    // For game-style views pass Math.PI, for two facing avatars pass ±Math.PI/2.
     model.rotation.y = rotationY;
     model.updateMatrixWorld(true);
 
@@ -186,15 +215,22 @@ export function mountProfileCharacter(host, {
     modelRoot = model;
 
     mixer = new THREE.AnimationMixer(model);
-    const idleClip = namedClip(asset.animations, /idle|stand|breath/i);
-    const waveClip = namedClip(asset.animations, /wave|greet|hello/i, idleClip);
+    const clips = asset.animations || [];
+
+    // Use custom map first, fall back to regex on clip names
+    const idleClip = pickClipForSlot(clips, "idle", animationMap);
+    const waveClip = pickClipForSlot(clips, "wave", animationMap);
+
     if (idleClip) {
       idleAction = mixer.clipAction(idleClip);
       idleAction.setLoop(THREE.LoopRepeat, Infinity);
       idleAction.play();
     }
-    if (waveClip) waveAction = mixer.clipAction(waveClip);
+    if (waveClip && waveClip !== idleClip) {
+      waveAction = mixer.clipAction(waveClip);
+    }
     if (!waveAction) {
+      // No wave clip — fall back to a simple arm swing on the wave bone
       fallbackWaveBone = findFallbackWaveBone(model);
       if (fallbackWaveBone) {
         fallbackWaveBase = {
@@ -265,7 +301,7 @@ export function mountProfileCharacter(host, {
       return;
     }
     if (failedToLoad) return;
-    loadCharacterAsset()
+    loadCharacterAsset(modelURL)
       .then((asset) => {
         if (!disposed && visible && !modelRoot) {
           const waveOnReady = waveWhenReady;
@@ -275,7 +311,7 @@ export function mountProfileCharacter(host, {
       })
       .catch((error) => {
         failedToLoad = true;
-        console.warn(`Orbit character: could not load ${MODEL_URL}; keeping the profile photo.`, error);
+        console.warn(`Orbit character: could not load ${modelURL || DEFAULT_MODEL_URL}; keeping the profile photo.`, error);
       });
   };
 

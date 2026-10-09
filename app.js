@@ -4,7 +4,7 @@
 // Profile + Settings + Theme + Verified-by-location.
 // Chat + DM logic lives in chat.js (it imports state from this file).
 // =========================================================================
-
+import { mountAvatarSettingsCard, openAvatarCustomiser } from "./customisation.js";
 import { sfxOrbit, sfxComment, sfxPost } from "./sounds.js";
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
@@ -4158,21 +4158,25 @@ const renderProfile = async (root, uid) => {
     compactBar.appendChild(compactFriendBtn);
   }
   profileShell.appendChild(compactBar);
-  import("./character.js?v=orbit-friends-fix-2").then(({ mountProfileCharacter }) => {
-    if (routeRenderToken !== root._routeRenderToken || !profileShell.isConnected) return;
-    profileCharacterCleanup.push(
-      mountProfileCharacter(profileAvatar, {
-        photoURL: avatarFor(u),
-        alt: `${u.name || "Profile"} character avatar`,
-        scrollRoot: root,
-      }),
-      mountProfileCharacter(compactAvatar, {
-        photoURL: avatarFor(u),
-        alt: `${u.name || "Profile"} character avatar`,
-        scrollRoot: root,
-      }),
-    );
-  }).catch((error) => console.warn("Orbit character module failed to load.", error));
+import("./character.js?v=orbit-avatar-1").then(({ mountProfileCharacter }) => {
+  if (routeRenderToken !== root._routeRenderToken || !profileShell.isConnected) return;
+  profileCharacterCleanup.push(
+    mountProfileCharacter(profileAvatar, {
+      photoURL: avatarFor(u),
+      alt: `${u.name || "Profile"} character avatar`,
+      scrollRoot: root,
+      modelURL: u.avatarModelUrl || null,
+      animationMap: u.avatarAnimationMap || null,
+    }),
+    mountProfileCharacter(compactAvatar, {
+      photoURL: avatarFor(u),
+      alt: `${u.name || "Profile"} character avatar`,
+      scrollRoot: root,
+      modelURL: u.avatarModelUrl || null,
+      animationMap: u.avatarAnimationMap || null,
+    }),
+  );
+}).catch((error) => console.warn("Orbit character module failed to load.", error));
   const onProfileScroll = () => profileShell.classList.toggle("profile-scrolled", root.scrollTop > 170);
   root.addEventListener("scroll", onProfileScroll, { passive: true });
   profileShell._cleanupScroll = () => root.removeEventListener("scroll", onProfileScroll);
@@ -4620,31 +4624,35 @@ const renderFriends = async (root, peerUid = null) => {
 
   const characterCleanup = [];
   root._friendsCleanup = () => characterCleanup.forEach((cleanup) => cleanup());
-  import("./character.js?v=orbit-friends-fix-2").then(({ mountProfileCharacter }) => {
-    if (routeRenderToken !== root._routeRenderToken || !page.isConnected) return;
-    characterCleanup.push(
-      mountProfileCharacter(leftCharacter, {
-        photoURL: avatarFor(me),
-        alt: `${me?.name || "You"} character`,
-        scrollRoot: root,
-          rotationY: Math.PI / 2,
-  waveOnInitialView: true,
-}),
-mountProfileCharacter(rightCharacter, {
-  photoURL: avatarFor(peer),
-  alt: `${peer.name || "Friend"} character`,
-  scrollRoot: root,
-  rotationY: -Math.PI / 2,
-  waveOnInitialView: true,
-}),
-    );
-  }).catch((error) => console.warn("Orbit friend characters failed to load.", error));
+import("./character.js?v=orbit-avatar-1").then(({ mountProfileCharacter }) => {
+  if (routeRenderToken !== root._routeRenderToken || !page.isConnected) return;
+  characterCleanup.push(
+    mountProfileCharacter(leftCharacter, {
+      photoURL: avatarFor(me),
+      alt: `${me?.name || "You"} character`,
+      scrollRoot: root,
+      rotationY: Math.PI / 2,
+      waveOnInitialView: true,
+      modelURL: me?.avatarModelUrl || null,
+      animationMap: me?.avatarAnimationMap || null,
+    }),
+    mountProfileCharacter(rightCharacter, {
+      photoURL: avatarFor(peer),
+      alt: `${peer.name || "Friend"} character`,
+      scrollRoot: root,
+      rotationY: -Math.PI / 2,
+      waveOnInitialView: true,
+      modelURL: peer?.avatarModelUrl || null,
+      animationMap: peer?.avatarAnimationMap || null,
+    }),
+  );
+}).catch((error) => console.warn("Orbit friend characters failed to load.", error));
 };
 
 // =========================================================================
 // 13. SETTINGS — theme, verification, notifications
 // =========================================================================
-const renderSettings = (root) => {
+const renderSettings = async (root) => {
   const settingSwitch = (key, title, description, onChange = null) => {
     const defaultValue = !["privateAccount", "hideSensitive"].includes(key);
     const current = state.me?.[key] ?? defaultValue;
@@ -4910,6 +4918,9 @@ const renderSettings = (root) => {
       ),
     ),
   );
+  // ── Custom avatar section ──────────────────────────────────────────
+const avatarSettingsCard = await mountAvatarSettingsCard();
+wrap.appendChild(avatarSettingsCard);
   root.appendChild(wrap);
 };
 
