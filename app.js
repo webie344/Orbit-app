@@ -1583,6 +1583,11 @@ let _feedCachedNode = null; // detached feed DOM preserved during post visit
 let _feedUnsub = null;      // kept alive so the cached node stays fresh
 
 const router = () => {
+  content._routeRenderToken = (content._routeRenderToken || 0) + 1;
+  if (content._profileCleanup) {
+    content._profileCleanup();
+    content._profileCleanup = null;
+  }
   const hash = (location.hash || "#feed").replace(/^#/, "");
   const [route, ...rest] = hash.split("/");
   const target = routes.includes(route) ? route : "feed";
@@ -3976,6 +3981,7 @@ const formatProfileBirthday = (value) => {
 };
 
 const renderProfile = async (root, uid) => {
+  const routeRenderToken = root._routeRenderToken;
   // Always use fresh data for own profile (bypass stale cache after Pro activation)
   let u;
   if (uid === state.uid) {
@@ -3985,6 +3991,7 @@ const renderProfile = async (root, uid) => {
   } else {
     u = await fetchUser(uid);
   }
+  if (routeRenderToken !== root._routeRenderToken) return;
   if (!u) {
     root.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-user-line" }), el("div", { class: "t" }, "User not found")));
     return;
@@ -4049,13 +4056,18 @@ const renderProfile = async (root, uid) => {
 
   const profileShell = el("div", { class: "profile-shell" });
   root.appendChild(profileShell);
+  const profileAvatar = el("div", {
+    class: "avatar xl profile-main-avatar orbit-character",
+    role: "img",
+    "aria-label": `${u.name || "Profile"} 3D character`,
+  }, el("img", { class: "orbit-character-fallback", src: avatarFor(u), alt: "", loading: "lazy" }));
   const profileHead = el("div", { class: "profile-head" },
     profileCoverFor(u)
       ? el("div", { class: "profile-cover" },
           el("img", { src: profileCoverFor(u), alt: `${u.name || "Profile"} cover photo` }))
       : el("div", { class: "profile-cover profile-cover-empty" }),
     el("div", { class: "profile-head-main" },
-      el("img", { class: "avatar xl profile-main-avatar", src: avatarFor(u), alt: `${u.name || "Profile"} profile picture` }),
+      profileAvatar,
       el("div", { class: "profile-head-copy" },
         el("div", { class: "name-row" }, u.name,
           u.verified ? el("span", { class: "verified lg", title: "Location verified", html: '<i class="ri-check-line"></i>' }) : null,
@@ -4083,10 +4095,16 @@ const renderProfile = async (root, uid) => {
     ),
   );
   profileShell.appendChild(profileHead);
+  const profileCharacterCleanup = [];
 
   const compactPostsCountEl = el("span", {}, `${postsCountEl.textContent} posts`);
+  const compactAvatar = el("div", {
+    class: "avatar sm profile-compact-avatar orbit-character",
+    role: "img",
+    "aria-label": `${u.name || "Profile"} 3D character`,
+  }, el("img", { class: "orbit-character-fallback", src: avatarFor(u), alt: "", loading: "lazy" }));
   const compactBar = el("div", { class: "profile-compact-bar" },
-    el("img", { class: "avatar sm", src: avatarFor(u), alt: `${u.name || "Profile"} profile picture` }),
+    compactAvatar,
     el("div", { class: "profile-compact-name" },
       el("strong", {}, u.name || "User"),
       compactPostsCountEl,
@@ -4099,9 +4117,32 @@ const renderProfile = async (root, uid) => {
     compactBar.appendChild(compactFollowBtn);
   }
   profileShell.appendChild(compactBar);
+  import("./character.js").then(({ mountProfileCharacter }) => {
+    if (routeRenderToken !== root._routeRenderToken || !profileShell.isConnected) return;
+    profileCharacterCleanup.push(
+      mountProfileCharacter(profileAvatar, {
+        photoURL: avatarFor(u),
+        alt: `${u.name || "Profile"} character avatar`,
+        scrollRoot: root,
+      }),
+      mountProfileCharacter(compactAvatar, {
+        photoURL: avatarFor(u),
+        alt: `${u.name || "Profile"} character avatar`,
+        scrollRoot: root,
+      }),
+    );
+  }).catch((error) => console.warn("Orbit character module failed to load.", error));
   const onProfileScroll = () => profileShell.classList.toggle("profile-scrolled", root.scrollTop > 170);
   root.addEventListener("scroll", onProfileScroll, { passive: true });
   profileShell._cleanupScroll = () => root.removeEventListener("scroll", onProfileScroll);
+  root._profileCleanup = () => {
+    profileShell._cleanupScroll?.();
+    profileCharacterCleanup.forEach((cleanup) => cleanup());
+    if (_profileTabUnsub) {
+      _profileTabUnsub();
+      _profileTabUnsub = null;
+    }
+  };
 
   // Feature: Pro section — rendered directly below header, always visible
   const proSection = el("div", { class: "profile-pro-section" });
@@ -4300,7 +4341,9 @@ const openProfileEditModal = () => {
 
 const renderProfileByUsername = async (root, username) => {
   if (!username) { location.hash = "#feed"; return; }
+  const routeRenderToken = root._routeRenderToken;
   const qs = await getDocs(query(collection(db, "users"), where("username", "==", username.toLowerCase()), limit(1)));
+  if (routeRenderToken !== root._routeRenderToken) return;
   if (qs.empty) {
     root.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-user-unfollow-line" }), el("div", { class: "t" }, `@${username} not found`)));
     return;

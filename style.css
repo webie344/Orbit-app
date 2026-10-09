@@ -1064,6 +1064,30 @@ textarea { resize: vertical; min-height: 80px; }
   width: 104px; height: 104px; margin-top: -52px;
   border: 4px solid var(--bg-elev); box-shadow: 0 4px 18px rgba(0,0,0,.2);
 }
+.profile-main-avatar.orbit-character {
+  width: 104px; height: 104px; padding: 0; box-sizing: border-box;
+  border-radius: 50%; overflow: hidden; flex: 0 0 auto;
+}
+.orbit-character {
+  position: relative; display: block; isolation: isolate; overflow: hidden;
+  border-radius: 50%; background:
+    radial-gradient(ellipse at 50% 25%, color-mix(in srgb, var(--primary) 24%, var(--bg-elev)) 0%, var(--bg-elev) 72%);
+  contain: paint;
+}
+.orbit-character-canvas, .orbit-character-fallback {
+  position: absolute; inset: 0; display: block; width: 100%; height: 100%;
+}
+.orbit-character-canvas {
+  z-index: 1; opacity: 0; transition: opacity .25s ease; pointer-events: none;
+}
+.orbit-character-fallback {
+  z-index: 0; object-fit: cover; transition: opacity .25s ease;
+}
+.orbit-character.model-ready .orbit-character-canvas { opacity: 1; }
+.orbit-character.model-ready .orbit-character-fallback { opacity: 0; }
+.profile-compact-bar .profile-compact-avatar.orbit-character {
+  width: 30px; height: 30px; flex: 0 0 30px; border: 1px solid var(--line);
+}
 .profile-head-copy { flex: 1; min-width: 0; padding-top: 12px; }
 .profile-head .stats { display: flex; gap: 18px; margin-top: 8px; }
 .profile-shell { position: relative; }
@@ -1479,6 +1503,7 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 @media (max-width: 640px) {
   .profile-cover { height: 145px; }
   .profile-main-avatar { width: 88px; height: 88px; margin-top: -44px; }
+  .profile-main-avatar.orbit-character { width: 88px; height: 88px; }
   .profile-head-main { gap: 11px; }
   .profile-head-copy { padding-top: 8px; }
   .profile-head .name-row { font-size: 18px; }
