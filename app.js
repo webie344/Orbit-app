@@ -14,7 +14,7 @@ import {
   signInWithPopup, updateProfile, sendPasswordResetEmail,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
 import {
-  getFirestore, doc, setDoc, getDoc, updateDoc, addDoc, deleteDoc,
+  getFirestore, doc, setDoc, getDoc, updateDoc, addDoc, deleteDoc, runTransaction,
   collection, query, where, orderBy, limit, startAfter, onSnapshot, getDocs,
   serverTimestamp, increment, arrayUnion, arrayRemove, writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
@@ -930,6 +930,26 @@ export const fetchUser = async (uid) => {
   return data;
 };
 
+const MAX_GROUP_MEMBERS = 50;
+
+const changeGroupMembers = async (groupId, { add = [], remove = [] } = {}) => runTransaction(db, async (transaction) => {
+  const ref = doc(db, "groups", groupId);
+  const snapshot = await transaction.get(ref);
+  if (!snapshot.exists()) throw new Error("Group not found");
+  const current = [...new Set(snapshot.data().members || [])];
+  const removed = new Set(remove.filter(Boolean));
+  const remaining = current.filter((uid) => !removed.has(uid));
+  const additions = [...new Set(add.filter(Boolean))].filter((uid) => !remaining.includes(uid));
+  if (additions.length && remaining.length + additions.length > MAX_GROUP_MEMBERS) {
+    throw new Error(`Groups can have at most ${MAX_GROUP_MEMBERS} members.`);
+  }
+  const updated = [...remaining, ...additions];
+  if (updated.length !== current.length || updated.some((uid, index) => uid !== current[index])) {
+    transaction.update(ref, { members: updated, memberCount: updated.length });
+  }
+  return updated;
+});
+
 const resolveGroupMemberIds = async (raw = "") => {
   const tokens = [...new Set(raw.split(/[\s,]+/).map((value) => value.trim().replace(/^@/, "").toLowerCase()).filter(Boolean))];
   const ids = [];
@@ -978,10 +998,13 @@ export const openGroupAdmin = async (groupId) => {
           class: "icon-btn",
           title: "Remove member",
           onclick: async () => {
-            group.members = (group.members || []).filter((uid) => uid !== member.uid);
-            await updateDoc(doc(db, "groups", group.id), { members: arrayRemove(member.uid) });
-            toast("Member removed");
-            paintMembers();
+            try {
+              group.members = await changeGroupMembers(group.id, { remove: [member.uid] });
+              toast("Member removed");
+              paintMembers();
+            } catch (error) {
+              toast(error?.message || "Could not remove member");
+            }
           },
         }, el("i", { class: "ri-user-unfollow-line" })) : null,
       );
@@ -1037,10 +1060,17 @@ export const openGroupAdmin = async (groupId) => {
     onclick: async () => {
       const ids = await resolveGroupMemberIds(addInput.value);
       if (!ids.length) { toast("No matching Orbit members found"); return; }
-      await updateDoc(doc(db, "groups", group.id), { members: arrayUnion(...ids) });
-      group.members = [...new Set([...(group.members || []), ...ids])];
+      const before = (group.members || []).length;
+      try {
+        group.members = await changeGroupMembers(group.id, { add: ids });
+      } catch (error) {
+        toast(error?.message || "Could not add members");
+        return;
+      }
+      const added = group.members.length - before;
+      if (!added) { toast("Those members are already in the group"); return; }
       addInput.value = "";
-      toast(`${ids.length} member${ids.length === 1 ? "" : "s"} added`);
+      toast(`${added} member${added === 1 ? "" : "s"} added`);
       paintMembers();
     },
   }, "Add members");
@@ -1593,6 +1623,7 @@ const router = () => {
   const [route, ...rest] = hash.split("/");
   const target = routes.includes(route) ? route : "feed";
   document.body.classList.toggle("groups-experience-active", target === "groups");
+  document.body.classList.toggle("groups-room-active", target === "groups" && !!rest[0]);
   const prevRoute = content._currentRoute;
 
   $$(".nav-item, .bn").forEach((b) => b.classList.toggle("active", b.dataset.route === target));
@@ -3756,7 +3787,7 @@ class OrbitGroupsCity {
     ctx.roundRect(10, 12, 492, 88, 38);
     ctx.fill();
     ctx.fillStyle = "#ffffff";
-    ctx.font = "700 44px system-ui, sans-serif";
+    ctx.font = "700 32px system-ui, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     const username = state.me?.username ? `@${String(state.me.username).replace(/^@/, "")}` : (state.me?.name || "You");
@@ -3764,7 +3795,7 @@ class OrbitGroupsCity {
     const texture = new this.THREE.CanvasTexture(canvas);
     texture.colorSpace = this.THREE.SRGBColorSpace;
     const tag = new this.THREE.Sprite(new this.THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }));
-    tag.scale.set(5.4, 1.18, 1);
+    tag.scale.set(3.8, 0.84, 1);
     tag.position.set(0, Math.max(3.8, (this.playerAvatarHeight || 3.2) + 0.65), 0);
     this.player.add(tag);
     this.playerNameTag = tag;
@@ -3950,15 +3981,9 @@ class OrbitGroupsCity {
 const groupMemberCount = (group) => (group.members || []).length;
 const setGroupMembership = async (group, joined) => {
   if (!state.uid) { toast("Sign in to join this group"); return false; }
-  const ref = doc(db, "groups", group.id);
   try {
-    if (joined) {
-      await updateDoc(ref, { members: arrayRemove(state.uid) });
-      group.members = (group.members || []).filter((uid) => uid !== state.uid);
-    } else {
-      await updateDoc(ref, { members: arrayUnion(state.uid) });
-      group.members = [...new Set([...(group.members || []), state.uid])];
-    }
+    group.members = await changeGroupMembers(group.id, joined ? { remove: [state.uid] } : { add: [state.uid] });
+    group.memberCount = group.members.length;
     return true;
   } catch (error) {
     toast(error?.message || "Could not update group membership");
@@ -4149,7 +4174,7 @@ class OrbitGroupRoomScene {
     context.roundRect(8, 8, 496, 96, 34);
     context.fill();
     context.fillStyle = "#fff";
-    context.font = "700 38px system-ui, sans-serif";
+    context.font = "700 27px system-ui, sans-serif";
     context.textAlign = "center";
     context.textBaseline = "middle";
     const username = `@${String(member.username || member.handle || "member").replace(/^@/, "")}`;
@@ -4157,7 +4182,7 @@ class OrbitGroupRoomScene {
     const texture = new this.THREE.CanvasTexture(canvas);
     texture.colorSpace = this.THREE.SRGBColorSpace;
     const sprite = new this.THREE.Sprite(new this.THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }));
-    sprite.scale.set(5.1, 1.12, 1);
+    sprite.scale.set(3.6, 0.78, 1);
     return sprite;
   }
 
@@ -4368,7 +4393,7 @@ const renderGroupRoom = async (root, groupId) => {
     if (root._routeRenderToken !== token || !root.isConnected) return;
     const titlePill = page.querySelector(".grp-room-title-pill");
     titlePill.textContent = group.name || "Orbit group";
-    page.querySelector(".grp-room-member-count").textContent = `${fetched.length} members`;
+    page.querySelector(".grp-room-member-count").textContent = `${fetched.length}/${MAX_GROUP_MEMBERS} members`;
     const updateChatButton = () => {
       const joined = (group.members || []).includes(state.uid);
       chatButton.disabled = false;
@@ -4432,7 +4457,7 @@ const renderGroups = (root) => {
       el("span", { class: "grp-room-eyebrow" }, group.category || "ORBIT COMMUNITY"),
       el("h2", {}, group.name || "Orbit group"),
       el("p", { class: "grp-city-modal-about" }, about),
-      el("div", { class: "grp-city-modal-meta" }, el("span", {}, el("i", { class: "ri-group-line" }), ` ${groupMemberCount(group)} members`), joined ? el("span", { class: "grp-city-joined" }, "Joined") : null),
+      el("div", { class: "grp-city-modal-meta" }, el("span", {}, el("i", { class: "ri-group-line" }), ` ${groupMemberCount(group)}/${MAX_GROUP_MEMBERS} members`), joined ? el("span", { class: "grp-city-joined" }, "Joined") : null),
       el("div", { class: "grp-city-modal-actions" },
         joinButton,
         el("button", { class: "grp-city-modal-enter", onclick: () => { location.hash = `#groups/${group.id}`; } }, el("i", { class: "ri-door-open-line" }), " Enter group room"),
@@ -5865,14 +5890,18 @@ $("#groupForm").addEventListener("submit", async (e) => {
   const btn = e.target.querySelector("button[type='submit']");
   btn.disabled = true; btn.textContent = "Creating…";
   try {
+    const invitedMemberIds = await resolveGroupMemberIds(fd.get("memberUsernames") || "");
+    const memberIds = [...new Set([state.uid, ...invitedMemberIds])];
+    if (memberIds.length > MAX_GROUP_MEMBERS) {
+      toast(`A group can have at most ${MAX_GROUP_MEMBERS} members, including you.`);
+      return;
+    }
     const iconFile = fd.get("iconFile");
     let iconUrl = "";
     if (iconFile instanceof File && iconFile.size > 0) {
       btn.textContent = "Uploading picture…";
       iconUrl = (await uploadToCloudinary(iconFile, "image")).url;
     }
-    const invitedMemberIds = await resolveGroupMemberIds(fd.get("memberUsernames") || "");
-    const memberIds = [...new Set([state.uid, ...invitedMemberIds])];
     const ref = await addDoc(collection(db, "groups"), {
       name,
       about: fd.get("about") || "",
@@ -6640,13 +6669,13 @@ const renderInlineGroupSuggestion = () => {
       const btn = el("button", {
         class: `btn sm ${member ? "ghost" : "primary"}`,
         onclick: async () => {
-          const ref = doc(db, "groups", g.id);
-          if (member) {
-            await updateDoc(ref, { members: arrayRemove(state.uid) });
-          } else {
-            await updateDoc(ref, { members: arrayUnion(state.uid) });
+          try {
+            const members = await changeGroupMembers(g.id, member ? { remove: [state.uid] } : { add: [state.uid] });
+            member = members.includes(state.uid);
+          } catch (error) {
+            toast(error?.message || "Could not update group membership");
+            return;
           }
-          member = !member;
           btn.textContent = member ? "Joined" : "Join";
           btn.className = `btn sm ${member ? "ghost" : "primary"}`;
         }
@@ -6769,15 +6798,21 @@ const showOnboardingGuide = () => {
           let selected = step === 1 ? (state.me.following || []).includes(item.id) : (item.members || []).includes(state.uid);
           const button = el("button", { class: `onboarding-guide-select${selected ? " selected" : ""}` }, selected ? "Selected" : "Select");
           button.onclick = async () => {
-            selected = !selected;
-            if (step === 1) {
-              await updateDoc(doc(db, "users", state.uid), { following: selected ? arrayUnion(item.id) : arrayRemove(item.id) });
-              state.me.following = selected ? [...new Set([...(state.me.following || []), item.id])] : (state.me.following || []).filter((id) => id !== item.id);
-            } else {
-              await updateDoc(doc(db, "groups", item.id), { members: selected ? arrayUnion(state.uid) : arrayRemove(state.uid) });
+            const nextSelected = !selected;
+            try {
+              if (step === 1) {
+                await updateDoc(doc(db, "users", state.uid), { following: nextSelected ? arrayUnion(item.id) : arrayRemove(item.id) });
+                state.me.following = nextSelected ? [...new Set([...(state.me.following || []), item.id])] : (state.me.following || []).filter((id) => id !== item.id);
+                selected = nextSelected;
+              } else {
+                const members = await changeGroupMembers(item.id, nextSelected ? { add: [state.uid] } : { remove: [state.uid] });
+                selected = members.includes(state.uid);
+              }
+              button.textContent = selected ? "Selected" : "Select";
+              button.classList.toggle("selected", selected);
+            } catch (error) {
+              toast(error?.message || "Could not update group membership");
             }
-            button.textContent = selected ? "Selected" : "Select";
-            button.classList.toggle("selected", selected);
           };
           list.appendChild(el("div", { class: "onboarding-guide-row" },
             el("img", { class: "avatar sm", src: step === 1 ? avatarFor(item) : (item.iconUrl || item.photoURL || `https://api.dicebear.com/7.x/shapes/svg?seed=${item.id}`) }),
@@ -6888,21 +6923,21 @@ const showOnboardingModal = () => {
     if (snap.empty) return;
     snap.docs.forEach((d) => {
       const g = { id: d.id, ...d.data() };
-      let member = false;
+      let member = (g.members || []).includes(state.uid);
       const btn = el("button", {
-        class: "btn sm primary",
+        class: `btn sm ${member ? "ghost" : "primary"}`,
         onclick: async () => {
-          const ref = doc(db, "groups", g.id);
-          if (member) {
-            await updateDoc(ref, { members: arrayRemove(state.uid) });
-          } else {
-            await updateDoc(ref, { members: arrayUnion(state.uid) });
+          try {
+            const members = await changeGroupMembers(g.id, member ? { remove: [state.uid] } : { add: [state.uid] });
+            member = members.includes(state.uid);
+          } catch (error) {
+            toast(error?.message || "Could not update group membership");
+            return;
           }
-          member = !member;
           btn.textContent = member ? "✓ Joined" : "Join";
           btn.className = `btn sm ${member ? "ghost" : "primary"}`;
         }
-      }, "Join");
+      }, member ? "✓ Joined" : "Join");
       groupList.appendChild(el("div", { class: "onboard-row" },
         el("div", { class: "onboard-group-icon" }, (g.name || "?")[0].toUpperCase()),
         el("div", { class: "onboard-row-meta" },
