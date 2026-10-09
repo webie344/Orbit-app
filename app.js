@@ -16,46 +16,22 @@ import {
 import {
   getFirestore, doc, setDoc, getDoc, updateDoc, addDoc, deleteDoc,
   collection, query, where, orderBy, limit, startAfter, onSnapshot, getDocs,
-  serverTimestamp, increment, arrayUnion, arrayRemove, deleteField, writeBatch,
+  serverTimestamp, increment, arrayUnion, arrayRemove, writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 
 // =========================================================================
 // 1. CONFIG — REPLACE THESE BEFORE HOSTING
 // =========================================================================
 
-// Firebase web configuration is loaded at runtime from /api/config.
-// This keeps deployment values out of this source file. The Firebase web config
-// is still visible to browsers by design; protect the project with Firebase
-// Authentication, Firestore rules, Storage rules, and API-key restrictions.
-async function loadFirebaseConfig() {
-  const response = await fetch("/api/config", {
-    headers: { Accept: "application/json" },
-  });
-
-  if (!response.ok) {
-    throw new Error("Unable to load Firebase configuration (HTTP " + response.status + ")");
-  }
-
-  const config = await response.json();
-  const required = [
-    "apiKey",
-    "authDomain",
-    "projectId",
-    "storageBucket",
-    "messagingSenderId",
-    "appId",
-  ];
-  const missing = required.filter((key) => !config[key]);
-
-  if (missing.length) {
-    throw new Error("Firebase configuration is incomplete: " + missing.join(", "));
-  }
-
-  return config;
-}
-
-// Top-level await is supported because this file is loaded as type=module.
-export const firebaseConfig = await loadFirebaseConfig();
+// Firebase: get from https://console.firebase.google.com → Project Settings → Your apps
+export const firebaseConfig = {
+  apiKey: "AIzaSyC9jF-ocy6HjsVzWVVlAyXW-4aIFgA79-A",
+    authDomain: "crypto-6517d.firebaseapp.com",
+    projectId: "crypto-6517d",
+    storageBucket: "crypto-6517d.firebasestorage.app",
+    messagingSenderId: "60263975159",
+    appId: "1:60263975159:web:bd53dcaad86d6ed9592bf2"
+};
 
 // Cloudinary: get from https://cloudinary.com → Settings → Upload → Upload presets
 // 1) Create an UNSIGNED preset (recommended for client-side uploads)
@@ -126,8 +102,10 @@ export const state = {
 // =========================================================================
 // AI ASSISTANT CONSTANTS
 // =========================================================================
-// Groq is called through /api/groq so the GROQ_API_KEY never reaches the browser.
-// The secret is configured in Vercel as a server-only environment variable.
+// Set your Groq API key here or assign window.GROQ_API_KEY before this file loads.
+// Get a free key at https://console.groq.com
+window.GROQ_API_KEY = window.GROQ_API_KEY || "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";
+window.GROQ_MODEL   = window.GROQ_MODEL   || "llama-3.3-70b-versatile";
 
 const AI_TONES = {
   friendly:   { label: "Friendly & Warm",    emoji: "😊" },
@@ -1151,7 +1129,7 @@ const applyTheme = (theme) => {
                    : "ri-contrast-2-line"; // glass
   }
 };
-const initTheme = () => applyTheme(localStorage.getItem("orbit:theme") || "dark");
+const initTheme = () => applyTheme(localStorage.getItem("orbit:theme") || "light");
 const toggleTheme = () => {
   const cur = document.documentElement.getAttribute("data-theme") || "dark";
   applyTheme(cur === "dark" ? "light" : cur === "light" ? "glass" : "dark");
@@ -1304,6 +1282,9 @@ const ensureUserDoc = async (user, extras = {}) => {
       email: user.email || null,
       photoURL: user.photoURL || `https://api.dicebear.com/7.x/shapes/svg?seed=${user.uid}`,
       bio: "",
+      birthday: null,
+      birthdayAnnounceEnabled: false,
+      birthdayAnnouncedYear: null,
       verified: false,                // becomes true after location grant
       verifiedAt: null,
       location: null,                 // { lat, lng, city }
@@ -1335,6 +1316,48 @@ const ensureUserDoc = async (user, extras = {}) => {
   return { uid: user.uid, ...snap.data(), online: true };
 };
 
+const announceBirthdayIfDue = async () => {
+  const uid = state.uid;
+  if (!uid) return;
+  const userRef = doc(db, "users", uid);
+  const snap = await getDoc(userRef);
+  if (!snap.exists()) return;
+  const profile = { uid, ...snap.data() };
+  const birthday = String(profile.birthday || "");
+  if (!profile.birthdayAnnounceEnabled || !/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(birthday)) return;
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const today = `${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  if (birthday !== today || Number(profile.birthdayAnnouncedYear) === year) return;
+
+  const followers = [...new Set((profile.followers || []).filter((followerUid) => followerUid && followerUid !== uid))];
+  const notificationId = `birthday_${uid}_${year}`;
+  if (!followers.length) {
+    await updateDoc(userRef, { birthdayAnnouncedYear: year });
+    state.me = { ...state.me, birthdayAnnouncedYear: year };
+    return;
+  }
+
+  for (let offset = 0; offset < followers.length; offset += 400) {
+    const batch = writeBatch(db);
+    const chunk = followers.slice(offset, offset + 400);
+    chunk.forEach((followerUid) => {
+      batch.set(doc(db, "notifications", followerUid, "items", notificationId), {
+        type: "birthday",
+        fromUid: uid,
+        profileUid: uid,
+        text: `${profile.name || "Someone"} is celebrating a birthday today!`,
+        read: false,
+        createdAt: serverTimestamp(),
+      });
+    });
+    if (offset + chunk.length >= followers.length) batch.update(userRef, { birthdayAnnouncedYear: year });
+    await batch.commit();
+  }
+  state.me = { ...state.me, birthdayAnnouncedYear: year };
+};
+
 onAuthStateChanged(auth, async (user) => {
   if (!user) {
     state.me = null; state.uid = null;
@@ -1349,6 +1372,7 @@ onAuthStateChanged(auth, async (user) => {
   state.me = await ensureUserDoc(user);
   $("#meAvatar").src = avatarFor(state.me);
   showApp(); // calls hideOrbitLoader() internally
+  announceBirthdayIfDue().catch((err) => console.warn("Birthday announcement failed:", err));
   startMyProfileListener();
   startNotifListener();
   startSuggestions();
@@ -1512,13 +1536,13 @@ const toggleNotifPanel = () => {
   getDocs(query(collection(db, "notifications", state.uid, "items"), orderBy("createdAt", "desc"), limit(30)))
   .then((snap) => {
     if (snap.empty) { panel.appendChild(el("div", { class: "notif-empty" }, "No notifications yet.")); return; }
-    const iconMap = { orbit:"ri-fire-fill", follow:"ri-user-follow-fill", message:"ri-chat-1-fill", comment:"ri-chat-4-fill", commentLike:"ri-heart-fill", groupMessage:"ri-group-2-fill", call:"ri-phone-fill", newPost:"ri-file-add-fill", postConfirm:"ri-checkbox-circle-fill" };
-    const colMap  = { orbit:"var(--grad-2)", follow:"var(--primary)", message:"var(--good)", comment:"var(--grad-3)", commentLike:"var(--danger)", groupMessage:"var(--good)", call:"var(--primary)", newPost:"var(--grad-1)", postConfirm:"var(--good)" };
+     const iconMap = { orbit:"ri-thumb-up-fill", follow:"ri-user-follow-fill", message:"ri-chat-1-fill", comment:"ri-chat-4-fill", commentLike:"ri-thumb-up-fill", groupMessage:"ri-group-2-fill", call:"ri-phone-fill", newPost:"ri-file-add-fill", postConfirm:"ri-checkbox-circle-fill", birthday:"ri-cake-2-fill" };
+     const colMap  = { orbit:"#0866ff", follow:"var(--primary)", message:"var(--good)", comment:"var(--grad-3)", commentLike:"#0866ff", groupMessage:"var(--good)", call:"var(--primary)", newPost:"var(--grad-1)", postConfirm:"var(--good)", birthday:"var(--grad-2)" };
     snap.docs.forEach((d) => {
       const n = { id: d.id, ...d.data() };
       const ic = iconMap[n.type] || "ri-notification-3-fill";
       const co = colMap[n.type]  || "var(--primary)";
-      const txt = n.text || (n.fromName || "Someone") + " " + ({ orbit:"orbited your post", follow:"followed you", message:"sent you a message", comment:"commented on your post", commentLike:"liked your comment", groupMessage:"sent a message in your group", call:"called you", newPost:"shared a new post", postConfirm:"Your post is live!" }[n.type] || "interacted");
+      const txt = n.text || (n.fromName || "Someone") + " " + ({ orbit:"liked your post", follow:"followed you", message:"sent you a message", comment:"commented on your post", commentLike:"liked your comment", groupMessage:"sent a message in your group", call:"called you", newPost:"shared a new post", postConfirm:"Your post is live!" }[n.type] || "interacted");
       const item = el("div", { class: "notif-item" + (n.read ? "" : " unread") },
         el("i", { class: ic, style: "color:" + co + ";font-size:20px;flex-shrink:0;margin-top:2px;" }),
         el("div", { style: "min-width:0;" }, el("div", { class: "ni-text" }, txt), el("div", { class: "ni-time" }, fmtTime(n.createdAt))),
@@ -1526,7 +1550,8 @@ const toggleNotifPanel = () => {
       item.addEventListener("click", () => {
         updateDoc(doc(db, "notifications", state.uid, "items", n.id), { read: true }).catch(() => {});
         panel.remove();
-        if (n.type === "message" && n.fromUid) location.hash = "#chats/" + n.fromUid;
+         if (n.type === "birthday" && (n.profileUid || n.fromUid)) location.hash = "#profile/" + (n.profileUid || n.fromUid);
+         else if (n.type === "message" && n.fromUid) location.hash = "#chats/" + n.fromUid;
         else if (n.type === "groupMessage" && n.groupId) location.hash = "#chats/" + n.groupId;
         else if (n.type === "follow"  && n.fromUid) location.hash = "#profile/" + n.fromUid;
         else if ((n.type === "comment" || n.type === "commentLike" || n.type === "newPost" || n.type === "postConfirm") && n.postId) location.hash = "#post/" + n.postId;
@@ -2076,9 +2101,9 @@ const renderTrendingCard = (p, author) => {
 // =========================================================================
 // 8a. MEDIA CAROUSEL / GRID
 // 1 item  → single full-width image or video player
-// 2 items → side-by-side grid
-// 3 items → one large image with two stacked alongside
-// 4+      → Facebook-style 2×2 grid with overflow count
+// 2 items → side-by-side grid (Facebook-style)
+// 3 items → 1 large left + 2 stacked right (Facebook-style)
+// 4+      → swipeable carousel
 // =========================================================================
 const _makeGridCell = (m, spanRows = false, _allItems = [], _idx = 0, _postId = null) => {
   const cellStyle = [
@@ -2086,13 +2111,14 @@ const _makeGridCell = (m, spanRows = false, _allItems = [], _idx = 0, _postId = 
     spanRows ? "grid-row:1/3;" : "",
   ].join("");
   const cell = el("div", { style: cellStyle });
-  const navigateToPost = (e) => {
+
+  const _navigateToPost = (e) => {
     e.stopPropagation();
     if (_postId) location.hash = `#post/${_postId}`;
   };
 
   if (m.type === "video") {
-    const video = el("video", {
+    const vid = el("video", {
       src: m.url,
       poster: _cloudPoster(m.url),
       preload: "metadata",
@@ -2103,18 +2129,15 @@ const _makeGridCell = (m, spanRows = false, _allItems = [], _idx = 0, _postId = 
       class: "media-grid-play",
       style: "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.18);",
     }, el("i", { class: "ri-play-circle-fill", style: "font-size:44px;color:#fff;filter:drop-shadow(0 2px 10px rgba(0,0,0,0.5));" }));
-    video.addEventListener("click", navigateToPost);
-    overlay.addEventListener("click", navigateToPost);
-    cell.appendChild(video);
+    // Clicking navigates to post detail instead of opening modal
+    vid.addEventListener("click", _navigateToPost);
+    overlay.addEventListener("click", _navigateToPost);
+    cell.appendChild(vid);
     cell.appendChild(overlay);
   } else {
-    const image = el("img", {
-      src: m.url,
-      loading: "lazy",
-      style: "width:100%;height:100%;object-fit:cover;display:block;",
-    });
-    image.addEventListener("click", navigateToPost);
-    cell.appendChild(image);
+    const img = el("img", { src: m.url, loading: "lazy", style: "width:100%;height:100%;object-fit:cover;display:block;" });
+    img.addEventListener("click", _navigateToPost);
+    cell.appendChild(img);
   }
   return cell;
 };
@@ -2128,27 +2151,23 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
   // media block scrolling into view instead.
   const _wireStandaloneSong = (node) => { if (song) _wireSongPlayback(node, song, null); return node; };
 
-  // Post detail shows every attached item in a vertical stack.
+  // ── Detail view: all items stacked vertically (Facebook-style) ──
   if (detailView && items.length > 1) {
-    const stack = el("div", {
-      class: "post-media-stack",
-      style: "display:flex;flex-direction:column;gap:4px;position:relative;",
-    });
+    const stack = el("div", { class: "post-media-stack", style: "display:flex;flex-direction:column;gap:4px;position:relative;" });
     let sawVideo = false;
-    items.forEach((item) => {
-      if (item.type === "video") {
+    items.forEach((m) => {
+      if (m.type === "video") {
         sawVideo = true;
-        const player = buildVideoPlayer(item.url, { song, overlays: item.overlays });
+        const player = buildVideoPlayer(m.url, { song, overlays: m.overlays });
         player.style.borderRadius = "14px";
         stack.appendChild(player);
       } else {
-        const image = el("img", {
-          src: item.url,
-          loading: "lazy",
+        const img = el("img", {
+          src: m.url, loading: "lazy",
           style: "width:100%;display:block;max-height:520px;object-fit:cover;cursor:zoom-in;border-radius:0;",
         });
-        image.addEventListener("click", () => openImageZoom(item.url));
-        stack.appendChild(image);
+        img.addEventListener("click", () => openImageZoom(m.url));
+        stack.appendChild(img);
       }
     });
     if (song && !sawVideo) _wireStandaloneSong(stack);
@@ -2174,43 +2193,50 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
     return wrap;
   }
 
+  // ── 2 items: side-by-side ──────────────────────────────────────
   if (items.length === 2) {
     const grid = el("div", {
       class: "post-media",
       style: "display:grid;grid-template-columns:1fr 1fr;gap:3px;border-radius:14px;overflow:hidden;height:260px;margin:8px 0;position:relative;",
     });
-    items.forEach((item, index) => grid.appendChild(_makeGridCell(item, false, items, index, postId)));
-    return _wireStandaloneSong(grid);
+    items.forEach((m, i) => grid.appendChild(_makeGridCell(m, false, items, i, postId)));
+    if (song) _wireStandaloneSong(grid);
+    return grid;
   }
 
+  // ── 3 items: 1 large left + 2 stacked right ────────────────────
   if (items.length === 3) {
     const grid = el("div", {
       class: "post-media",
       style: "display:grid;grid-template-columns:2fr 1fr;grid-template-rows:130px 130px;gap:3px;border-radius:14px;overflow:hidden;margin:8px 0;position:relative;",
     });
-    items.forEach((item, index) => grid.appendChild(_makeGridCell(item, index === 0, items, index, postId)));
-    return _wireStandaloneSong(grid);
+    items.forEach((m, i) => grid.appendChild(_makeGridCell(m, i === 0, items, i, postId)));
+    if (song) _wireStandaloneSong(grid);
+    return grid;
   }
 
-  const visibleItems = items.slice(0, 4);
-  const overflow = items.length - visibleItems.length;
+  // ── 4+ items: Facebook-style 2×2 grid with "+N more" overflow ─
+  const show = items.slice(0, 4);
+  const overflow = items.length - 4;
   const grid = el("div", {
     class: "post-media",
     style: "display:grid;grid-template-columns:1fr 1fr;grid-template-rows:130px 130px;gap:3px;border-radius:14px;overflow:hidden;margin:8px 0;position:relative;",
   });
-  visibleItems.forEach((item, index) => {
-    const cell = _makeGridCell(item, false, items, index, postId);
-    if (index === 3 && overflow > 0) {
-      cell.appendChild(el("div", {
+  show.forEach((m, i) => {
+    const cell = _makeGridCell(m, false, items, i, postId);
+    if (i === 3 && overflow > 0) {
+      const moreOverlay = el("div", {
         style: "position:absolute;inset:0;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;cursor:pointer;",
-        onclick: (event) => { event.stopPropagation(); if (postId) location.hash = `#post/${postId}`; },
+        onclick: (e) => { e.stopPropagation(); if (postId) location.hash = `#post/${postId}`; },
       }, el("span", {
         style: "color:#fff;font-size:22px;font-weight:700;font-family:var(--font-display);letter-spacing:-0.02em;",
-      }, `+${overflow}`)));
+      }, `+${overflow}`));
+      cell.appendChild(moreOverlay);
     }
     grid.appendChild(cell);
   });
-  return _wireStandaloneSong(grid);
+  if (song) _wireStandaloneSong(grid);
+  return grid;
 };
 
 const postIsHidden = (p) => (state.me?.hiddenPosts || []).includes(p.id);
@@ -2365,6 +2391,10 @@ const openPostMenu = (p, author, isMine) => {
     sheet.appendChild(btn);
   };
   action("ri-share-forward-line", "Share to chats", () => openPostShareModal(p, author));
+  const isSaved = (state.me?.saved || []).includes(p.id);
+  action(isSaved ? "ri-bookmark-fill" : "ri-bookmark-line",
+    isSaved ? "Remove from Saved" : "Save post",
+    () => toggleSave(p.id, !isSaved));
   if (!isMine) {
     action("ri-eye-off-line", "Not interested — hide this post", async () => {
       await updateDoc(doc(db, "users", state.uid), { hiddenPosts: arrayUnion(p.id) });
@@ -2389,142 +2419,6 @@ const openPostMenu = (p, author, isMine) => {
   overlay.onclick = (e) => { if (e.target === overlay) close(); };
   document.body.appendChild(overlay);
   requestAnimationFrame(() => sheet.classList.add("is-visible"));
-};
-
-// =========================================================================
-// DROP-STYLE POST REACTIONS
-// =========================================================================
-// Orbit keeps its native "Orbit" interaction, while posts also support the
-// same compact reaction chips used by Drop. Reactions are stored as numeric
-// counters in posts/{postId}.reactions and the current user's selection is
-// stored in posts/{postId}.userReactions/{uid}.
-const DROP_REACTIONS = [
-  { key: "fire", emoji: "🔥" },
-  { key: "love", emoji: "❤️" },
-  { key: "lol",  emoji: "😂" },
-  { key: "wow",  emoji: "😮" },
-  { key: "clap", emoji: "👏" },
-];
-
-const dropReactionCount = (value) =>
-  Array.isArray(value) ? value.length : Math.max(0, Number(value) || 0);
-
-const renderDropReactionRow = (p, postId) => {
-  const reactions = p.reactions || {};
-  const myReaction = (p.userReactions || {})[state.uid] || null;
-  const row = el("div", { class: "reactions-row drop-reactions-row" });
-
-  DROP_REACTIONS.forEach(({ key, emoji }) => {
-    const count = dropReactionCount(reactions[key]);
-    if (!count && myReaction !== key) return;
-    const chip = el("button", {
-      type: "button",
-      class: `reaction-chip${myReaction === key ? " active" : ""}`,
-      "data-reaction": key,
-      "aria-label": `${emoji} reaction`,
-      onclick: async (event) => {
-        event.stopPropagation();
-        await toggleDropReaction(postId, key, chip);
-      },
-    },
-      el("span", { class: "emoji" }, emoji),
-      count ? el("span", { class: "count" }, String(count)) : null,
-    );
-    row.appendChild(chip);
-  });
-
-  const picker = el("button", {
-    type: "button",
-    class: "reaction-picker",
-    "aria-label": "Add reaction",
-    onclick: (event) => {
-      event.stopPropagation();
-      showDropReactionPicker(event.currentTarget, postId);
-    },
-  },
-    el("span", { class: "reaction-picker-emoji" }, "😊"),
-    el("span", { class: "reaction-picker-plus" }, "+"),
-  );
-  row.appendChild(picker);
-  return row;
-};
-
-const patchDropReactionRows = (postId, reactions, myReaction) => {
-  const fakePost = {
-    id: postId,
-    reactions,
-    userReactions: { [state.uid]: myReaction || null },
-  };
-  document.querySelectorAll(`.tfb-post[data-post-id="${postId}"] .reactions-row`).forEach((row) => {
-    row.replaceWith(renderDropReactionRow(fakePost, postId));
-  });
-};
-
-const toggleDropReaction = async (postId, reactionKey, anchorEl) => {
-  const ref = doc(db, "posts", postId);
-  const snap = await getDoc(ref).catch(() => null);
-  if (!snap?.exists()) return;
-  const postData = snap.data();
-  const reactions = { ...(postData.reactions || {}) };
-  const previous = (postData.userReactions || {})[state.uid] || null;
-  const updates = {};
-
-  if (previous === reactionKey) {
-    updates[`reactions.${reactionKey}`] = increment(-1);
-    updates[`userReactions.${state.uid}`] = deleteField();
-  } else {
-    if (previous) updates[`reactions.${previous}`] = increment(-1);
-    updates[`reactions.${reactionKey}`] = increment(1);
-    updates[`userReactions.${state.uid}`] = reactionKey;
-  }
-
-  if (previous !== reactionKey) {
-    const selected = DROP_REACTIONS.find((item) => item.key === reactionKey);
-    if (selected) spawnFloatingReaction(selected.emoji, anchorEl);
-  }
-
-  const optimistic = { ...reactions };
-  if (previous && previous !== reactionKey) {
-    optimistic[previous] = Math.max(0, dropReactionCount(optimistic[previous]) - 1);
-  }
-  if (previous === reactionKey) {
-    optimistic[reactionKey] = Math.max(0, dropReactionCount(optimistic[reactionKey]) - 1);
-  } else {
-    optimistic[reactionKey] = dropReactionCount(optimistic[reactionKey]) + 1;
-  }
-  patchDropReactionRows(postId, optimistic, previous === reactionKey ? null : reactionKey);
-
-  try {
-    await updateDoc(ref, updates);
-  } catch (error) {
-    console.warn("toggleDropReaction:", error);
-    patchDropReactionRows(postId, reactions, previous);
-    toast("Could not update reaction");
-  }
-};
-
-const showDropReactionPicker = (anchorEl, postId) => {
-  document.getElementById("orbit-drop-reaction-pop")?.remove();
-  const pop = el("div", { id: "orbit-drop-reaction-pop", class: "reaction-pop" });
-  DROP_REACTIONS.forEach(({ key, emoji }) => {
-    const button = el("button", {
-      type: "button",
-      "aria-label": `React ${emoji}`,
-      onclick: async (event) => {
-        event.stopPropagation();
-        await toggleDropReaction(postId, key, button);
-        pop.remove();
-      },
-    }, emoji);
-    pop.appendChild(button);
-  });
-  document.body.appendChild(pop);
-  const rect = anchorEl.getBoundingClientRect();
-  pop.style.top = `${window.scrollY + rect.top - pop.offsetHeight - 8}px`;
-  pop.style.left = `${Math.max(8, window.scrollX + rect.left)}px`;
-  setTimeout(() => {
-    document.addEventListener("click", () => pop.remove(), { once: true });
-  }, 0);
 };
 
 const renderPost = (p, author, opts = {}) => {
@@ -2564,7 +2458,10 @@ const renderPost = (p, author, opts = {}) => {
           ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' })
           : null,
       ),
-      el("span", { class: "tfb-sub" }, `@${author?.username || "user"} · ${fmtTime(p.createdAt)}`),
+      el("div", { class: "tfb-sub-row" },
+        el("span", { class: "tfb-sub" }, `@${author?.username || "user"} · ${fmtTime(p.createdAt)}`),
+        p.isSponsored ? el("span", { class: "tfb-sponsored-pill" }, el("i", { class: "ri-advertisement-line" }), "Sponsored") : null,
+      ),
     ),
     !isMine && author?.uid
       ? el("button", {
@@ -2652,6 +2549,27 @@ const renderPost = (p, author, opts = {}) => {
     post.appendChild(mediaNode);
   }
 
+  if (p.isSponsored) {
+    let destinationUrl = "";
+    try {
+      const parsedUrl = new URL(p.ad?.destinationUrl || "");
+      if (["http:", "https:"].includes(parsedUrl.protocol)) destinationUrl = parsedUrl.href;
+    } catch {}
+    const adHeadline = String(p.ad?.headline || "").trim();
+    const adCta = ["Learn more", "Shop now", "Sign up", "Contact us"].includes(p.ad?.cta) ? p.ad.cta : "Learn more";
+    if (adHeadline || destinationUrl) {
+      post.appendChild(el("div", { class: "tfb-ad-promo" },
+        adHeadline ? el("strong", { class: "tfb-ad-headline" }, adHeadline) : null,
+        destinationUrl ? el("a", {
+          class: "tfb-ad-cta",
+          href: destinationUrl,
+          target: "_blank",
+          rel: "noopener noreferrer",
+        }, adCta, el("i", { class: "ri-arrow-right-up-line" })) : null,
+      ));
+    }
+  }
+
   // ── Build / project extra detail block ───────────────────────────
   if (p.kind === "build" || p.kind === "project") {
     import("./features.js").then((m) => {
@@ -2662,12 +2580,24 @@ const renderPost = (p, author, opts = {}) => {
   }
 
   // ── Actions row ──────────────────────────────────────────────────
-  const orbitIcon  = el("i", { class: iOrbited ? "ri-fire-fill" : "ri-fire-line" });
-  const orbitCount = el("span", { text: String(p.orbitCount || 0) });
+  const orbitIcon = el("i", { class: iOrbited ? "ri-thumb-up-fill" : "ri-thumb-up-line" });
+  const likeTotal = el("span", { class: "tfb-like-total", text: p.orbitCount ? String(p.orbitCount) : "" });
+  const likeSummary = el("div", { class: `tfb-like-summary${p.orbitCount ? "" : " hidden"}` },
+    el("span", { class: "tfb-reaction-bubble" }, el("i", { class: "ri-thumb-up-fill" })),
+    likeTotal,
+  );
+  const cmtCountEl = el("span", { class: "tfb-comment-total", text: p.commentCount ? String(p.commentCount) : "" });
+  const cmtCountLabel = el("span", { class: "tfb-comment-label" }, p.commentCount === 1 ? " comment" : " comments");
+  const commentSummaryBtn = el("button", {
+    class: `tfb-comment-summary${p.commentCount ? "" : " hidden"}`,
+    onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; },
+  }, cmtCountEl, cmtCountLabel);
   let _iOrbited = iOrbited;
 
   const orbitBtn = el("button", {
-    class: `tfb-badge${iOrbited ? " active" : ""}`,
+    class: `tfb-badge tfb-act tfb-like-btn${iOrbited ? " active" : ""}`,
+    title: "Like",
+    "aria-pressed": String(iOrbited),
     onclick: async (e) => {
       e.stopPropagation();
       _iOrbited = !_iOrbited;
@@ -2675,9 +2605,12 @@ const renderPost = (p, author, opts = {}) => {
       orbitBtn.classList.remove("orbit-burst");
       void orbitBtn.offsetWidth;
       orbitBtn.classList.add("orbit-burst");
-      orbitIcon.className   = _iOrbited ? "ri-fire-fill" : "ri-fire-line";
-      orbitCount.textContent = String((p.orbitCount || 0) + (_iOrbited ? 1 : -1));
+      orbitIcon.className = _iOrbited ? "ri-thumb-up-fill" : "ri-thumb-up-line";
+      p.orbitCount = Math.max(0, (p.orbitCount || 0) + (_iOrbited ? 1 : -1));
+      likeTotal.textContent = p.orbitCount ? String(p.orbitCount) : "";
+      likeSummary.classList.toggle("hidden", !p.orbitCount);
       orbitBtn.classList.toggle("active", _iOrbited);
+      orbitBtn.setAttribute("aria-pressed", String(_iOrbited));
       await updateDoc(doc(db, "posts", p.id), {
         orbits:     _iOrbited ? arrayUnion(state.uid)   : arrayRemove(state.uid),
         orbitCount: increment(_iOrbited ? 1 : -1),
@@ -2685,28 +2618,21 @@ const renderPost = (p, author, opts = {}) => {
       if (_iOrbited && author?.uid && author.uid !== state.uid) {
         writeNotif(author.uid, "orbit", {
           postId: p.id,
-          text: `${state.me?.name || "Someone"} orbited your post`,
+          text: `${state.me?.name || "Someone"} liked your post`,
         }).catch(() => {});
         const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
         import("./notifications.js").then(({ notifyUser }) =>
-          notifyUser(author.uid, state.me?.name || "Someone", "orbited your post",
+          notifyUser(author.uid, state.me?.name || "Someone", "liked your post",
             "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
         ).catch(() => {});
       }
     },
-  }, orbitIcon, orbitCount);
-
-  let _saved = (state.me?.saved || []).includes(p.id);
-  const saveIconEl = el("i", { class: _saved ? "ri-bookmark-fill" : "ri-bookmark-line" });
-
-  // Live-updatable comment count element — updated by the feed onSnapshot below
-  const cmtCountEl = el("span", {});
-  cmtCountEl.textContent = " " + String(p.commentCount || 0);
+  }, orbitIcon, el("span", {}, "Like"));
 
   const actions = el("div", { class: "tfb-actions" },
+    orbitBtn,
     el("button", { class: "tfb-act", onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; } },
-      el("i", { class: "ri-chat-1-line" }),
-      cmtCountEl,
+      el("i", { class: "ri-chat-1-line" }), "Comment",
     ),
     el("button", {
       class: "tfb-act",
@@ -2717,20 +2643,8 @@ const renderPost = (p, author, opts = {}) => {
     },
       el("i", { class: "ri-share-forward-line" }), " Share",
     ),
-    el("button", { class: `tfb-act save-post-btn${_saved ? " saved" : ""}`, onclick: async (e) => {
-      e.stopPropagation();
-      _saved = !_saved;
-      saveIconEl.className = _saved ? "ri-bookmark-fill" : "ri-bookmark-line";
-      e.currentTarget.classList.toggle("saved", _saved);
-      e.currentTarget.classList.add("save-burst");
-      setTimeout(() => e.currentTarget.classList.remove("save-burst"), 420);
-      await toggleSave(p.id, _saved);
-    } }, saveIconEl),
-    el("span", { class: "spacer" }),
-    el("span", { class: "tfb-act", style: "cursor:default;pointer-events:none;" },
-      el("i", { class: "ri-eye-line" }), " " + String(p.views || 0)),
-    orbitBtn,
   );
+  post.appendChild(el("div", { class: "tfb-post-stats" }, likeSummary, commentSummaryBtn));
   post.appendChild(actions);
 
   // ── Comments (feed preview — top 5) ─────────────────────────────
@@ -2745,7 +2659,7 @@ const renderPost = (p, author, opts = {}) => {
       el("button", { class: "reply-cancel-btn", onclick: () => {
         _replyTo = null;
         replyBanner.classList.add("hidden");
-        cForm.querySelector("input").placeholder = "Add your echo…";
+        cForm.querySelector("input").placeholder = "Write a comment…";
         cForm.querySelector("input").value = "";
       }}, el("i", { class: "ri-close-line" })),
     );
@@ -2830,7 +2744,7 @@ const renderPost = (p, author, opts = {}) => {
     const cForm = el("form", { class: "comment-form" });
     const cFormRow = el("div", { class: "comment-form-row" },
       el("img", { class: "avatar xs", src: avatarFor(state.me), style: "cursor:pointer;", onclick: () => location.hash = `#profile/${state.uid}` }),
-      el("input", { type: "text", placeholder: "Add your echo…" }),
+      el("input", { type: "text", placeholder: "Write a comment…" }),
       cmtMediaBtn,
       cmtMicBtn,
       el("button", { class: "icon-btn", type: "submit" }, el("i", { class: "ri-send-plane-fill" })),
@@ -2860,7 +2774,7 @@ const renderPost = (p, author, opts = {}) => {
         }
       } catch { toast("Media upload failed"); submitBtn.disabled = false; return; }
       input.value = ""; _replyTo = null;
-      replyBanner.classList.add("hidden"); input.placeholder = "Add your echo…";
+      replyBanner.classList.add("hidden"); input.placeholder = "Write a comment…";
       clearCmtAttach();
       cBox.classList.remove("hidden");
       cBox.appendChild(el("div", { class: "comment" },
@@ -2896,13 +2810,14 @@ const renderPost = (p, author, opts = {}) => {
     const renderFeedComment = (c, a) => {
       const isLiked = (c.likes || []).includes(state.uid);
       const likeCountEl = el("span", { text: String((c.likes || []).length || "") });
-      const likeIconEl  = el("i", { class: isLiked ? "ri-heart-fill" : "ri-heart-line", style: isLiked ? "color:var(--danger);" : "" });
+      const likeIconEl = el("i", { class: isLiked ? "ri-thumb-up-fill" : "ri-thumb-up-line", style: isLiked ? "color:#0866ff;" : "" });
       let _liked = isLiked;
-      const likeBtn = el("button", { class: "cmt-like-btn", onclick: async (e) => {
+      const likeBtn = el("button", { class: `cmt-like-btn${_liked ? " liked" : ""}`, onclick: async (e) => {
         e.stopPropagation();
         _liked = !_liked;
-        likeIconEl.className   = _liked ? "ri-heart-fill" : "ri-heart-line";
-        likeIconEl.style.color = _liked ? "var(--danger)" : "";
+        likeIconEl.className = _liked ? "ri-thumb-up-fill" : "ri-thumb-up-line";
+        likeIconEl.style.color = _liked ? "#0866ff" : "";
+        likeBtn.classList.toggle("liked", _liked);
         const newCount = (c.likes?.length || 0) + (_liked ? 1 : -1);
         likeCountEl.textContent = newCount > 0 ? String(newCount) : "";
         await updateDoc(doc(db, "posts", p.id, "comments", c.id), {
@@ -2914,7 +2829,7 @@ const renderPost = (p, author, opts = {}) => {
             notifyUser(a.uid, state.me?.name || "Someone", "liked your comment", "/#post/" + p.id, state.me?.photoURL || "")
           ).catch(() => {});
         }
-      }}, likeIconEl, likeCountEl);
+      }}, likeIconEl, el("span", {}, "Like"), likeCountEl);
 
       const replyBtn = el("button", { class: "cmt-reply-btn", onclick: () => {
         _replyTo = { uid: a?.uid, name: a?.name || "user", username: a?.username || "" };
@@ -2968,8 +2883,10 @@ const renderPost = (p, author, opts = {}) => {
         const authors  = await Promise.all([...new Set(comments.map((c) => c.authorUid))].map(fetchUser));
         const map      = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
         comments.forEach((c) => cBox.appendChild(renderFeedComment(c, map[c.authorUid])));
-        // Keep the feed comment count badge in sync with live comment data.
-        cmtCountEl.textContent = " " + String(snap.size);
+        // Keep the feed comment count badge in sync with live comment data
+        cmtCountEl.textContent = snap.size ? String(snap.size) : "";
+        cmtCountLabel.textContent = snap.size === 1 ? " comment" : " comments";
+        commentSummaryBtn.classList.toggle("hidden", snap.size === 0);
       },
     );
 
@@ -3104,7 +3021,7 @@ const renderPostDetail = async (root, postId) => {
       ),
     ),
     el("div", { class: "detail-topbar-stats" },
-      el("span", {}, el("i", { class: "ri-fire-line" }), ` ${p.orbitCount || 0}`),
+      el("span", {}, el("i", { class: "ri-thumb-up-line" }), ` ${p.orbitCount || 0} likes`),
       el("span", {}, el("i", { class: "ri-eye-line" }), ` ${p.views || 0}`),
       el("span", {}, el("i", { class: "ri-chat-1-line" }), ` ${p.commentCount || 0}`),
     ),
@@ -3117,7 +3034,7 @@ const renderPostDetail = async (root, postId) => {
   const cmtSection = el("div", { class: "detail-comments" });
   root.appendChild(cmtSection);
 
-  const cmtHead = el("div", { class: "detail-cmt-head" }, "Echoes");
+  const cmtHead = el("div", { class: "detail-cmt-head" }, "Comments");
   cmtSection.appendChild(cmtHead);
 
   const cList = el("div", { class: "detail-cmt-list" });
@@ -3138,7 +3055,7 @@ const renderPostDetail = async (root, postId) => {
     _detailReplyTo = null;
     detailReplyBanner.classList.add("hidden");
     const inp = cmtSection.querySelector("input[type='text']");
-    if (inp) { inp.placeholder = "Add your echo…"; inp.value = ""; }
+    if (inp) { inp.placeholder = "Write a comment…"; inp.value = ""; }
   }}, el("i", { class: "ri-close-line" }));
   detailReplyBanner.appendChild(_replyBannerClose);
   cmtSection.appendChild(detailReplyBanner);
@@ -3147,7 +3064,7 @@ const renderPostDetail = async (root, postId) => {
     const isLiked = (c.likes || []).includes(state.uid);
     const likeCount = (c.likes || []).length;
     const likeCountEl = el("span", { class: "tw-cmt-act-count", text: likeCount > 0 ? String(likeCount) : "" });
-    const likeIconEl  = el("i", { class: isLiked ? "ri-heart-fill" : "ri-heart-line" });
+    const likeIconEl = el("i", { class: isLiked ? "ri-thumb-up-fill" : "ri-thumb-up-line" });
     let _liked = isLiked;
 
     const likeBtn = el("button", {
@@ -3155,7 +3072,7 @@ const renderPostDetail = async (root, postId) => {
       onclick: async (ev) => {
         ev.stopPropagation();
         _liked = !_liked;
-        likeIconEl.className = _liked ? "ri-heart-fill" : "ri-heart-line";
+        likeIconEl.className = _liked ? "ri-thumb-up-fill" : "ri-thumb-up-line";
         likeBtn.classList.toggle("liked", _liked);
         const newCount = (c.likes?.length || 0) + (_liked ? 1 : -1);
         likeCountEl.textContent = newCount > 0 ? String(newCount) : "";
@@ -3169,7 +3086,7 @@ const renderPostDetail = async (root, postId) => {
           ).catch(() => {});
         }
       },
-    }, likeIconEl, likeCountEl);
+    }, likeIconEl, "Like", likeCountEl);
 
     const replyBtn = el("button", {
       class: "tw-cmt-act-btn",
@@ -3181,7 +3098,7 @@ const renderPostDetail = async (root, postId) => {
         const inp = cmtSection.querySelector("input[type='text']");
         if (inp) { inp.placeholder = `Reply to @${handle}…`; inp.focus(); }
       },
-    }, el("i", { class: "ri-chat-1-line" }));
+    }, el("i", { class: "ri-chat-1-line" }), "Reply");
 
     const shareBtn = el("button", {
       class: "tw-cmt-act-btn",
@@ -3202,36 +3119,38 @@ const renderPostDetail = async (root, postId) => {
           }
         }
       },
-    }, el("i", { class: "ri-share-forward-line" }));
+    }, el("i", { class: "ri-share-forward-line" }), "Share");
 
     return el("div", { class: "tw-comment" },
       el("img", { class: "avatar xs tw-cmt-avatar", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
       el("div", { class: "tw-cmt-body" },
-        el("div", { class: "tw-cmt-header" },
-          el("span", { class: "tw-cmt-name" }, a?.name || "User",
-            a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
+        el("div", { class: "tw-cmt-bubble" },
+          el("div", { class: "tw-cmt-header" },
+            el("span", { class: "tw-cmt-name" }, a?.name || "User",
+              a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
+            ),
+            el("span", { class: "tw-cmt-username" }, `@${a?.username || "user"}`),
+            el("span", { class: "tw-cmt-dot" }, "·"),
+            el("span", { class: "tw-cmt-time" }, fmtTime(c.createdAt)),
           ),
-          el("span", { class: "tw-cmt-username" }, `@${a?.username || "user"}`),
-          el("span", { class: "tw-cmt-dot" }, "·"),
-          el("span", { class: "tw-cmt-time" }, fmtTime(c.createdAt)),
+          (c.replyToUsername || c.replyToName) ? el("div", { class: "reply-to-label" },
+            el("i", { class: "ri-corner-down-right-line" }),
+            el("a", { class: "mention", href: `#profile-u/${c.replyToUsername || c.replyToName}` }, `@${c.replyToUsername || c.replyToName}`)
+          ) : null,
+          c.text ? el("div", { class: "tw-cmt-text" }, c.text) : null,
+          c.mediaUrl ? el("div", { class: "cmt-media", onclick: (ev) => { ev.stopPropagation(); c.mediaType === "video" ? openVideoViewer([{ type: "video", url: c.mediaUrl }], 0) : openImageZoom(c.mediaUrl); }},
+            c.mediaType === "video"
+              ? el("div", { class: "cmt-media-video-wrap" },
+                  el("video", { src: c.mediaUrl, muted: "", preload: "metadata", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;border-radius:10px;" }),
+                  el("div", { class: "cmt-media-video-play", html: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>` }),
+                )
+              : el("img", { src: c.mediaUrl, loading: "lazy", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;border-radius:10px;margin-top:8px;" }),
+          ) : null,
+          c.audioUrl ? el("div", { class: "cmt-voice-note" },
+            el("span", { html: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>` }),
+            el("audio", { src: c.audioUrl, controls: true, style: "height:28px;max-width:150px;" }),
+          ) : null,
         ),
-        (c.replyToUsername || c.replyToName) ? el("div", { class: "reply-to-label" },
-          el("i", { class: "ri-corner-down-right-line" }),
-          el("a", { class: "mention", href: `#profile-u/${c.replyToUsername || c.replyToName}` }, `@${c.replyToUsername || c.replyToName}`)
-        ) : null,
-        c.text ? el("div", { class: "tw-cmt-text" }, c.text) : null,
-        c.mediaUrl ? el("div", { class: "cmt-media", onclick: (ev) => { ev.stopPropagation(); c.mediaType === "video" ? openVideoViewer([{ type: "video", url: c.mediaUrl }], 0) : openImageZoom(c.mediaUrl); }},
-          c.mediaType === "video"
-            ? el("div", { class: "cmt-media-video-wrap" },
-                el("video", { src: c.mediaUrl, muted: "", preload: "metadata", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;border-radius:10px;" }),
-                el("div", { class: "cmt-media-video-play", html: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>` }),
-              )
-            : el("img", { src: c.mediaUrl, loading: "lazy", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;border-radius:10px;margin-top:8px;" }),
-        ) : null,
-        c.audioUrl ? el("div", { class: "cmt-voice-note" },
-          el("span", { html: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>` }),
-          el("audio", { src: c.audioUrl, controls: true, style: "height:28px;max-width:150px;" }),
-        ) : null,
         el("div", { class: "tw-cmt-actions" }, replyBtn, shareBtn, likeBtn),
       ),
     );
@@ -3365,7 +3284,7 @@ const renderPostDetail = async (root, postId) => {
   cForm.appendChild(dCmtAttachPreview);
   const dFormRow = el("div", { class: "comment-form-row" },
     el("img", { class: "avatar xs", src: avatarFor(state.me), style: "cursor:pointer;", onclick: () => location.hash = `#profile/${state.uid}` }),
-    el("input", { type: "text", placeholder: "Add your echo…" }),
+    el("input", { type: "text", placeholder: "Write a comment…" }),
     dCmtMediaBtn,
     dCmtMicBtn,
     el("button", { class: "icon-btn", type: "submit" }, el("i", { class: "ri-send-plane-fill" })),
@@ -3400,7 +3319,7 @@ const renderPostDetail = async (root, postId) => {
       }
     } catch { toast("Media upload failed"); submitBtn.disabled = false; return; }
     input.value = ""; _detailReplyTo = null;
-    detailReplyBanner.classList.add("hidden"); input.placeholder = "Add your echo…";
+    detailReplyBanner.classList.add("hidden"); input.placeholder = "Write a comment…";
     clearDCmtAttach(); sfxComment(); submitBtn.disabled = false;
     await addDoc(collection(db, "posts", p.id, "comments"), commentData);
     await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
@@ -4048,6 +3967,14 @@ const renderSaved = (root) => {
 // listener running and the visible tab always reflects Firestore live.
 let _profileTabUnsub = null;
 
+const formatProfileBirthday = (value) => {
+  const match = /^(\d{2})-(\d{2})$/.exec(String(value || ""));
+  if (!match) return "";
+  const date = new Date(2000, Number(match[1]) - 1, Number(match[2]), 12);
+  if (date.getMonth() !== Number(match[1]) - 1 || date.getDate() !== Number(match[2])) return "";
+  return date.toLocaleDateString(undefined, { month: "long", day: "numeric" });
+};
+
 const renderProfile = async (root, uid) => {
   // Always use fresh data for own profile (bypass stale cache after Pro activation)
   let u;
@@ -4140,6 +4067,9 @@ const renderProfile = async (root, uid) => {
           el("div", { class: "stat" }, el("strong", {}, String((u.following || []).length)), el("span", {}, "following")),
         ),
         u.bio ? el("div", { class: "bio", text: u.bio }) : null,
+        u.birthday && formatProfileBirthday(u.birthday)
+          ? el("div", { class: "profile-birthday" }, el("i", { class: "ri-cake-2-line" }), `Birthday ${formatProfileBirthday(u.birthday)}`)
+          : null,
         el("div", { class: "profile-actions" },
           isMe
             ? el("button", { class: "btn ghost", onclick: () => openProfileEditModal() }, el("i", { class: "ri-edit-line" }), "Edit profile")
@@ -4352,6 +4282,14 @@ const openProfileEditModal = () => {
   const ni = document.getElementById("editName");    if (ni) ni.value = state.me.name || "";
   const ui = document.getElementById("editUsername"); if (ui) ui.value = state.me.username || "";
   const bi = document.getElementById("editBio");      if (bi) bi.value = state.me.bio || "";
+  const birthdayInput = document.getElementById("editBirthday");
+  if (birthdayInput) {
+    const birthday = String(state.me.birthday || "");
+    const monthDay = /^\d{2}-\d{2}$/.test(birthday) ? birthday : /^\d{4}-\d{2}-\d{2}$/.test(birthday) ? birthday.slice(5) : "";
+    birthdayInput.value = monthDay ? `2000-${monthDay}` : "";
+  }
+  const birthdayAnnounce = document.getElementById("editBirthdayAnnounce");
+  if (birthdayAnnounce) birthdayAnnounce.checked = state.me.birthdayAnnounceEnabled === true;
   const av = document.getElementById("editAvatar");   if (av) av.src = state.me.photoURL || avatarFor(state.me);
   const cover = document.getElementById("editCover"); if (cover) {
     cover.src = profileCoverFor(state.me) || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='180' viewBox='0 0 640 180'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' x2='1'%3E%3Cstop stop-color='%237c5cff'/%3E%3Cstop offset='1' stop-color='%23ff5cae'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='640' height='180' fill='url(%23g)'/%3E%3C/svg%3E";
@@ -4758,6 +4696,10 @@ const _crFreshState = () => ({
   step: "pick",           // pick | cam | editor | music | details
   slides: [],             // [{ type:'image'|'video', file, url, overlays:[], recordedInApp? }]
   textOnly: false,        // true when publishing a text-only post (no media)
+  isSponsored: false,
+  adHeadline: "",
+  adLink: "",
+  adCta: "Learn more",
   song: null,             // { id, name, artist, url, duration }
   caption: "",
   location: null,
@@ -4799,7 +4741,7 @@ function crRenderShell(root) {
   const closeBtn = el("button", { class: "cr-head-close", onclick: () => crClose() }, el("i", { class: "ri-close-line" }));
   const backBtn = el("button", { class: "cr-head-close", style: "display:none;", onclick: () => crBack() }, el("i", { class: "ri-arrow-left-line" }));
   const title = el("div", { class: "cr-head-title", text: "New post" });
-  const nextBtn = el("button", { class: "cr-head-btn primary", style: "display:none;" }, "Next");
+  const nextBtn = el("button", { class: "cr-head-btn primary", type: "button", style: "display:none;" }, "Next");
   const head = el("div", { class: "cr-head" }, el("div", { style: "display:flex;align-items:center;gap:8px;" }, backBtn, closeBtn), title, nextBtn);
   const stepsWrap = el("div", { class: "cr-steps" });
   root.appendChild(head);
@@ -4824,7 +4766,7 @@ function crGoto(step) {
   stepsWrap.innerHTML = "";
   backBtn.style.display = step === "pick" ? "none" : "";
   nextBtn.style.display = "none";
-  if (step === "pick") { title.textContent = "New post"; stepsWrap.appendChild(crBuildPickStep()); }
+   if (step === "pick") { title.textContent = crState.isSponsored ? "New sponsored ad" : "New post"; stepsWrap.appendChild(crBuildPickStep()); }
   else if (step === "cam") { title.textContent = "Record video"; stepsWrap.appendChild(crBuildCamStep()); }
   else if (step === "editor") {
     title.textContent = "Edit";
@@ -4835,9 +4777,9 @@ function crGoto(step) {
     stepsWrap.appendChild(crBuildMusicStep());
     nextBtn.style.display = ""; nextBtn.textContent = "Next"; nextBtn.onclick = () => crGoto("details");
   } else if (step === "details") {
-    title.textContent = "Share";
+     title.textContent = crState.isSponsored ? "Create ad" : "Share";
     stepsWrap.appendChild(crBuildDetailsStep());
-    nextBtn.style.display = ""; nextBtn.textContent = "Post"; nextBtn.onclick = () => crSubmitPost(nextBtn);
+     nextBtn.style.display = ""; nextBtn.textContent = crState.isSponsored ? "Create ad" : "Post"; nextBtn.onclick = () => crSubmitPost(nextBtn);
   }
 }
 
@@ -4845,6 +4787,19 @@ function crGoto(step) {
 function crBuildPickStep() {
   crState.textOnly = false;
   const fileInput = el("input", { type: "file", accept: "image/*,video/*", multiple: true, hidden: true });
+  const sponsoredInput = el("input", { type: "checkbox" });
+  sponsoredInput.checked = crState.isSponsored === true;
+  sponsoredInput.addEventListener("change", () => {
+    crState.isSponsored = sponsoredInput.checked;
+    if (_crShellRefs?.title) _crShellRefs.title.textContent = crState.isSponsored ? "New sponsored ad" : "New post";
+  });
+  const sponsoredToggle = el("label", { class: "cr-ad-mode-toggle" },
+    sponsoredInput,
+    el("span", {},
+      el("strong", {}, "Create this as an ad"),
+      el("small", {}, "Adds a Sponsored label and a destination link. No ad budget or paid placement is set up."),
+    ),
+  );
   fileInput.addEventListener("change", (e) => {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
@@ -4871,6 +4826,7 @@ function crBuildPickStep() {
         el("button", { class: "cr-pick-opt", onclick: () => { crState.textOnly = true; crState.slides = []; crGoto("details"); } },
           el("i", { class: "ri-text" }), el("span", {}, "Text post")),
       ),
+      sponsoredToggle,
       el("div", { class: "cr-pick-hint" }, "Pick multiple photos to make a swipeable carousel. Music can be added to videos you record in-app."),
       fileInput,
     ),
@@ -5228,6 +5184,30 @@ function crBuildDetailsStep() {
   caption.value = crState.caption;
   caption.addEventListener("input", () => { crState.caption = caption.value; });
 
+  let sponsoredFields = null;
+  if (crState.isSponsored) {
+    const headline = el("input", { type: "text", maxlength: "80", placeholder: "Ad headline (optional)" });
+    headline.value = crState.adHeadline || "";
+    headline.addEventListener("input", () => { crState.adHeadline = headline.value; });
+    const destination = el("input", { type: "url", placeholder: "https://your-site.com" });
+    destination.value = crState.adLink || "";
+    destination.addEventListener("input", () => { crState.adLink = destination.value; });
+    const cta = el("select", {},
+      el("option", { value: "Learn more" }, "Learn more"),
+      el("option", { value: "Shop now" }, "Shop now"),
+      el("option", { value: "Sign up" }, "Sign up"),
+      el("option", { value: "Contact us" }, "Contact us"),
+    );
+    cta.value = crState.adCta || "Learn more";
+    cta.addEventListener("change", () => { crState.adCta = cta.value; });
+    sponsoredFields = el("div", { class: "cr-ad-fields" },
+      el("div", { class: "cr-ad-fields-title" }, el("i", { class: "ri-advertisement-line" }), "Sponsored ad details"),
+      el("label", {}, "Headline", headline),
+      el("label", {}, "Destination link (required)", destination),
+      el("label", {}, "Button text", cta),
+    );
+  }
+
   const locRow = el("div", { class: "cr-details-row" },
     el("div", { class: "l" }, el("i", { class: "ri-map-pin-line" }), "Tag location"),
     el("div", { class: "v" }, crState.location?.city || "Not tagged"),
@@ -5263,6 +5243,7 @@ function crBuildDetailsStep() {
           crState.slides.length > 1 ? `${crState.slides.length} photos in this post` : (thumbSlide.type === "video" ? "1 video" : "1 photo")),
       ),
       caption,
+      sponsoredFields,
       locRow,
       musicRow,
     ),
@@ -5308,7 +5289,21 @@ function crFlattenImageSlide(slide) {
 async function crSubmitPost(btn) {
   if (!crState.textOnly && !crState.slides.length) { toast("Pick a photo or video first"); return; }
   if (crState.textOnly && !crState.caption.trim()) { toast("Write something first"); return; }
-  btn.disabled = true; btn.textContent = "Posting…";
+  const isSponsored = crState.isSponsored === true;
+  let adDestinationUrl = "";
+  if (isSponsored) {
+    if (!crState.adLink?.trim()) { toast("Add a destination link for your ad"); return; }
+    if (!crState.caption.trim() && !crState.adHeadline?.trim()) { toast("Add ad text or a headline"); return; }
+    try {
+      const parsedUrl = new URL(crState.adLink.trim());
+      if (!["http:", "https:"].includes(parsedUrl.protocol)) throw new Error("Unsupported link");
+      adDestinationUrl = parsedUrl.href;
+    } catch {
+      toast("Enter a valid link starting with https://");
+      return;
+    }
+  }
+  btn.disabled = true; btn.textContent = isSponsored ? "Creating ad…" : "Posting…";
   try {
     let media;
     if (!crState.textOnly) {
@@ -5335,15 +5330,23 @@ async function crSubmitPost(btn) {
     if (media) postData.media = media;
     if (crState.location) postData.location = crState.location;
     if (crState.song) postData.song = crState.song;
+    if (isSponsored) {
+      postData.isSponsored = true;
+      postData.ad = {
+        headline: crState.adHeadline.trim(),
+        destinationUrl: adDestinationUrl,
+        cta: crState.adCta || "Learn more",
+      };
+    }
     const newPostRef = await addDoc(collection(db, "posts"), postData);
     sfxPost();
-    toast("Posted!");
+    toast(isSponsored ? "Ad created and marked Sponsored" : "Posted!");
     showPostSuccess();
     crClose();
     addDoc(collection(db, "notifications", state.uid, "items"), {
       type: "postConfirm", postId: newPostRef.id, text: "Your post is live!", read: false, createdAt: serverTimestamp(),
     }).catch(() => {});
-    (async () => {
+    if (!isSponsored) (async () => {
       let followers = state.me?.followers || [];
       try {
         const freshSnap = await getDoc(doc(db, "users", state.uid));
@@ -5361,7 +5364,7 @@ async function crSubmitPost(btn) {
     })().catch(() => {});
   } catch (err) {
     toast("Failed to post: " + (err.message || "unknown error"));
-    btn.disabled = false; btn.textContent = "Post";
+    btn.disabled = false; btn.textContent = isSponsored ? "Create ad" : "Post";
   }
 }
 
@@ -6004,13 +6007,22 @@ $("#globalSearch").addEventListener("keydown", async (e) => {
     const nameV = (document.getElementById("editName")?.value || "").trim();
     const userV = (document.getElementById("editUsername")?.value || "").trim().toLowerCase().replace(/[^a-z0-9_]/g, "");
     const bioV  = (document.getElementById("editBio")?.value || "").trim();
+    const birthdayDate = document.getElementById("editBirthday")?.value || "";
+    const birthday = /^\d{4}-(\d{2}-\d{2})$/.exec(birthdayDate)?.[1] || null;
+    const birthdayAnnounceEnabled = !!birthday && document.getElementById("editBirthdayAnnounce")?.checked === true;
     if (!nameV) { toast("Name cannot be empty"); return; }
     const st = document.getElementById("editSaveText"); if (st) st.textContent = "Saving..."; save.disabled = true;
     try {
-      const updates = { name: nameV, bio: bioV, username: userV || state.me.username };
+      const updates = {
+        name: nameV, bio: bioV, username: userV || state.me.username,
+        birthday, birthdayAnnounceEnabled,
+      };
       if (pendingAvFile) { toast("Uploading photo..."); const up = await uploadToCloudinary(pendingAvFile, "image"); updates.photoURL = up.url; }
       if (pendingCoverFile) { toast("Uploading cover photo..."); const up = await uploadToCloudinary(pendingCoverFile, "image"); updates.coverURL = up.url; }
       await updateDoc(doc(db, "users", state.uid), updates);
+      state.me = { ...state.me, ...updates };
+      state.cache.users.delete(state.uid);
+      announceBirthdayIfDue().catch((err) => console.warn("Birthday announcement failed:", err));
       toast("Profile updated"); closeModal(); router();
     } catch (err) { toast("Save failed: " + (err.message || "unknown")); }
     finally { save.disabled = false; if (st) st.textContent = "Save changes"; }
@@ -6153,6 +6165,7 @@ window._aiSend = async function() {
   const ta   = document.getElementById("aiChatInput");
   const text = ta?.value?.trim();
   if (!text || _aiTyping) return;
+  if (!window.GROQ_API_KEY) { toast("Set window.GROQ_API_KEY to use the AI assistant"); return; }
   ta.value = "";
   ta.style.height = "auto";
 
@@ -6165,11 +6178,14 @@ window._aiSend = async function() {
       role:    m.role === "ai" ? "assistant" : "user",
       content: m.text,
     }));
-    const res = await fetch("/api/groq", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${window.GROQ_API_KEY}` },
       body: JSON.stringify({
-        messages: [{ role: "system", content: getAIChatSystem() }, ...history],
+        model:       window.GROQ_MODEL,
+        messages:    [{ role: "system", content: getAIChatSystem() }, ...history],
+        max_tokens:  280,
+        temperature: 0.9,
       }),
     });
     if (!res.ok) {
