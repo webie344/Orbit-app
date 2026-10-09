@@ -1290,6 +1290,7 @@ const ensureUserDoc = async (user, extras = {}) => {
       location: null,                 // { lat, lng, city }
       followers: [],
       following: [],
+      friends: [],
       privateAccount: false,
       showOnline: true,
       allowMessages: true,
@@ -1574,7 +1575,7 @@ $("#notifBtn").addEventListener("click", () => { location.hash = "#notifications
 // 7. ROUTER
 // =========================================================================
 // "reels" removed — videos live in the feed as regular posts
-const routes = ["feed", "chats", "ai-chat", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn"];
+const routes = ["feed", "chats", "friends", "ai-chat", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn"];
 
 // Feed DOM caching — lets us restore the feed instantly when navigating
 // back from a post without re-rendering or re-shuffling.
@@ -1584,10 +1585,10 @@ let _feedUnsub = null;      // kept alive so the cached node stays fresh
 
 const router = () => {
   content._routeRenderToken = (content._routeRenderToken || 0) + 1;
-  if (content._profileCleanup) {
-    content._profileCleanup();
-    content._profileCleanup = null;
-  }
+  ["_profileCleanup", "_friendsCleanup"].forEach((key) => {
+    if (content[key]) content[key]();
+    content[key] = null;
+  });
   const hash = (location.hash || "#feed").replace(/^#/, "");
   const [route, ...rest] = hash.split("/");
   const target = routes.includes(route) ? route : "feed";
@@ -1660,6 +1661,7 @@ const router = () => {
         setTimeout(() => _injectAIChatEntry(), 350);
       }
       break;
+    case "friends":    renderFriends(content, rest[0] || null); break;
     case "ai-chat":    renderAIChat(content); break;
     case "groups":     renderGroups(content); break;
     case "explore":    renderExplore(content, rest[0] === "tag" ? rest[1] : null); break;
@@ -3817,9 +3819,9 @@ const renderExplore = (root, hashtagFilter = null) => {
       trendRow.appendChild(el("div", { style: "padding:0 16px;color:var(--text-mute);font-size:13px;" }, "Could not load trends"));
     });
 
-  // 5 & 6. People to Follow ─────────────────────────────────────────────────
+  // 5 & 6. People to Meet ───────────────────────────────────────────────────
   wrap.appendChild(el("div", { class: "disc-section-header" },
-    el("h2", {}, "People to Follow"),
+    el("h2", {}, "People to meet"),
     el("span", { class: "disc-see-all" }, "See all"),
   ));
   const peopleList = el("div", { class: "disc-people-list" });
@@ -3828,50 +3830,20 @@ const renderExplore = (root, hashtagFilter = null) => {
   getDocs(query(collection(db, "users"), limit(40)))
     .then((snap) => {
       const following = state.me?.following || [];
+      const friends = state.me?.friends || [];
       const suggestions = snap.docs
         .map((d) => ({ uid: d.id, ...d.data() }))
-        .filter((u) => u.uid !== state.uid && !following.includes(u.uid))
+        .filter((u) => u.uid !== state.uid && !following.includes(u.uid) && !friends.includes(u.uid))
         .sort((a, b) => (b.followers?.length || 0) - (a.followers?.length || 0))
         .slice(0, 6);
 
       if (!suggestions.length) {
         peopleList.appendChild(el("div", { style: "color:var(--text-mute);font-size:13px;padding:0 0 8px;" },
-          "You're already following everyone — check back soon."));
+          "No new people to meet right now — check back soon."));
         return;
       }
 
       suggestions.forEach((u) => {
-        let followed = (state.me?.following || []).includes(u.uid);
-        const followBtn = el("button", {
-          class: "disc-follow-btn",
-          style: followed ? "opacity:0.5;" : "",
-        }, followed ? "Following" : "Follow");
-
-        followBtn.onclick = async () => {
-          followed = !followed;
-          followBtn.textContent = followed ? "Following" : "Follow";
-          followBtn.style.opacity = followed ? "0.5" : "";
-          const meRef  = doc(db, "users", state.uid);
-          const themRef = doc(db, "users", u.uid);
-          const batch = writeBatch(db);
-          if (followed) {
-            batch.update(meRef,  { following: arrayUnion(u.uid) });
-            batch.update(themRef, { followers: arrayUnion(state.uid) });
-            if (state.me) state.me.following = [...new Set([...(state.me.following || []), u.uid])];
-            writeNotif(u.uid, "follow", {}).catch(() => {});
-          } else {
-            batch.update(meRef,  { following: arrayRemove(u.uid) });
-            batch.update(themRef, { followers: arrayRemove(state.uid) });
-            if (state.me) state.me.following = (state.me.following || []).filter((x) => x !== u.uid);
-          }
-          await batch.commit().catch(() => {
-            toast("Failed to update");
-            followed = !followed;
-            followBtn.textContent = followed ? "Following" : "Follow";
-            followBtn.style.opacity = followed ? "0.5" : "";
-          });
-        };
-
         const roleText = u.bio ? u.bio.slice(0, 42) : (u.verified ? "Verified member" : "Orbit member");
         peopleList.appendChild(el("div", { class: "disc-people-row" },
           el("img", {
@@ -3891,7 +3863,7 @@ const renderExplore = (root, hashtagFilter = null) => {
             el("span", { class: "disc-people-handle" }, `@${u.username || "user"}`),
             el("span", { class: "disc-people-role" }, roleText),
           ),
-          followBtn,
+          orbitFriendControls(u, { compact: true }),
         ));
       });
     }).catch(() => {});
@@ -3980,6 +3952,80 @@ const formatProfileBirthday = (value) => {
   return date.toLocaleDateString(undefined, { month: "long", day: "numeric" });
 };
 
+const addOrbitFriend = async (peerUid) => {
+  if (!state.uid || !peerUid || peerUid === state.uid) return false;
+  const batch = writeBatch(db);
+  batch.update(doc(db, "users", state.uid), { friends: arrayUnion(peerUid) });
+  batch.update(doc(db, "users", peerUid), { friends: arrayUnion(state.uid) });
+  try {
+    await batch.commit();
+  } catch {
+    toast("Could not add friend. Check your connection and try again.");
+    return false;
+  }
+  const friends = [...new Set([...(state.me?.friends || []), peerUid])];
+  state.me = { ...(state.me || {}), uid: state.uid, friends };
+  state.cache.users.set(state.uid, state.me);
+  state.cache.users.delete(peerUid);
+  return true;
+};
+
+const removeOrbitFriend = async (peerUid) => {
+  if (!state.uid || !peerUid || peerUid === state.uid) return false;
+  const batch = writeBatch(db);
+  batch.update(doc(db, "users", state.uid), { friends: arrayRemove(peerUid) });
+  batch.update(doc(db, "users", peerUid), { friends: arrayRemove(state.uid) });
+  try {
+    await batch.commit();
+  } catch {
+    toast("Could not remove friend. Check your connection and try again.");
+    return false;
+  }
+  const friends = (state.me?.friends || []).filter((friendUid) => friendUid !== peerUid);
+  state.me = { ...(state.me || {}), uid: state.uid, friends };
+  state.cache.users.set(state.uid, state.me);
+  state.cache.users.delete(peerUid);
+  return true;
+};
+
+const orbitFriendControls = (user, { compact = false, stacked = false } = {}) => {
+  const peerUid = user?.uid;
+  if (!peerUid || peerUid === state.uid) return null;
+  let isFriend = (state.me?.friends || []).includes(peerUid);
+  const friendButton = el("button", {
+    class: `btn sm ${isFriend ? "ghost" : "primary"}`,
+    title: isFriend ? `Open ${user.name || "friend"} info` : `Add ${user.name || "user"} as a friend`,
+    onclick: async () => {
+      if (isFriend) {
+        location.hash = `#friends/${peerUid}`;
+        return;
+      }
+      friendButton.disabled = true;
+      friendButton.textContent = "Adding…";
+      const added = await addOrbitFriend(peerUid);
+      if (!added) {
+        friendButton.disabled = false;
+        friendButton.textContent = "Add friend";
+        return;
+      }
+      isFriend = true;
+      friendButton.className = "btn sm ghost";
+      friendButton.textContent = "Friends";
+      friendButton.title = `Open ${user.name || "friend"} info`;
+      location.hash = `#friends/${peerUid}`;
+    },
+  }, isFriend ? "Friends" : "Add friend");
+  const infoButton = el("button", {
+    class: "btn sm ghost",
+    title: `Info about ${user.name || "user"}`,
+    "aria-label": `Info about ${user.name || "user"}`,
+    onclick: () => { location.hash = `#friends/${peerUid}`; },
+  }, el("i", { class: "ri-information-line" }), compact ? "" : " Info");
+  return el("div", {
+    class: `orbit-user-actions${compact ? " compact" : ""}${stacked ? " stacked" : ""}`,
+  }, friendButton, infoButton);
+};
+
 const renderProfile = async (root, uid) => {
   const routeRenderToken = root._routeRenderToken;
   // Always use fresh data for own profile (bypass stale cache after Pro activation)
@@ -3997,62 +4043,52 @@ const renderProfile = async (root, uid) => {
     return;
   }
   const isMe = uid === state.uid;
-  let _iFollow = (state.me.following || []).includes(uid);
-  const canViewPrivateProfile = isMe || !u.privateAccount || _iFollow;
+  let _isFriend = (state.me?.friends || []).includes(uid);
+  const canViewPrivateProfile = isMe || !u.privateAccount || _isFriend || (state.me?.following || []).includes(uid);
 
   // Live-update follower count in-place — no full page re-render on follow/unfollow
   const followersCountEl = el("strong", {}, String((u.followers || []).length));
   const postsCountEl = el("strong", {}, String(u.postCount || 0));
 
-  let profileFollowBtn = null;
-  let compactFollowBtn = null;
-  const syncFollowButtons = () => {
-    [profileFollowBtn, compactFollowBtn].filter(Boolean).forEach((button) => {
-      button.textContent = _iFollow ? "Following" : "Follow";
-      button.className = `btn ${_iFollow ? "ghost" : "primary"}`;
+  let profileFriendBtn = null;
+  let compactFriendBtn = null;
+  let friendWriteInProgress = false;
+  const syncFriendButtons = () => {
+    [profileFriendBtn, compactFriendBtn].filter(Boolean).forEach((button) => {
+      button.disabled = false;
+      button.className = `btn ${_isFriend ? "ghost" : "primary"}${button === compactFriendBtn ? " compact-follow" : ""}`;
+      button.textContent = _isFriend ? "Friends" : "Add friend";
     });
   };
-  const followProfile = async () => {
-    const prev = _iFollow;
-    _iFollow = !_iFollow;
-    syncFollowButtons();
-    const curCount = parseInt(followersCountEl.textContent) || 0;
-    followersCountEl.textContent = String(Math.max(0, curCount + (_iFollow ? 1 : -1)));
-    const meRef = doc(db, "users", state.uid);
-    const themRef = doc(db, "users", uid);
-    const batch = writeBatch(db);
-    if (_iFollow) {
-      batch.update(meRef, { following: arrayUnion(uid) });
-      batch.update(themRef, { followers: arrayUnion(state.uid) });
-    } else {
-      batch.update(meRef, { following: arrayRemove(uid) });
-      batch.update(themRef, { followers: arrayRemove(state.uid) });
-    }
-    await batch.commit().catch(() => {
-      _iFollow = prev;
-      syncFollowButtons();
-      followersCountEl.textContent = String(curCount);
-      toast("Failed to update follow status");
+  const openFriendInfo = () => { location.hash = `#friends/${uid}`; };
+  const addFriendOrOpenPage = async () => {
+    if (_isFriend) { openFriendInfo(); return; }
+    if (friendWriteInProgress || isMe) return;
+    friendWriteInProgress = true;
+    [profileFriendBtn, compactFriendBtn].filter(Boolean).forEach((button) => {
+      button.disabled = true;
+      button.textContent = "Adding…";
     });
-    state.cache.users.delete(uid);
-    state.cache.users.delete(state.uid);
-    if (state.me) {
-      state.me.following = _iFollow
-        ? [...new Set([...(state.me.following || []), uid])]
-        : (state.me.following || []).filter((x) => x !== uid);
-    }
-    if (_iFollow) {
-      writeNotif(uid, "follow", {}).catch(() => {});
-      import("./notifications.js").then(({ notifyUser }) =>
-        notifyUser(uid, state.me?.name || "Someone", "started following you", "/#profile/" + state.uid, state.me?.photoURL || "")
-      ).catch(() => {});
-    }
-    if (u.privateAccount && _iFollow) router();
+    const added = await addOrbitFriend(uid);
+    friendWriteInProgress = false;
+    if (!added) { syncFriendButtons(); return; }
+    _isFriend = true;
+    syncFriendButtons();
+    openFriendInfo();
   };
   if (!isMe) {
-    profileFollowBtn = el("button", { class: `btn ${_iFollow ? "ghost" : "primary"}` }, _iFollow ? "Following" : "Follow");
-    profileFollowBtn.addEventListener("click", followProfile);
+    profileFriendBtn = el("button", {
+      class: `btn ${_isFriend ? "ghost" : "primary"}`,
+      onclick: addFriendOrOpenPage,
+    }, _isFriend ? "Friends" : "Add friend");
   }
+  const profileInfoBtn = !isMe
+    ? el("button", {
+        class: "btn ghost friend-info-btn",
+        title: "Open friend info",
+        onclick: openFriendInfo,
+      }, el("i", { class: "ri-information-line" }), " Info")
+    : null;
 
   const profileShell = el("div", { class: "profile-shell" });
   root.appendChild(profileShell);
@@ -4085,7 +4121,10 @@ const renderProfile = async (root, uid) => {
         el("div", { class: "profile-actions" },
           isMe
             ? el("button", { class: "btn ghost", onclick: () => openProfileEditModal() }, el("i", { class: "ri-edit-line" }), "Edit profile")
-            : profileFollowBtn,
+            : profileFriendBtn,
+          profileInfoBtn,
+          isMe ? el("button", { class: "btn ghost", onclick: () => { location.hash = "#friends"; } },
+            el("i", { class: "ri-group-line" }), "Friends") : null,
           !isMe && u.allowMessages !== false ? el("button", { class: "btn ghost", onclick: () => location.hash = `#chats/${uid}` },
             el("i", { class: "ri-chat-3-line" }), "Message") : null,
           isMe && !u.verified ? el("button", { class: "btn ghost", onclick: requestLocationVerification },
@@ -4112,12 +4151,14 @@ const renderProfile = async (root, uid) => {
     el("span", { class: "profile-compact-count" }, `${postsCountEl.textContent} posts`),
   );
   if (!isMe) {
-    compactFollowBtn = el("button", { class: `btn compact-follow ${_iFollow ? "ghost" : "primary"}` }, _iFollow ? "Following" : "Follow");
-    compactFollowBtn.addEventListener("click", followProfile);
-    compactBar.appendChild(compactFollowBtn);
+    compactFriendBtn = el("button", {
+      class: `btn compact-follow ${_isFriend ? "ghost" : "primary"}`,
+      onclick: addFriendOrOpenPage,
+    }, _isFriend ? "Friends" : "Add friend");
+    compactBar.appendChild(compactFriendBtn);
   }
   profileShell.appendChild(compactBar);
-  import("./character.js").then(({ mountProfileCharacter }) => {
+  import("./character.js?v=orbit-friends-fix-2").then(({ mountProfileCharacter }) => {
     if (routeRenderToken !== root._routeRenderToken || !profileShell.isConnected) return;
     profileCharacterCleanup.push(
       mountProfileCharacter(profileAvatar, {
@@ -4350,6 +4391,254 @@ const renderProfileByUsername = async (root, username) => {
   }
   const u = { uid: qs.docs[0].id, ...qs.docs[0].data() };
   renderProfile(root, u.uid);
+};
+
+const friendLastActive = (profile) => {
+  if (profile?.showOnline === false) return "Hidden by privacy settings";
+  if (profile?.online) return "Online now";
+  const raw = profile?.lastSeen;
+  const stamp = raw?.toMillis?.() || raw?.seconds * 1000 || (raw instanceof Date ? raw.getTime() : Date.parse(raw));
+  if (!Number.isFinite(stamp) || stamp <= 0) return "Activity unavailable";
+  const elapsed = Math.max(0, Date.now() - stamp);
+  if (elapsed < 60_000) return "Active just now";
+  if (elapsed < 3_600_000) return `Active ${Math.floor(elapsed / 60_000)} min ago`;
+  if (elapsed < 86_400_000) return `Active ${Math.floor(elapsed / 3_600_000)} hr ago`;
+  return `Last active ${new Date(stamp).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}`;
+};
+
+const friendLocationLabel = (profile, canSeeLocation) => {
+  if (!canSeeLocation) return "Visible to friends";
+  if (profile?.showLocation === false || !profile?.verified || !profile?.location) return "Not shared";
+  return profile.location.city || "Verified area";
+};
+
+const approximateFriendDistance = (first, second) => {
+  const a = first?.location;
+  const b = second?.location;
+  if (!first?.verified || !second?.verified || !a || !b ||
+      !Number.isFinite(Number(a.lat)) || !Number.isFinite(Number(a.lng)) ||
+      !Number.isFinite(Number(b.lat)) || !Number.isFinite(Number(b.lng))) return null;
+  const toRad = (value) => Number(value) * Math.PI / 180;
+  const lat1 = toRad(a.lat), lat2 = toRad(b.lat);
+  const dLat = lat2 - lat1, dLng = toRad(b.lng) - toRad(a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return Math.round(6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h)));
+};
+
+const renderFriends = async (root, peerUid = null) => {
+  const routeRenderToken = root._routeRenderToken;
+  const page = el("div", { class: "friends-page" });
+  root.appendChild(page);
+  const isDetail = Boolean(peerUid && peerUid !== state.uid);
+  page.appendChild(el("header", { class: "friends-page-head" },
+    isDetail
+      ? el("button", {
+          class: "icon-btn friends-page-back",
+          title: "Back to friends",
+          onclick: () => { location.hash = "#friends"; },
+        }, el("i", { class: "ri-arrow-left-line" }))
+      : el("span", { class: "friends-page-mark" }, el("i", { class: "ri-group-line" })),
+    el("div", {},
+      el("h1", {}, isDetail ? "Friend info" : "Friends"),
+      el("p", {}, isDetail ? "Your Orbit connection" : "People in your Orbit"),
+    ),
+  ));
+
+  if (!isDetail) {
+    const friendIds = [...new Set((state.me?.friends || []).filter((id) => id && id !== state.uid))];
+    let friends = [];
+    try {
+      friends = (await Promise.all(friendIds.map((id) => fetchUser(id)))).filter(Boolean);
+    } catch {
+      if (routeRenderToken === root._routeRenderToken) {
+        page.appendChild(el("div", { class: "friends-empty" },
+          el("i", { class: "ri-wifi-off-line" }),
+          el("h2", {}, "Couldn’t load friends"),
+          el("p", {}, "Check your connection and try again."),
+        ));
+      }
+      return;
+    }
+    if (routeRenderToken !== root._routeRenderToken || !page.isConnected) return;
+    if (!friends.length) {
+      page.appendChild(el("div", { class: "friends-empty" },
+        el("i", { class: "ri-user-heart-line" }),
+        el("h2", {}, "Your Orbit starts with a friend"),
+        el("p", {}, "Open someone’s profile and choose Add friend to meet them here."),
+        el("button", { class: "btn primary", onclick: () => { location.hash = "#explore"; } },
+          el("i", { class: "ri-compass-3-line" }), " Explore people"),
+      ));
+      return;
+    }
+
+    const list = el("div", { class: "friends-list" });
+    page.appendChild(list);
+    friends.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+    friends.forEach((friend) => {
+      const infoButton = el("button", {
+        class: "btn ghost",
+        title: `Info about ${friend.name || "friend"}`,
+        onclick: () => { location.hash = `#friends/${friend.uid}`; },
+      }, el("i", { class: "ri-information-line" }), " Info");
+      const messageButton = friend.allowMessages !== false
+        ? el("button", {
+            class: "btn primary",
+            title: `Message ${friend.name || "friend"}`,
+            onclick: () => { location.hash = `#chats/${friend.uid}`; },
+          }, el("i", { class: "ri-chat-3-line" }))
+        : null;
+      list.appendChild(el("article", { class: "friend-list-card" },
+        el("img", { class: "avatar md", src: avatarFor(friend), alt: `${friend.name || "Friend"} profile photo` }),
+        el("div", { class: "friend-list-meta" },
+          el("strong", {}, friend.name || "Orbit friend"),
+          el("span", {}, `@${friend.username || "member"} · ${friendLastActive(friend)}`),
+        ),
+        el("div", { class: "friend-list-actions" }, infoButton, messageButton),
+      ));
+    });
+    return;
+  }
+
+  let peer;
+  try {
+    peer = await fetchUser(peerUid);
+  } catch {
+    peer = null;
+  }
+  if (routeRenderToken !== root._routeRenderToken || !page.isConnected) return;
+  if (!peer) {
+    page.appendChild(el("div", { class: "friends-empty" },
+      el("i", { class: "ri-user-unfollow-line" }),
+      el("h2", {}, "This profile isn’t available"),
+      el("p", {}, "The account may have been removed or is temporarily unavailable."),
+      el("button", { class: "btn ghost", onclick: () => { location.hash = "#friends"; } }, "Back to friends"),
+    ));
+    return;
+  }
+
+  const me = state.me || await fetchUser(state.uid);
+  if (routeRenderToken !== root._routeRenderToken || !page.isConnected) return;
+  const isFriend = (me?.friends || []).includes(peerUid);
+  const canSeePeerDetails = !peer.privateAccount || isFriend || (me?.following || []).includes(peerUid);
+  const leftCharacter = el("div", { class: "friend-character-model friend-character-left" });
+  const rightCharacter = el("div", { class: "friend-character-model friend-character-right" });
+  const scene = el("section", {
+    class: "friend-meet-scene",
+    "aria-label": `A green Orbit scene with ${me?.name || "you"} and ${peer.name || "your friend"}`,
+  },
+    el("div", { class: "friend-scene-sun", "aria-hidden": "true" }),
+    el("div", { class: "friend-scene-cloud cloud-a", "aria-hidden": "true" }),
+    el("div", { class: "friend-scene-cloud cloud-b", "aria-hidden": "true" }),
+    el("div", { class: "friend-scene-tree tree-a", "aria-hidden": "true" }),
+    el("div", { class: "friend-scene-tree tree-b", "aria-hidden": "true" }),
+    el("div", { class: "friend-scene-road", "aria-hidden": "true" }),
+    el("div", { class: "friend-meet-badge" }, isFriend ? "Orbit friends" : "Friend preview"),
+    el("div", { class: "friend-character-slot left" },
+      leftCharacter,
+      el("div", { class: "friend-character-label" }, me?.name || "You"),
+    ),
+    el("div", { class: "friend-character-slot right" },
+      rightCharacter,
+      el("div", { class: "friend-character-label" }, peer.name || "Orbit friend"),
+    ),
+  );
+  page.appendChild(scene);
+
+  const actions = el("div", { class: "friend-detail-actions" });
+  if (isFriend) {
+    actions.appendChild(el("button", {
+      class: "btn ghost",
+      onclick: async () => {
+        if (!confirm(`Remove ${peer.name || "this friend"} from your friends?`)) return;
+        if (await removeOrbitFriend(peerUid)) location.hash = "#friends";
+      },
+    }, el("i", { class: "ri-user-unfollow-line" }), " Remove friend"));
+  } else {
+    actions.appendChild(el("button", {
+      class: "btn primary",
+      onclick: async (event) => {
+        const button = event.currentTarget;
+        button.disabled = true;
+        button.textContent = "Adding…";
+        if (await addOrbitFriend(peerUid)) router();
+        else { button.disabled = false; button.textContent = "Add friend"; }
+      },
+    }, el("i", { class: "ri-user-add-line" }), " Add friend"));
+  }
+  actions.appendChild(el("button", {
+    class: "btn ghost",
+    onclick: () => { location.hash = `#profile/${peerUid}`; },
+  }, el("i", { class: "ri-user-line" }), " View profile"));
+  if (peer.allowMessages !== false) {
+    actions.appendChild(el("button", {
+      class: "btn primary",
+      onclick: () => { location.hash = `#chats/${peerUid}`; },
+    }, el("i", { class: "ri-chat-3-line" }), " Message"));
+  }
+  page.appendChild(actions);
+
+  const infoRow = (label, value) => el("div", { class: "friend-info-row" },
+    el("span", {}, label),
+    el("span", {}, value || "—"),
+  );
+  const aboutCard = el("article", { class: "friend-info-card" },
+    el("h3", {}, el("i", { class: "ri-user-line" }), " About"),
+    el("div", { class: "friend-info-bio" }, canSeePeerDetails
+      ? (peer.bio || "No bio added yet.")
+      : "Private profile. Add each other as friends to see more details."),
+    infoRow("Username", peer.username ? `@${peer.username}` : "—"),
+    canSeePeerDetails && peer.birthday ? infoRow("Birthday", formatProfileBirthday(peer.birthday) || "—") : null,
+    infoRow("Member since", peer.createdAt?.toDate
+      ? peer.createdAt.toDate().toLocaleDateString([], { month: "long", year: "numeric" })
+      : "—"),
+  );
+  const activityCard = el("article", { class: "friend-info-card" },
+    el("h3", {}, el("i", { class: "ri-pulse-line" }), " Activity"),
+    infoRow("Last active", canSeePeerDetails ? friendLastActive(peer) : "Available to friends"),
+    infoRow("Connection", isFriend ? "Friends on Orbit" : "Not friends yet"),
+    canSeePeerDetails && peer.verified ? infoRow("Verification", "Location verified") : null,
+  );
+
+  const canSeeLocations = isFriend;
+  const locationPair = el("div", { class: "friend-location-pair" },
+    el("div", { class: "friend-location-person" },
+      el("img", { class: "avatar", src: avatarFor(me), alt: "" }),
+      el("div", {}, el("strong", {}, me?.name || "You"), el("span", {}, friendLocationLabel(me, true))),
+    ),
+    el("div", { class: "friend-location-person" },
+      el("img", { class: "avatar", src: avatarFor(peer), alt: "" }),
+      el("div", {}, el("strong", {}, peer.name || "Friend"), el("span", {}, friendLocationLabel(peer, canSeeLocations))),
+    ),
+  );
+  const distance = canSeeLocations ? approximateFriendDistance(me, peer) : null;
+  const locationCard = el("article", { class: "friend-info-card" },
+    el("h3", {}, el("i", { class: "ri-map-pin-line" }), " Location"),
+    locationPair,
+    distance == null ? null : el("div", { class: "friend-distance" }, `About ${distance} km apart · approximate`),
+  );
+  page.appendChild(el("section", { class: "friend-info-grid" }, aboutCard, activityCard, locationCard));
+
+  const characterCleanup = [];
+  root._friendsCleanup = () => characterCleanup.forEach((cleanup) => cleanup());
+  import("./character.js?v=orbit-friends-fix-2").then(({ mountProfileCharacter }) => {
+    if (routeRenderToken !== root._routeRenderToken || !page.isConnected) return;
+    characterCleanup.push(
+      mountProfileCharacter(leftCharacter, {
+        photoURL: avatarFor(me),
+        alt: `${me?.name || "You"} character`,
+        scrollRoot: root,
+        rotationY: Math.PI + Math.PI / 4,
+        waveOnInitialView: true,
+      }),
+      mountProfileCharacter(rightCharacter, {
+        photoURL: avatarFor(peer),
+        alt: `${peer.name || "Friend"} character`,
+        scrollRoot: root,
+        rotationY: Math.PI - Math.PI / 4,
+        waveOnInitialView: true,
+      }),
+    );
+  }).catch((error) => console.warn("Orbit friend characters failed to load.", error));
 };
 
 // =========================================================================
@@ -5433,33 +5722,11 @@ const renderInlinePeopleSuggestion = () => {
     _all.forEach((u) => {
       if (added >= 6) return;
       added++;
-      let iFollow = (state.me?.following || []).includes(u.uid);
-      const btn = el("button", {
-        class: `btn sm ${iFollow ? "ghost" : "primary"}`,
-        onclick: async (e) => {
-          const meRef = doc(db, "users", state.uid);
-          const themRef = doc(db, "users", u.uid);
-          const batch = writeBatch(db);
-          if (iFollow) {
-            batch.update(meRef, { following: arrayRemove(u.uid) });
-            batch.update(themRef, { followers: arrayRemove(state.uid) });
-          } else {
-            batch.update(meRef, { following: arrayUnion(u.uid) });
-            batch.update(themRef, { followers: arrayUnion(state.uid) });
-          }
-          await batch.commit();
-          state.cache.users.delete(u.uid);
-          state.cache.users.delete(state.uid);
-          iFollow = !iFollow;
-          btn.textContent = iFollow ? "Following" : "Follow";
-          btn.className = `btn sm ${iFollow ? "ghost" : "primary"}`;
-        }
-      }, iFollow ? "Following" : "Follow");
       scroller.appendChild(el("div", { class: "feed-sugg-person" },
         el("img", { class: "avatar md", src: avatarFor(u), onclick: () => location.hash = `#profile/${u.uid}` }),
         el("div", { class: "feed-sugg-name" }, u.name || "User"),
         el("div", { class: "feed-sugg-meta" }, "@" + (u.username || "")),
-        btn
+        orbitFriendControls(u, { compact: true, stacked: true })
       ));
     });
     if (added === 0) card.remove();
@@ -5973,7 +6240,6 @@ const startSuggestions = () => {
       .filter(u => u.uid !== state.uid);
     for (let i = _all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [_all[i], _all[j]] = [_all[j], _all[i]]; }
     _all.slice(0, 5).forEach((u) => {
-      const iFollow = (state.me.following || []).includes(u.uid);
       list.appendChild(el("div", { class: "suggest-row" },
         el("img", { class: "avatar sm", src: avatarFor(u), onclick: () => location.hash = `#profile/${u.uid}` }),
         el("div", { class: "meta" },
@@ -5981,21 +6247,7 @@ const startSuggestions = () => {
             u.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null),
           el("div", { class: "uname" }, "@" + u.username),
         ),
-        el("button", { class: `btn sm ${iFollow ? "ghost" : "primary"}`, onclick: async () => {
-          const meRef = doc(db, "users", state.uid);
-          const themRef = doc(db, "users", u.uid);
-          const batch = writeBatch(db);
-          if (iFollow) {
-            batch.update(meRef, { following: arrayRemove(u.uid) });
-            batch.update(themRef, { followers: arrayRemove(state.uid) });
-          } else {
-            batch.update(meRef, { following: arrayUnion(u.uid) });
-            batch.update(themRef, { followers: arrayUnion(state.uid) });
-          }
-          await batch.commit();
-          state.cache.users.delete(u.uid);
-          state.cache.users.delete(state.uid);
-        }}, iFollow ? "Following" : "Follow"),
+        orbitFriendControls(u, { compact: true, stacked: true }),
       ));
     });
   });

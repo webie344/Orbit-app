@@ -4,7 +4,7 @@ import { clone as cloneSkinnedModel } from "three/addons/utils/SkeletonUtils.js"
 
 // game.js loads this same model name from its app directory.
 const MODEL_URL = new URL("./Soldier.glb", import.meta.url).href;
-const CHARACTER_HEIGHT = 1.75;
+const CHARACTER_HEIGHT = 1.85;
 const WAVE_DURATION_MS = 1450;
 
 let characterAssetPromise = null;
@@ -46,7 +46,13 @@ const findFallbackWaveBone = (root) => {
  * The existing profile image remains visible until Soldier.glb loads.
  * Returns a disposer for route changes.
  */
-export function mountProfileCharacter(host, { photoURL = "", alt = "3D character avatar", scrollRoot = null } = {}) {
+export function mountProfileCharacter(host, {
+  photoURL = "",
+  alt = "3D character avatar",
+  scrollRoot = null,
+  rotationY = Math.PI,
+  waveOnInitialView = false,
+} = {}) {
   if (!host) return () => {};
 
   host.classList.add("orbit-character");
@@ -75,7 +81,7 @@ export function mountProfileCharacter(host, { photoURL = "", alt = "3D character
   scene.add(fillLight);
 
   const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 30);
-  camera.position.set(0, 0.94, 3.35);
+  camera.position.set(0, 0.94, 3.0);
   camera.lookAt(0, 0.93, 0);
 
   const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches || false;
@@ -93,6 +99,7 @@ export function mountProfileCharacter(host, { photoURL = "", alt = "3D character
   let disposed = false;
   let animationFrame = 0;
   let lastFrameAt = 0;
+  let waveWhenReady = false;
   let failedToLoad = false;
 
   const resize = () => {
@@ -132,7 +139,7 @@ export function mountProfileCharacter(host, { photoURL = "", alt = "3D character
     const now = performance.now();
     if (now - lastWaveAt < 1100) return;
     lastWaveAt = now;
-    fallbackWaveStartedAt = now;
+    if (fallbackWaveBone) fallbackWaveStartedAt = now;
 
     if (waveAction) {
       waveAction.reset();
@@ -144,9 +151,10 @@ export function mountProfileCharacter(host, { photoURL = "", alt = "3D character
     }
   };
 
-  const setupModel = (asset) => {
+  const setupModel = (asset, waveOnReady = false) => {
     const model = cloneSkinnedModel(asset.scene);
-    model.rotation.y = Math.PI;
+    // Match the exact Soldier.glb orientation used by game.js.
+    model.rotation.y = rotationY;
     model.updateMatrixWorld(true);
 
     const bounds = new THREE.Box3().setFromObject(model);
@@ -191,8 +199,16 @@ export function mountProfileCharacter(host, { photoURL = "", alt = "3D character
       }
     }
 
+    if (waveAction && idleAction) {
+      mixer.addEventListener("finished", (event) => {
+        if (event.action !== waveAction) return;
+        idleAction.reset().fadeIn(0.2).play();
+        waveAction.fadeOut(0.2);
+      });
+    }
+
     host.classList.add("model-ready");
-    if (!prefersReducedMotion) playWave();
+    if (waveOnReady && !prefersReducedMotion) playWave();
     startAnimationLoop();
   };
 
@@ -231,20 +247,25 @@ export function mountProfileCharacter(host, { photoURL = "", alt = "3D character
     }
   }
 
-  const enterView = () => {
+  const enterView = (shouldWave = false) => {
     if (disposed || visible) return;
     visible = true;
+    if (shouldWave) waveWhenReady = true;
     if (!createRenderer()) return;
     resize();
     if (modelRoot) {
-      playWave();
+      if (shouldWave) playWave();
       startAnimationLoop();
       return;
     }
     if (failedToLoad) return;
     loadCharacterAsset()
       .then((asset) => {
-        if (!disposed && visible && !modelRoot) setupModel(asset);
+        if (!disposed && visible && !modelRoot) {
+          const waveOnReady = waveWhenReady;
+          waveWhenReady = false;
+          setupModel(asset, waveOnReady);
+        }
       })
       .catch((error) => {
         failedToLoad = true;
@@ -261,11 +282,23 @@ export function mountProfileCharacter(host, { photoURL = "", alt = "3D character
   };
 
   let intersectionObserver = null;
+  let hasBeenOutsideView = false;
+  let firstIntersectionUpdate = true;
   if ("IntersectionObserver" in window) {
     try {
       intersectionObserver = new IntersectionObserver((entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) enterView();
-        else leaveView();
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            const shouldWave = hasBeenOutsideView || (firstIntersectionUpdate && waveOnInitialView);
+            firstIntersectionUpdate = false;
+            hasBeenOutsideView = false;
+            enterView(shouldWave);
+          } else {
+            firstIntersectionUpdate = false;
+            hasBeenOutsideView = true;
+            leaveView();
+          }
+        });
       }, { root: scrollRoot || null, threshold: 0.3 });
       intersectionObserver.observe(host);
     } catch {
