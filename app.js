@@ -4627,14 +4627,14 @@ const renderFriends = async (root, peerUid = null) => {
         photoURL: avatarFor(me),
         alt: `${me?.name || "You"} character`,
         scrollRoot: root,
-        rotationY: Math.PI + Math.PI / 4,
+        rotationY: Math.PI  / 2,
         waveOnInitialView: true,
       }),
       mountProfileCharacter(rightCharacter, {
         photoURL: avatarFor(peer),
         alt: `${peer.name || "Friend"} character`,
         scrollRoot: root,
-        rotationY: Math.PI - Math.PI / 4,
+        rotationY: Math.PI  / 2,
         waveOnInitialView: true,
       }),
     );
