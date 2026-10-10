@@ -4,7 +4,7 @@ import {
   addDoc, collection, deleteDoc, doc, increment, onSnapshot, query,
   serverTimestamp, setDoc, updateDoc, where,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
-import { avatarFor, db, state } from "./app.js";
+import { avatarFor, db, state } from "./app.js?v=orbit-killers-ops-1";
 
 const GAME_ID = "killers-ops";
 const MAP_HALF = 200;
@@ -70,6 +70,7 @@ class KillersOps {
     this.pitch = -0.04;
     this.pos = new THREE.Vector3(0, 0, 24);
     this.velocity = new THREE.Vector3();
+    this.onGround = true;
     this.lastFrame = performance.now();
     this.lastHeartbeat = 0;
     this.reloadUntil = 0;
@@ -515,6 +516,7 @@ class KillersOps {
     group.userData.photo = profile.photoURL || "";
     if (profile.avatarModelUrl) {
       group.visible = false;
+      group.userData.avatarModelPending = true;
       this.loadAvatarModel(group, profile.avatarModelUrl);
     }
     return group;
@@ -548,9 +550,13 @@ class KillersOps {
           }
         });
       group.add(model);
+      group.userData.avatarModelLoaded = true;
+      group.userData.avatarModelPending = false;
       group.visible = true;
     }, undefined, () => {
-      if (group.parent) group.visible = true;
+      group.userData.avatarModelFailed = true;
+      group.userData.avatarModelPending = false;
+      group.visible = true;
     });
   }
 
@@ -746,7 +752,10 @@ class KillersOps {
       if (key === "r") this.reload();
       if (key === "shift") this.sprinting = true;
       if (key === "escape" && document.pointerLockElement) document.exitPointerLock?.();
-      if (key === " " && this.active && !this.dead) this.jump();
+      if (key === " " && this.active && !this.dead) {
+        event.preventDefault();
+        this.jump();
+      }
     });
     on(window, "keyup", (event) => {
       this.keys.delete(event.key.toLowerCase());
@@ -895,14 +904,14 @@ class KillersOps {
   }
 
   async publishPlayer(joined = false) {
-    if (!db || !this.uid || !this.active) return;
+    if (!db || !this.uid || (!this.active && !this.dead && !joined)) return;
     const ref = doc(db, "game_players", this.uid);
     const record = {
       id: this.uid, gameId: GAME_ID, name: this.name,
       username: this.profile.username || "",
       photoURL: this.photoURL,
       avatarModelUrl: this.avatarModelUrl || "",
-      position: { x: this.pos.x, y: 0, z: this.pos.z },
+      position: { x: this.pos.x, y: this.pos.y, z: this.pos.z },
       rotation: { y: this.yaw, x: this.pitch },
       health: this.health, ammo: this.ammo, kills: this.kills,
       alive: !this.dead, isMoving: this.move.x !== 0 || this.move.y !== 0,
@@ -937,7 +946,8 @@ class KillersOps {
       player.target.set(data.position.x, Number(data.position.y) || 0, data.position.z);
     }
     player.yaw = Number(data.rotation?.y) || 0;
-    player.avatar.visible = data.alive !== false;
+    player.avatar.visible = data.alive !== false
+      && (!data.avatarModelUrl || player.avatar.userData.avatarModelLoaded || player.avatar.userData.avatarModelFailed);
     player.avatar.userData.displayName = data.name || "Operator";
   }
 
@@ -987,10 +997,16 @@ class KillersOps {
     if (this.isFree(nx, this.pos.z)) this.pos.x = nx;
     const nz = this.pos.z + dz;
     if (this.isFree(this.pos.x, nz)) this.pos.z = nz;
+    this.velocity.y -= 14.5 * dt;
+    this.pos.y = Math.max(0, this.pos.y + this.velocity.y * dt);
+    if (this.pos.y === 0) {
+      this.velocity.y = 0;
+      this.onGround = true;
+    }
     if (this.localAvatar) {
       this.localAvatar.position.lerp(this.pos, Math.min(1, dt * 13));
       this.localAvatar.rotation.y = this.yaw;
-      this.localAvatar.position.y = 0;
+      this.localAvatar.position.y = this.pos.y;
       if (this.localAvatar.children[0]) {
         const moving = length > 0.08;
         const sway = moving ? Math.sin(performance.now() * (run ? 0.015 : 0.01)) * 0.045 : 0;
@@ -1137,6 +1153,8 @@ class KillersOps {
     this.health = MAX_HEALTH;
     this.ammo = MAGAZINE_SIZE;
     this.pos.set((Math.random() - 0.5) * 56, 0, (Math.random() - 0.5) * 56);
+    this.velocity.set(0, 0, 0);
+    this.onGround = true;
     this.ui.koDeath.hidden = true;
     this.ui.koDeath.classList.remove("show");
     this.ui.koLeader.textContent = "BACK IN THE FIGHT";
@@ -1176,7 +1194,9 @@ class KillersOps {
   }
 
   jump() {
+    if (!this.onGround) return;
     this.velocity.y = 5.2;
+    this.onGround = false;
   }
 
   playGunSound() {

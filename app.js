@@ -1709,7 +1709,7 @@ const router = () => {
     case "profile-u":  renderProfileByUsername(content, rest[0]); break;
     case "post":       renderPostDetail(content, rest[0]); break;
     case "games":
-      import("./game.js?v=orbit-killers-ops-1").then(m => {
+      import("./game.js?v=orbit-killers-ops-2").then(m => {
         if (content._currentRoute === "games") m.renderGames(content);
       }).catch(error => {
         console.error("Could not open Orbit Games:", error);
