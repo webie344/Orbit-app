@@ -172,7 +172,7 @@ class KillersOps {
       antialias: true, alpha: false, powerPreference: "high-performance",
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.6));
-    this.renderer.setSize(100, 100);
+    this.renderer.setSize(1, 1, false);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -645,12 +645,13 @@ class KillersOps {
     let joyPointer = null;
     const moveJoy = (event) => {
       const rect = joystick.getBoundingClientRect();
-      const dx0 = event.clientX - (rect.left + rect.width / 2);
-      const dy0 = event.clientY - (rect.top + rect.height / 2);
+      let dx0 = event.clientX - (rect.left + rect.width / 2);
+      let dy0 = event.clientY - (rect.top + rect.height / 2);
+      if (this.isPortraitFallback()) [dx0, dy0] = [dy0, -dx0];
       const length = Math.hypot(dx0, dy0);
       const dx = length > 42 ? dx0 * 42 / length : dx0;
       const dy = length > 42 ? dy0 * 42 / length : dy0;
-      thumb.style.transform = `translate(${dx}px, ${dy}px)`;
+      thumb.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
       this.move.x = clamp(dx / 42, -1, 1);
       this.move.y = clamp(-dy / 42, -1, 1);
     };
@@ -703,7 +704,8 @@ class KillersOps {
       } else if (event.pointerId === aimPointer && lastLook) {
         const dx = event.clientX - lastLook.x;
         const dy = event.clientY - lastLook.y;
-        this.turn(dx, dy);
+        const delta = this.mapScreenDelta(dx, dy);
+        this.turn(delta.x, delta.y);
         lastLook = { x: event.clientX, y: event.clientY };
       }
     });
@@ -772,9 +774,18 @@ class KillersOps {
   }
 
   turn(dx, dy) {
-    const sens = this.isAiming ? 0.0015 : 0.0025;
+    const sens = this.isAiming ? 0.0024 : 0.006;
     this.yaw -= dx * sens;
-    this.pitch = clamp(this.pitch - dy * sens, -0.48, 0.44);
+    this.pitch = clamp(this.pitch - dy * sens, -0.5, 0.6);
+  }
+
+  isPortraitFallback() {
+    return this.game.classList.contains("ko-rotate-fallback")
+      && window.matchMedia?.("(orientation: portrait)").matches;
+  }
+
+  mapScreenDelta(dx, dy) {
+    return this.isPortraitFallback() ? { x: dy, y: -dx } : { x: dx, y: dy };
   }
 
   deploy() {
@@ -812,9 +823,12 @@ class KillersOps {
 
   resize() {
     if (!this.renderer || !this.sceneHost) return;
-    const rect = this.sceneHost.getBoundingClientRect();
-    const w = Math.max(200, rect.width || window.innerWidth);
-    const h = Math.max(140, rect.height || window.innerHeight);
+    if (!this.resizeObserver && "ResizeObserver" in window) {
+      this.resizeObserver = new ResizeObserver(() => this.resize());
+      this.resizeObserver.observe(this.sceneHost);
+    }
+    const w = Math.max(200, this.sceneHost.clientWidth || this.game.clientWidth || window.innerWidth);
+    const h = Math.max(140, this.sceneHost.clientHeight || this.game.clientHeight || window.innerHeight);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h, false);
@@ -991,8 +1005,8 @@ class KillersOps {
     const speed = run ? 12.2 : 7.0;
     const sin = Math.sin(this.yaw);
     const cos = Math.cos(this.yaw);
-    const dx = (this.temp.x * cos - this.temp.z * sin) * speed * dt;
-    const dz = (this.temp.x * sin + this.temp.z * cos) * speed * dt;
+    const dx = (this.temp.x * cos + this.temp.z * sin) * speed * dt;
+    const dz = (-this.temp.x * sin + this.temp.z * cos) * speed * dt;
     const nx = this.pos.x + dx;
     if (this.isFree(nx, this.pos.z)) this.pos.x = nx;
     const nz = this.pos.z + dz;
@@ -1019,21 +1033,16 @@ class KillersOps {
   updateCamera() {
     const sin = Math.sin(this.yaw);
     const cos = Math.cos(this.yaw);
-    const distance = this.isAiming ? 2.15 : 4.25;
-    const shoulder = this.isAiming ? 0.52 : 0.82;
-    const desired = new THREE.Vector3(
-      this.pos.x + sin * distance + cos * shoulder,
-      this.pos.y + (this.isAiming ? 1.9 : 2.65),
-      this.pos.z + cos * distance - sin * shoulder,
-    );
-    this.camera.position.lerp(desired, 0.18);
-    const target = new THREE.Vector3(
-      this.pos.x - sin * 4,
-      this.pos.y + 1.48 + this.pitch * 2.2,
-      this.pos.z - cos * 4,
-    );
+    const forward = new THREE.Vector3(-sin, 0, -cos);
+    const distance = this.isAiming ? 1.8 : 3.0;
+    const cameraHeight = this.isAiming ? 1.9 : 2.0;
+    const lookHeight = this.isAiming ? 1.3 : 1.2;
+    this.camera.position.copy(this.pos).add(new THREE.Vector3(0, cameraHeight, 0))
+      .addScaledVector(forward, -distance);
+    const target = this.pos.clone().add(new THREE.Vector3(0, lookHeight + this.pitch * 4, 0))
+      .addScaledVector(forward, 3);
     this.camera.lookAt(target);
-    this.camera.fov += ((this.isAiming ? 50 : 68) - this.camera.fov) * 0.16;
+    this.camera.fov += ((this.isAiming ? 45 : 70) - this.camera.fov) * 0.15;
     this.camera.updateProjectionMatrix();
   }
 
@@ -1405,6 +1414,7 @@ class KillersOps {
     cancelAnimationFrame(this.raf);
     clearInterval(this.respawnTicker);
     this.cleanupFns.forEach((fn) => fn());
+    this.resizeObserver?.disconnect();
     this.subscriptions.forEach((unsubscribe) => unsubscribe());
     this.subscriptions = [];
     if (this.uid && db) deleteDoc(doc(db, "game_players", this.uid)).catch(() => {});
