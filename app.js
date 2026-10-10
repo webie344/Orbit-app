@@ -1605,7 +1605,7 @@ $("#notifBtn").addEventListener("click", () => { location.hash = "#notifications
 // 7. ROUTER
 // =========================================================================
 // "reels" removed — videos live in the feed as regular posts
-const routes = ["feed", "chats", "friends", "ai-chat", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn"];
+const routes = ["feed", "chats", "friends", "ai-chat", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn", "games"];
 
 // Feed DOM caching — lets us restore the feed instantly when navigating
 // back from a post without re-rendering or re-shuffling.
@@ -1658,6 +1658,10 @@ const router = () => {
 
   if (content._groupCityCleanup) { content._groupCityCleanup(); content._groupCityCleanup = null; }
   if (content._groupRoomCleanup) { content._groupRoomCleanup(); content._groupRoomCleanup = null; }
+  if (content._gameCleanup) {
+    content._gameCleanup();
+    content._gameCleanup = null;
+  }
   content.innerHTML = "";
   content._currentRoute = target;
 
@@ -1704,6 +1708,14 @@ const router = () => {
     case "profile":    renderProfile(content, rest[0] || state.uid); break;
     case "profile-u":  renderProfileByUsername(content, rest[0]); break;
     case "post":       renderPostDetail(content, rest[0]); break;
+    case "games":
+      import("./game.js?v=orbit-killers-ops-1").then(m => {
+        if (content._currentRoute === "games") m.renderGames(content);
+      }).catch(error => {
+        console.error("Could not open Orbit Games:", error);
+        content.innerHTML = '<div style="padding:32px;color:var(--text);">Games could not load. Check that game.js is beside app.js.</div>';
+      });
+      break;
     case "spaces":         import("./features.js").then(m => rest[0] ? m.renderSpacePage(content, rest[0]) : m.renderSpaces(content)); break;
     case "challenges":     import("./features.js").then(m => m.renderChallenges(content)); break;
     case "mentorship":     import("./features.js").then(m => m.renderMentorship(content)); break;
