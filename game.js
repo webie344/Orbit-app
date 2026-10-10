@@ -13,6 +13,10 @@ const PLAYER_HEIGHT = 1.8;
 const FIRE_RATE_MS = 155;
 const MAGAZINE_SIZE = 30;
 const MAX_HEALTH = 100;
+
+// Resolve asset URLs relative to THIS module, exactly like character.js does.
+const SOLDIER_URL = new URL("./Soldier.glb", import.meta.url).href;
+const RIFLE_URL   = new URL("./Rifle.glb",   import.meta.url).href;
 const BUILDING_MODELS = [
   "building-a.glb", "building-b.glb", "building-c.glb", "building-d.glb",
   "building-e.glb", "building-f.glb", "building-g.glb", "building-h.glb",
@@ -85,6 +89,14 @@ class KillersOps {
     this.raycaster = new THREE.Raycaster();
     this.clock = new THREE.Clock();
     this.photoTextures = new Map();
+
+    // Animation state
+    this.animState = null;
+    this.overrideAnim = null;
+    this.overrideUntil = 0;
+    this.walkPhase = 0;
+    this.soldierTemplate = null;
+
     this.buildInterface();
     this.makeScene();
     this.makeLocalAvatar();
@@ -396,7 +408,8 @@ class KillersOps {
     for (const path of selected) {
       if (!this.running) return;
       try {
-        const gltf = await new Promise((resolve, reject) => loader.load(path, resolve, undefined, reject));
+        const url = new URL(`./${path}`, import.meta.url).href;
+        const gltf = await new Promise((resolve, reject) => loader.load(url, resolve, undefined, reject));
         gltf.scene.traverse((node) => {
           if (node.isMesh) {
             node.castShadow = true;
@@ -407,20 +420,23 @@ class KillersOps {
         const matching = this.buildings.filter((b) => b.assetName === path);
         matching.forEach((building, index) => this.swapInBuilding(building, gltf.scene, index));
       } catch {
-        // The source game's GLBs are optional; the bundled procedural city is the fallback.
+        // GLB optional; procedural city is the fallback.
       }
     }
     try {
-      const gltf = await new Promise((resolve, reject) => loader.load("Rifle.glb", resolve, undefined, reject));
+      const gltf = await new Promise((resolve, reject) => loader.load(RIFLE_URL, resolve, undefined, reject));
       if (this.running) this.swapWeapon(gltf.scene);
     } catch {
-      // Use the built-in rifle model when Rifle.glb isn't beside the app.
+      // Procedural rifle is the fallback.
     }
     try {
-      const gltf = await new Promise((resolve, reject) => loader.load("Soldier.glb", resolve, undefined, reject));
-      if (this.running && gltf.scene) this.soldierTemplate = gltf.scene;
-    } catch {
-      // Character cards and procedural operators need no extra download.
+      const gltf = await new Promise((resolve, reject) => loader.load(SOLDIER_URL, resolve, undefined, reject));
+      if (this.running && gltf.scene) {
+        this.soldierTemplate = { scene: gltf.scene, animations: gltf.animations || [] };
+        this.attachSoldierToLocalAvatar();
+      }
+    } catch (error) {
+      console.warn("Killers Ops: Soldier.glb could not be loaded.", error);
     }
   }
 
@@ -480,12 +496,16 @@ class KillersOps {
       leg.position.set(side * 0.19, 0.38, 0);
       leg.castShadow = true;
       leg.userData.isDefaultBody = true;
+      leg.userData.leg = true;
+      leg.userData.side = side;
       group.add(leg);
       const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.13, 0.48, 3, 7), vestMat);
       arm.position.set(side * 0.45, 1.17, -0.04);
       arm.rotation.z = side * -0.2;
       arm.castShadow = true;
       arm.userData.isDefaultBody = true;
+      arm.userData.arm = true;
+      arm.userData.side = side;
       group.add(arm);
       const boot = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.17, 0.42), bootsMat);
       boot.position.set(side * 0.19, 0.11, 0.045);
@@ -514,6 +534,15 @@ class KillersOps {
     group.userData.displayName = display.name || "Operator";
     group.userData.uid = display.uid || "";
     group.userData.photo = profile.photoURL || "";
+
+    // 180° wrapper so the visual front of any body aligns with the group's -Z forward,
+    // exactly like character.js does with `model.rotation.y = rotationY`.
+    const facing = new THREE.Group();
+    facing.rotation.y = Math.PI;
+    [...group.children].forEach((c) => facing.add(c));
+    group.add(facing);
+    group.userData.facing = facing;
+
     if (profile.avatarModelUrl) {
       group.visible = false;
       group.userData.avatarModelPending = true;
@@ -539,17 +568,18 @@ class KillersOps {
           n.receiveShadow = true;
         }
       });
-      group.children
-        .filter((child) => child.userData.isDefaultBody || child.userData.isAvatarPortrait || child.userData.isAvatarRing)
+      const facing = group.userData.facing || group;
+      facing.children
+        .filter((child) => child.userData.isDefaultBody || child.userData.isAvatarPortrait)
         .forEach((child) => {
-          group.remove(child);
+          facing.remove(child);
           child.geometry?.dispose?.();
           if (child.material) {
             const materials = Array.isArray(child.material) ? child.material : [child.material];
             materials.forEach((material) => material.dispose?.());
           }
         });
-      group.add(model);
+      facing.add(model);
       group.userData.avatarModelLoaded = true;
       group.userData.avatarModelPending = false;
       group.visible = true;
@@ -577,7 +607,9 @@ class KillersOps {
       teamColor: 0x806cff,
     }, true);
     this.localAvatar.position.copy(this.pos);
+    this.localAvatar.rotation.y = this.yaw;
     this.scene.add(this.localAvatar);
+    this.animState = { group: this.localAvatar, currentActionName: null };
   }
 
   makeRifle() {
@@ -621,18 +653,115 @@ class KillersOps {
     const box = new THREE.Box3().setFromObject(template);
     template.position.sub(box.getCenter(new THREE.Vector3()));
     this.weapon = template;
-    this.localAvatar.children.forEach((child) => {
-      if (child.userData?.isWeapon) this.localAvatar.remove(child);
+
+    const facing = this.localAvatar?.userData?.facing || this.localAvatar;
+    if (!facing) return;
+    facing.children.forEach((child) => {
+      if (child.userData?.isWeapon) facing.remove(child);
     });
     const gun = template.clone(true);
     gun.userData.isWeapon = true;
     gun.position.set(0.34, 1.18, -0.35);
-    this.localAvatar.add(gun);
+    facing.add(gun);
   }
 
-  loadPhotoTexture(url) {
-    const key = url || avatarFor({ uid: "operator" });
-    return this.photoTextures.get(key) || null;
+  // Attach Soldier.glb — swap procedural body for the animated model, wire the mixer.
+  attachSoldierToLocalAvatar() {
+    if (!this.soldierTemplate || !this.localAvatar) return;
+
+    const facing = this.localAvatar.userData.facing || this.localAvatar;
+
+    const model = this.soldierTemplate.scene.clone(true);
+    const box = new THREE.Box3().setFromObject(model);
+    const size = box.getSize(new THREE.Vector3());
+    if (size.y > 0) model.scale.setScalar(1.8 / size.y);
+    const scaled = new THREE.Box3().setFromObject(model);
+    model.position.y -= scaled.min.y;
+    model.traverse((n) => {
+      if (n.isMesh) {
+        n.castShadow = true;
+        n.receiveShadow = true;
+        n.frustumCulled = false;
+      }
+    });
+
+    // Remove procedural body + portrait; keep ring + gun inside facing wrapper
+    facing.children
+      .filter((c) => c.userData?.isDefaultBody || c.userData?.isAvatarPortrait)
+      .forEach((c) => facing.remove(c));
+    facing.add(model);
+
+    const mixer = new THREE.AnimationMixer(model);
+    const actions = {};
+    const clipNames = [];
+    for (const clip of this.soldierTemplate.animations) {
+      actions[clip.name] = mixer.clipAction(clip);
+      clipNames.push(clip.name);
+    }
+    console.log("🎬 Soldier clips:", clipNames.join(", "));
+
+    this.animState = {
+      group: this.localAvatar,
+      model,
+      mixer,
+      actions,
+      clipNames,
+      currentActionName: null,
+      _slotCache: new Map(),
+    };
+  }
+
+  // Same idea as character.js — resolve a *slot* to an actual clip name via regex,
+  // preferring the armed variants. Cached per slot.
+  resolveClipName(slot) {
+    const s = this.animState;
+    if (!s || !s.clipNames || !s.clipNames.length) return null;
+    if (s._slotCache?.has(slot)) return s._slotCache.get(slot);
+    const patterns = {
+      idle:          /idle_?gun|idle|stand|breath/i,
+      idle_pointing: /point|aim|idle_?gun_?point/i,
+      walk:          /walk_?gun|walk_?forward|^walk|walk|stroll/i,
+      run:           /run_?gun|run_?forward|^run$|jog|sprint/i,
+      reload:        /reload|recharge/i,
+      shoot:         /shoot|fire|gun_?shoot|rifle/i,
+      death:         /death|die|dead/i,
+      wave:          /wave|greet|hello/i,
+    };
+    const re = patterns[slot];
+    let picked = null;
+    if (re) {
+      const matched = s.clipNames.filter((n) => re.test(n));
+      picked = matched.find((n) => /_?gun/i.test(n)) || matched[0] || null;
+    }
+    if (!s._slotCache) s._slotCache = new Map();
+    s._slotCache.set(slot, picked);
+    return picked;
+  }
+
+  pickMovementSlot(moving, run) {
+    if (this.reloading) return "reload";
+    if (!moving) return this.isAiming ? "idle_pointing" : "idle";
+    return run ? "run" : "walk";
+  }
+
+  playAnim(name, { loop = true, fade = 0.15, clamp = false } = {}) {
+    const s = this.animState;
+    if (!s?.actions || !name) return;
+    let action = s.actions[name];
+    if (!action) {
+      const key = Object.keys(s.actions).find((k) => k.toLowerCase() === String(name).toLowerCase());
+      action = key ? s.actions[key] : null;
+      if (key) name = key;
+    }
+    if (!action) return;
+    if (s.currentActionName === name) return;
+    const prev = s.currentActionName && s.actions[s.currentActionName];
+    if (prev) prev.fadeOut(fade);
+    action.reset();
+    action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+    action.clampWhenFinished = clamp;
+    action.fadeIn(fade).play();
+    s.currentActionName = name;
   }
 
   bindControls() {
@@ -991,57 +1120,103 @@ class KillersOps {
   }
 
   movement(dt) {
-    const forward = (this.keys.has("w") || this.keys.has("arrowup") ? 1 : 0)
+    const inputForward = (this.keys.has("w") || this.keys.has("arrowup") ? 1 : 0)
       - (this.keys.has("s") || this.keys.has("arrowdown") ? 1 : 0) + this.move.y;
-    const side = (this.keys.has("d") || this.keys.has("arrowright") ? 1 : 0)
+    const inputStrafe = (this.keys.has("d") || this.keys.has("arrowright") ? 1 : 0)
       - (this.keys.has("a") || this.keys.has("arrowleft") ? 1 : 0) + this.move.x;
-    const length = Math.hypot(forward, side);
-    if (length > 1) {
-      this.temp.set(side / length, 0, -forward / length);
-    } else {
-      this.temp.set(side, 0, -forward);
-    }
+
+    const forwardDir = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+    const rightDir   = new THREE.Vector3( Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+
+    const moveDir = new THREE.Vector3()
+      .addScaledVector(forwardDir, clamp(inputForward, -1, 1))
+      .addScaledVector(rightDir,   clamp(inputStrafe, -1, 1));
+
+    const inputMag = moveDir.length();
+    if (inputMag > 1) moveDir.normalize();
+
     const run = this.sprinting || this.keys.has("shift");
     const speed = run ? 12.2 : 7.0;
-    const sin = Math.sin(this.yaw);
-    const cos = Math.cos(this.yaw);
-    const dx = (this.temp.x * cos + this.temp.z * sin) * speed * dt;
-    const dz = (-this.temp.x * sin + this.temp.z * cos) * speed * dt;
-    const nx = this.pos.x + dx;
+    const step = moveDir.multiplyScalar(speed * dt);
+
+    const nx = this.pos.x + step.x;
     if (this.isFree(nx, this.pos.z)) this.pos.x = nx;
-    const nz = this.pos.z + dz;
+    const nz = this.pos.z + step.z;
     if (this.isFree(this.pos.x, nz)) this.pos.z = nz;
+
     this.velocity.y -= 14.5 * dt;
     this.pos.y = Math.max(0, this.pos.y + this.velocity.y * dt);
     if (this.pos.y === 0) {
       this.velocity.y = 0;
       this.onGround = true;
     }
+
+    const moving = inputMag > 0.08;
+
     if (this.localAvatar) {
-      this.localAvatar.position.lerp(this.pos, Math.min(1, dt * 13));
+      this.localAvatar.position.set(this.pos.x, this.pos.y, this.pos.z);
       this.localAvatar.rotation.y = this.yaw;
-      this.localAvatar.position.y = this.pos.y;
-      if (this.localAvatar.children[0]) {
-        const moving = length > 0.08;
-        const sway = moving ? Math.sin(performance.now() * (run ? 0.015 : 0.01)) * 0.045 : 0;
-        this.localAvatar.children[0].position.y = 1.05 + sway;
+    }
+
+    const now = performance.now();
+    let animName = null;
+    let oneShot = false;
+    if (this.overrideAnim && now < this.overrideUntil) {
+      animName = this.overrideAnim;
+      oneShot = true;
+    } else {
+      this.overrideAnim = null;
+    }
+
+    if (this.animState?.mixer) {
+      if (!animName) {
+        const slot = this.pickMovementSlot(moving, run);
+        animName = this.resolveClipName(slot);
+      }
+      if (animName) this.playAnim(animName, { loop: !oneShot, clamp: oneShot, fade: 0.15 });
+      this.animState.mixer.update(dt);
+    } else {
+      // Procedural fallback walk swing (no Soldier.glb loaded)
+      if (moving) {
+        this.walkPhase += dt * (run ? 14 : 9);
+        const swing = Math.sin(this.walkPhase) * (run ? 0.85 : 0.5);
+        const facing = this.localAvatar?.userData?.facing || this.localAvatar;
+        facing.traverse((n) => {
+          if (n.userData?.leg) n.rotation.x = n.userData.side * swing;
+          if (n.userData?.arm) n.rotation.x = -n.userData.side * swing * 0.7;
+        });
+      } else {
+        const facing = this.localAvatar?.userData?.facing || this.localAvatar;
+        facing.traverse((n) => {
+          if (n.userData?.leg) n.rotation.x *= 0.85;
+          if (n.userData?.arm) n.rotation.x *= 0.85;
+        });
       }
     }
-    return length > 0.08;
+
+    return moving;
   }
 
   updateCamera() {
-    const sin = Math.sin(this.yaw);
-    const cos = Math.cos(this.yaw);
-    const forward = new THREE.Vector3(-sin, 0, -cos);
+    const forward = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+
     const distance = this.isAiming ? 1.8 : 3.0;
     const cameraHeight = this.isAiming ? 1.9 : 2.0;
     const lookHeight = this.isAiming ? 1.3 : 1.2;
-    this.camera.position.copy(this.pos).add(new THREE.Vector3(0, cameraHeight, 0))
-      .addScaledVector(forward, -distance);
-    const target = this.pos.clone().add(new THREE.Vector3(0, lookHeight + this.pitch * 4, 0))
-      .addScaledVector(forward, 3);
+
+    // Camera BEHIND player
+    this.camera.position.copy(this.pos);
+    this.camera.position.y += cameraHeight;
+    this.camera.position.addScaledVector(forward, -distance);
+
+    // Look target IN FRONT of player
+    const target = this.pos.clone();
+    target.y += lookHeight;
+    target.addScaledVector(forward, 3);
+    target.y += this.pitch * 4;
+
     this.camera.lookAt(target);
+
     this.camera.fov += ((this.isAiming ? 45 : 70) - this.camera.fov) * 0.15;
     this.camera.updateProjectionMatrix();
   }
@@ -1061,6 +1236,11 @@ class KillersOps {
     this.flashMuzzle();
     this.traceShot();
     haptic(12);
+    const shootClip = this.resolveClipName("shoot");
+    if (shootClip) {
+      this.overrideAnim = shootClip;
+      this.overrideUntil = now + 250;
+    }
     if (this.ammo === 0) this.toast("Magazine empty · tap reload");
   }
 
@@ -1193,6 +1373,11 @@ class KillersOps {
     const count = Math.min(MAGAZINE_SIZE - this.ammo, this.reserve);
     this.toast("RELOADING");
     this.reloadUntil = performance.now() + 1150;
+    const reloadClip = this.resolveClipName("reload");
+    if (reloadClip) {
+      this.overrideAnim = reloadClip;
+      this.overrideUntil = performance.now() + 1150;
+    }
     setTimeout(() => {
       if (!this.running) return;
       this.ammo += count;
