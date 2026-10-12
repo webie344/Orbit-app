@@ -43,7 +43,6 @@
     <!-- ============================================================ -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap"
       rel="stylesheet"
@@ -52,19 +51,11 @@
       rel="stylesheet"
       href="https://cdn.jsdelivr.net/npm/remixicon@4.5.0/fonts/remixicon.css"
     />
-    <link rel="stylesheet" href="style.css?v=orbit-killers-ops-1" />
+    <link rel="stylesheet" href="style.css" />
     <link rel="stylesheet" href="chat.css" />
     <link rel="stylesheet" href="features.css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <script type="importmap">
-      {
-        "imports": {
-          "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
-        }
-      }
-    </script>
   </head>
   <body>
     <!-- ============================================================ -->
@@ -307,13 +298,6 @@
               </span>
               <span class="pill" id="chatsPill" hidden>0</span>
             </button>
-            <button class="nav-item dl-nav-item" data-route="friends" title="Friends" aria-label="Friends">
-              <span class="dl-nav-icon"><i class="ri-group-line"></i></span>
-              <span class="dl-nav-text">
-                <span class="dl-nav-label">Friends</span>
-                <small class="dl-nav-desc">People in your Orbit</small>
-              </span>
-            </button>
             <button class="nav-item dl-nav-item" data-route="groups">
               <span class="dl-nav-icon"><i class="ri-group-2-line"></i></span>
               <span class="dl-nav-text">
@@ -326,13 +310,6 @@
               <span class="dl-nav-text">
                 <span class="dl-nav-label">Explore</span>
                 <small class="dl-nav-desc">Discover trending posts &amp; hashtags</small>
-              </span>
-            </button>
-            <button class="nav-item dl-nav-item" data-route="games">
-              <span class="dl-nav-icon"><i class="ri-gamepad-line"></i></span>
-              <span class="dl-nav-text">
-                <span class="dl-nav-label">Games</span>
-                <small class="dl-nav-desc">Play with your Orbit circle</small>
               </span>
             </button>
             <button class="nav-item dl-nav-item" data-route="saved">
@@ -383,10 +360,8 @@
       <nav class="bottomnav only-mobile">
         <button class="bn" data-route="feed"><i class="ri-home-5-line"></i></button>
         <button class="bn" data-route="explore"><i class="ri-compass-3-line"></i></button>
-        <button class="bn" data-route="games" title="Games" aria-label="Games"><i class="ri-gamepad-line"></i></button>
         <button class="bn compose" id="composeBtnMobile"><i class="ri-add-line"></i></button>
         <button class="bn" data-route="chats"><i class="ri-chat-3-line"></i></button>
-        <button class="bn" data-route="friends" title="Friends" aria-label="Friends"><i class="ri-group-line"></i></button>
         <button class="bn" data-route="profile"><i class="ri-user-line"></i></button>
       </nav>
     </main>
@@ -617,12 +592,12 @@
     <!-- FIREBASE + APP                                                -->
     <!-- ============================================================ -->
     <script src="https://unpkg.com/@lottiefiles/lottie-player@2.0.8/dist/lottie-player.js"></script>
-    <script type="module" src="app.js?v=orbit-killers-ops-1"></script>
+    <script type="module" src="app.js"></script>
     <script type="module" src="chat.js"></script>
     <script type="module" src="notifications.js"></script>
     <script type="module" src="features.js"></script>
     <script type="module" src="additional.js"></script>
-    <script type="module" src="b.js"></script>
+   <script type="module" src="b.js"></script>
     <!-- ============================================================ -->
     <!-- PWA — Register Service Worker + Install prompt               -->
     <!-- ============================================================ -->

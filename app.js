@@ -4,7 +4,7 @@
 // Profile + Settings + Theme + Verified-by-location.
 // Chat + DM logic lives in chat.js (it imports state from this file).
 // =========================================================================
-import { mountAvatarSettingsCard, openAvatarCustomiser } from "./customisation.js";
+
 import { sfxOrbit, sfxComment, sfxPost } from "./sounds.js";
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
@@ -14,24 +14,48 @@ import {
   signInWithPopup, updateProfile, sendPasswordResetEmail,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
 import {
-  getFirestore, doc, setDoc, getDoc, updateDoc, addDoc, deleteDoc, runTransaction,
+  getFirestore, doc, setDoc, getDoc, updateDoc, addDoc, deleteDoc,
   collection, query, where, orderBy, limit, startAfter, onSnapshot, getDocs,
-  serverTimestamp, increment, arrayUnion, arrayRemove, writeBatch,
+  serverTimestamp, increment, arrayUnion, arrayRemove, deleteField, writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 
 // =========================================================================
 // 1. CONFIG — REPLACE THESE BEFORE HOSTING
 // =========================================================================
 
-// Firebase: get from https://console.firebase.google.com → Project Settings → Your apps
-export const firebaseConfig = {
-  apiKey: "AIzaSyC9jF-ocy6HjsVzWVVlAyXW-4aIFgA79-A",
-    authDomain: "crypto-6517d.firebaseapp.com",
-    projectId: "crypto-6517d",
-    storageBucket: "crypto-6517d.firebasestorage.app",
-    messagingSenderId: "60263975159",
-    appId: "1:60263975159:web:bd53dcaad86d6ed9592bf2"
-};
+// Firebase web configuration is loaded at runtime from /api/config.
+// This keeps deployment values out of this source file. The Firebase web config
+// is still visible to browsers by design; protect the project with Firebase
+// Authentication, Firestore rules, Storage rules, and API-key restrictions.
+async function loadFirebaseConfig() {
+  const response = await fetch("/api/config", {
+    headers: { Accept: "application/json" },
+  });
+
+  if (!response.ok) {
+    throw new Error("Unable to load Firebase configuration (HTTP " + response.status + ")");
+  }
+
+  const config = await response.json();
+  const required = [
+    "apiKey",
+    "authDomain",
+    "projectId",
+    "storageBucket",
+    "messagingSenderId",
+    "appId",
+  ];
+  const missing = required.filter((key) => !config[key]);
+
+  if (missing.length) {
+    throw new Error("Firebase configuration is incomplete: " + missing.join(", "));
+  }
+
+  return config;
+}
+
+// Top-level await is supported because this file is loaded as type=module.
+export const firebaseConfig = await loadFirebaseConfig();
 
 // Cloudinary: get from https://cloudinary.com → Settings → Upload → Upload presets
 // 1) Create an UNSIGNED preset (recommended for client-side uploads)
@@ -102,10 +126,8 @@ export const state = {
 // =========================================================================
 // AI ASSISTANT CONSTANTS
 // =========================================================================
-// Set your Groq API key here or assign window.GROQ_API_KEY before this file loads.
-// Get a free key at https://console.groq.com
-window.GROQ_API_KEY = window.GROQ_API_KEY || "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";
-window.GROQ_MODEL   = window.GROQ_MODEL   || "llama-3.3-70b-versatile";
+// Groq is called through /api/groq so the GROQ_API_KEY never reaches the browser.
+// The secret is configured in Vercel as a server-only environment variable.
 
 const AI_TONES = {
   friendly:   { label: "Friendly & Warm",    emoji: "😊" },
@@ -930,26 +952,6 @@ export const fetchUser = async (uid) => {
   return data;
 };
 
-const MAX_GROUP_MEMBERS = 50;
-
-const changeGroupMembers = async (groupId, { add = [], remove = [] } = {}) => runTransaction(db, async (transaction) => {
-  const ref = doc(db, "groups", groupId);
-  const snapshot = await transaction.get(ref);
-  if (!snapshot.exists()) throw new Error("Group not found");
-  const current = [...new Set(snapshot.data().members || [])];
-  const removed = new Set(remove.filter(Boolean));
-  const remaining = current.filter((uid) => !removed.has(uid));
-  const additions = [...new Set(add.filter(Boolean))].filter((uid) => !remaining.includes(uid));
-  if (additions.length && remaining.length + additions.length > MAX_GROUP_MEMBERS) {
-    throw new Error(`Groups can have at most ${MAX_GROUP_MEMBERS} members.`);
-  }
-  const updated = [...remaining, ...additions];
-  if (updated.length !== current.length || updated.some((uid, index) => uid !== current[index])) {
-    transaction.update(ref, { members: updated, memberCount: updated.length });
-  }
-  return updated;
-});
-
 const resolveGroupMemberIds = async (raw = "") => {
   const tokens = [...new Set(raw.split(/[\s,]+/).map((value) => value.trim().replace(/^@/, "").toLowerCase()).filter(Boolean))];
   const ids = [];
@@ -998,13 +1000,10 @@ export const openGroupAdmin = async (groupId) => {
           class: "icon-btn",
           title: "Remove member",
           onclick: async () => {
-            try {
-              group.members = await changeGroupMembers(group.id, { remove: [member.uid] });
-              toast("Member removed");
-              paintMembers();
-            } catch (error) {
-              toast(error?.message || "Could not remove member");
-            }
+            group.members = (group.members || []).filter((uid) => uid !== member.uid);
+            await updateDoc(doc(db, "groups", group.id), { members: arrayRemove(member.uid) });
+            toast("Member removed");
+            paintMembers();
           },
         }, el("i", { class: "ri-user-unfollow-line" })) : null,
       );
@@ -1060,17 +1059,10 @@ export const openGroupAdmin = async (groupId) => {
     onclick: async () => {
       const ids = await resolveGroupMemberIds(addInput.value);
       if (!ids.length) { toast("No matching Orbit members found"); return; }
-      const before = (group.members || []).length;
-      try {
-        group.members = await changeGroupMembers(group.id, { add: ids });
-      } catch (error) {
-        toast(error?.message || "Could not add members");
-        return;
-      }
-      const added = group.members.length - before;
-      if (!added) { toast("Those members are already in the group"); return; }
+      await updateDoc(doc(db, "groups", group.id), { members: arrayUnion(...ids) });
+      group.members = [...new Set([...(group.members || []), ...ids])];
       addInput.value = "";
-      toast(`${added} member${added === 1 ? "" : "s"} added`);
+      toast(`${ids.length} member${ids.length === 1 ? "" : "s"} added`);
       paintMembers();
     },
   }, "Add members");
@@ -1159,7 +1151,7 @@ const applyTheme = (theme) => {
                    : "ri-contrast-2-line"; // glass
   }
 };
-const initTheme = () => applyTheme(localStorage.getItem("orbit:theme") || "light");
+const initTheme = () => applyTheme(localStorage.getItem("orbit:theme") || "dark");
 const toggleTheme = () => {
   const cur = document.documentElement.getAttribute("data-theme") || "dark";
   applyTheme(cur === "dark" ? "light" : cur === "light" ? "glass" : "dark");
@@ -1312,15 +1304,11 @@ const ensureUserDoc = async (user, extras = {}) => {
       email: user.email || null,
       photoURL: user.photoURL || `https://api.dicebear.com/7.x/shapes/svg?seed=${user.uid}`,
       bio: "",
-      birthday: null,
-      birthdayAnnounceEnabled: false,
-      birthdayAnnouncedYear: null,
       verified: false,                // becomes true after location grant
       verifiedAt: null,
       location: null,                 // { lat, lng, city }
       followers: [],
       following: [],
-      friends: [],
       privateAccount: false,
       showOnline: true,
       allowMessages: true,
@@ -1347,48 +1335,6 @@ const ensureUserDoc = async (user, extras = {}) => {
   return { uid: user.uid, ...snap.data(), online: true };
 };
 
-const announceBirthdayIfDue = async () => {
-  const uid = state.uid;
-  if (!uid) return;
-  const userRef = doc(db, "users", uid);
-  const snap = await getDoc(userRef);
-  if (!snap.exists()) return;
-  const profile = { uid, ...snap.data() };
-  const birthday = String(profile.birthday || "");
-  if (!profile.birthdayAnnounceEnabled || !/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(birthday)) return;
-
-  const now = new Date();
-  const year = now.getFullYear();
-  const today = `${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  if (birthday !== today || Number(profile.birthdayAnnouncedYear) === year) return;
-
-  const followers = [...new Set((profile.followers || []).filter((followerUid) => followerUid && followerUid !== uid))];
-  const notificationId = `birthday_${uid}_${year}`;
-  if (!followers.length) {
-    await updateDoc(userRef, { birthdayAnnouncedYear: year });
-    state.me = { ...state.me, birthdayAnnouncedYear: year };
-    return;
-  }
-
-  for (let offset = 0; offset < followers.length; offset += 400) {
-    const batch = writeBatch(db);
-    const chunk = followers.slice(offset, offset + 400);
-    chunk.forEach((followerUid) => {
-      batch.set(doc(db, "notifications", followerUid, "items", notificationId), {
-        type: "birthday",
-        fromUid: uid,
-        profileUid: uid,
-        text: `${profile.name || "Someone"} is celebrating a birthday today!`,
-        read: false,
-        createdAt: serverTimestamp(),
-      });
-    });
-    if (offset + chunk.length >= followers.length) batch.update(userRef, { birthdayAnnouncedYear: year });
-    await batch.commit();
-  }
-  state.me = { ...state.me, birthdayAnnouncedYear: year };
-};
-
 onAuthStateChanged(auth, async (user) => {
   if (!user) {
     state.me = null; state.uid = null;
@@ -1403,7 +1349,6 @@ onAuthStateChanged(auth, async (user) => {
   state.me = await ensureUserDoc(user);
   $("#meAvatar").src = avatarFor(state.me);
   showApp(); // calls hideOrbitLoader() internally
-  announceBirthdayIfDue().catch((err) => console.warn("Birthday announcement failed:", err));
   startMyProfileListener();
   startNotifListener();
   startSuggestions();
@@ -1567,13 +1512,13 @@ const toggleNotifPanel = () => {
   getDocs(query(collection(db, "notifications", state.uid, "items"), orderBy("createdAt", "desc"), limit(30)))
   .then((snap) => {
     if (snap.empty) { panel.appendChild(el("div", { class: "notif-empty" }, "No notifications yet.")); return; }
-     const iconMap = { orbit:"ri-thumb-up-fill", follow:"ri-user-follow-fill", message:"ri-chat-1-fill", comment:"ri-chat-4-fill", commentLike:"ri-thumb-up-fill", groupMessage:"ri-group-2-fill", call:"ri-phone-fill", newPost:"ri-file-add-fill", postConfirm:"ri-checkbox-circle-fill", birthday:"ri-cake-2-fill" };
-     const colMap  = { orbit:"#0866ff", follow:"var(--primary)", message:"var(--good)", comment:"var(--grad-3)", commentLike:"#0866ff", groupMessage:"var(--good)", call:"var(--primary)", newPost:"var(--grad-1)", postConfirm:"var(--good)", birthday:"var(--grad-2)" };
+    const iconMap = { orbit:"ri-fire-fill", follow:"ri-user-follow-fill", message:"ri-chat-1-fill", comment:"ri-chat-4-fill", commentLike:"ri-heart-fill", groupMessage:"ri-group-2-fill", call:"ri-phone-fill", newPost:"ri-file-add-fill", postConfirm:"ri-checkbox-circle-fill" };
+    const colMap  = { orbit:"var(--grad-2)", follow:"var(--primary)", message:"var(--good)", comment:"var(--grad-3)", commentLike:"var(--danger)", groupMessage:"var(--good)", call:"var(--primary)", newPost:"var(--grad-1)", postConfirm:"var(--good)" };
     snap.docs.forEach((d) => {
       const n = { id: d.id, ...d.data() };
       const ic = iconMap[n.type] || "ri-notification-3-fill";
       const co = colMap[n.type]  || "var(--primary)";
-      const txt = n.text || (n.fromName || "Someone") + " " + ({ orbit:"liked your post", follow:"followed you", message:"sent you a message", comment:"commented on your post", commentLike:"liked your comment", groupMessage:"sent a message in your group", call:"called you", newPost:"shared a new post", postConfirm:"Your post is live!" }[n.type] || "interacted");
+      const txt = n.text || (n.fromName || "Someone") + " " + ({ orbit:"orbited your post", follow:"followed you", message:"sent you a message", comment:"commented on your post", commentLike:"liked your comment", groupMessage:"sent a message in your group", call:"called you", newPost:"shared a new post", postConfirm:"Your post is live!" }[n.type] || "interacted");
       const item = el("div", { class: "notif-item" + (n.read ? "" : " unread") },
         el("i", { class: ic, style: "color:" + co + ";font-size:20px;flex-shrink:0;margin-top:2px;" }),
         el("div", { style: "min-width:0;" }, el("div", { class: "ni-text" }, txt), el("div", { class: "ni-time" }, fmtTime(n.createdAt))),
@@ -1581,8 +1526,7 @@ const toggleNotifPanel = () => {
       item.addEventListener("click", () => {
         updateDoc(doc(db, "notifications", state.uid, "items", n.id), { read: true }).catch(() => {});
         panel.remove();
-         if (n.type === "birthday" && (n.profileUid || n.fromUid)) location.hash = "#profile/" + (n.profileUid || n.fromUid);
-         else if (n.type === "message" && n.fromUid) location.hash = "#chats/" + n.fromUid;
+        if (n.type === "message" && n.fromUid) location.hash = "#chats/" + n.fromUid;
         else if (n.type === "groupMessage" && n.groupId) location.hash = "#chats/" + n.groupId;
         else if (n.type === "follow"  && n.fromUid) location.hash = "#profile/" + n.fromUid;
         else if ((n.type === "comment" || n.type === "commentLike" || n.type === "newPost" || n.type === "postConfirm") && n.postId) location.hash = "#post/" + n.postId;
@@ -1605,7 +1549,7 @@ $("#notifBtn").addEventListener("click", () => { location.hash = "#notifications
 // 7. ROUTER
 // =========================================================================
 // "reels" removed — videos live in the feed as regular posts
-const routes = ["feed", "chats", "friends", "ai-chat", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn", "games"];
+const routes = ["feed", "chats", "ai-chat", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn"];
 
 // Feed DOM caching — lets us restore the feed instantly when navigating
 // back from a post without re-rendering or re-shuffling.
@@ -1614,23 +1558,16 @@ let _feedCachedNode = null; // detached feed DOM preserved during post visit
 let _feedUnsub = null;      // kept alive so the cached node stays fresh
 
 const router = () => {
-  content._routeRenderToken = (content._routeRenderToken || 0) + 1;
-  ["_profileCleanup", "_friendsCleanup"].forEach((key) => {
-    if (content[key]) content[key]();
-    content[key] = null;
-  });
   const hash = (location.hash || "#feed").replace(/^#/, "");
   const [route, ...rest] = hash.split("/");
   const target = routes.includes(route) ? route : "feed";
-  document.body.classList.toggle("groups-experience-active", target === "groups");
-  document.body.classList.toggle("groups-room-active", target === "groups" && !!rest[0]);
   const prevRoute = content._currentRoute;
 
   $$(".nav-item, .bn").forEach((b) => b.classList.toggle("active", b.dataset.route === target));
 
-  // Hide bottom nav in detail views, including the group member room.
+  // Hide bottom nav in post detail, restore on all other routes
   const _bnEl = document.querySelector(".bottomnav");
-  if (_bnEl) _bnEl.classList.toggle("detail-hidden", target === "post" || (target === "groups" && !!rest[0]));
+  if (_bnEl) _bnEl.classList.toggle("detail-hidden", target === "post");
 
   // ── Leaving the feed ──────────────────────────────────────────────────
   if (prevRoute === "feed") {
@@ -1656,12 +1593,6 @@ const router = () => {
     content._unsub = null;
   }
 
-  if (content._groupCityCleanup) { content._groupCityCleanup(); content._groupCityCleanup = null; }
-  if (content._groupRoomCleanup) { content._groupRoomCleanup(); content._groupRoomCleanup = null; }
-  if (content._gameCleanup) {
-    content._gameCleanup();
-    content._gameCleanup = null;
-  }
   content.innerHTML = "";
   content._currentRoute = target;
 
@@ -1699,23 +1630,14 @@ const router = () => {
         setTimeout(() => _injectAIChatEntry(), 350);
       }
       break;
-    case "friends":    renderFriends(content, rest[0] || null); break;
     case "ai-chat":    renderAIChat(content); break;
-    case "groups":     rest[0] ? renderGroupRoom(content, rest[0]) : renderGroups(content); break;
+    case "groups":     renderGroups(content); break;
     case "explore":    renderExplore(content, rest[0] === "tag" ? rest[1] : null); break;
     case "saved":      renderSaved(content); break;
     case "settings":   renderSettings(content); break;
     case "profile":    renderProfile(content, rest[0] || state.uid); break;
     case "profile-u":  renderProfileByUsername(content, rest[0]); break;
     case "post":       renderPostDetail(content, rest[0]); break;
-    case "games":
-      import("./game.js?v=orbit-killers-ops-4").then(m => {
-        if (content._currentRoute === "games") m.renderGames(content);
-      }).catch(error => {
-        console.error("Could not open Orbit Games:", error);
-        content.innerHTML = '<div style="padding:32px;color:var(--text);">Games could not load. Check that game.js is beside app.js.</div>';
-      });
-      break;
     case "spaces":         import("./features.js").then(m => rest[0] ? m.renderSpacePage(content, rest[0]) : m.renderSpaces(content)); break;
     case "challenges":     import("./features.js").then(m => m.renderChallenges(content)); break;
     case "mentorship":     import("./features.js").then(m => m.renderMentorship(content)); break;
@@ -2154,9 +2076,9 @@ const renderTrendingCard = (p, author) => {
 // =========================================================================
 // 8a. MEDIA CAROUSEL / GRID
 // 1 item  → single full-width image or video player
-// 2 items → side-by-side grid (Facebook-style)
-// 3 items → 1 large left + 2 stacked right (Facebook-style)
-// 4+      → swipeable carousel
+// 2 items → side-by-side grid
+// 3 items → one large image with two stacked alongside
+// 4+      → Facebook-style 2×2 grid with overflow count
 // =========================================================================
 const _makeGridCell = (m, spanRows = false, _allItems = [], _idx = 0, _postId = null) => {
   const cellStyle = [
@@ -2164,14 +2086,13 @@ const _makeGridCell = (m, spanRows = false, _allItems = [], _idx = 0, _postId = 
     spanRows ? "grid-row:1/3;" : "",
   ].join("");
   const cell = el("div", { style: cellStyle });
-
-  const _navigateToPost = (e) => {
+  const navigateToPost = (e) => {
     e.stopPropagation();
     if (_postId) location.hash = `#post/${_postId}`;
   };
 
   if (m.type === "video") {
-    const vid = el("video", {
+    const video = el("video", {
       src: m.url,
       poster: _cloudPoster(m.url),
       preload: "metadata",
@@ -2182,15 +2103,18 @@ const _makeGridCell = (m, spanRows = false, _allItems = [], _idx = 0, _postId = 
       class: "media-grid-play",
       style: "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.18);",
     }, el("i", { class: "ri-play-circle-fill", style: "font-size:44px;color:#fff;filter:drop-shadow(0 2px 10px rgba(0,0,0,0.5));" }));
-    // Clicking navigates to post detail instead of opening modal
-    vid.addEventListener("click", _navigateToPost);
-    overlay.addEventListener("click", _navigateToPost);
-    cell.appendChild(vid);
+    video.addEventListener("click", navigateToPost);
+    overlay.addEventListener("click", navigateToPost);
+    cell.appendChild(video);
     cell.appendChild(overlay);
   } else {
-    const img = el("img", { src: m.url, loading: "lazy", style: "width:100%;height:100%;object-fit:cover;display:block;" });
-    img.addEventListener("click", _navigateToPost);
-    cell.appendChild(img);
+    const image = el("img", {
+      src: m.url,
+      loading: "lazy",
+      style: "width:100%;height:100%;object-fit:cover;display:block;",
+    });
+    image.addEventListener("click", navigateToPost);
+    cell.appendChild(image);
   }
   return cell;
 };
@@ -2204,23 +2128,27 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
   // media block scrolling into view instead.
   const _wireStandaloneSong = (node) => { if (song) _wireSongPlayback(node, song, null); return node; };
 
-  // ── Detail view: all items stacked vertically (Facebook-style) ──
+  // Post detail shows every attached item in a vertical stack.
   if (detailView && items.length > 1) {
-    const stack = el("div", { class: "post-media-stack", style: "display:flex;flex-direction:column;gap:4px;position:relative;" });
+    const stack = el("div", {
+      class: "post-media-stack",
+      style: "display:flex;flex-direction:column;gap:4px;position:relative;",
+    });
     let sawVideo = false;
-    items.forEach((m) => {
-      if (m.type === "video") {
+    items.forEach((item) => {
+      if (item.type === "video") {
         sawVideo = true;
-        const player = buildVideoPlayer(m.url, { song, overlays: m.overlays });
+        const player = buildVideoPlayer(item.url, { song, overlays: item.overlays });
         player.style.borderRadius = "14px";
         stack.appendChild(player);
       } else {
-        const img = el("img", {
-          src: m.url, loading: "lazy",
+        const image = el("img", {
+          src: item.url,
+          loading: "lazy",
           style: "width:100%;display:block;max-height:520px;object-fit:cover;cursor:zoom-in;border-radius:0;",
         });
-        img.addEventListener("click", () => openImageZoom(m.url));
-        stack.appendChild(img);
+        image.addEventListener("click", () => openImageZoom(item.url));
+        stack.appendChild(image);
       }
     });
     if (song && !sawVideo) _wireStandaloneSong(stack);
@@ -2246,50 +2174,43 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
     return wrap;
   }
 
-  // ── 2 items: side-by-side ──────────────────────────────────────
   if (items.length === 2) {
     const grid = el("div", {
       class: "post-media",
       style: "display:grid;grid-template-columns:1fr 1fr;gap:3px;border-radius:14px;overflow:hidden;height:260px;margin:8px 0;position:relative;",
     });
-    items.forEach((m, i) => grid.appendChild(_makeGridCell(m, false, items, i, postId)));
-    if (song) _wireStandaloneSong(grid);
-    return grid;
+    items.forEach((item, index) => grid.appendChild(_makeGridCell(item, false, items, index, postId)));
+    return _wireStandaloneSong(grid);
   }
 
-  // ── 3 items: 1 large left + 2 stacked right ────────────────────
   if (items.length === 3) {
     const grid = el("div", {
       class: "post-media",
       style: "display:grid;grid-template-columns:2fr 1fr;grid-template-rows:130px 130px;gap:3px;border-radius:14px;overflow:hidden;margin:8px 0;position:relative;",
     });
-    items.forEach((m, i) => grid.appendChild(_makeGridCell(m, i === 0, items, i, postId)));
-    if (song) _wireStandaloneSong(grid);
-    return grid;
+    items.forEach((item, index) => grid.appendChild(_makeGridCell(item, index === 0, items, index, postId)));
+    return _wireStandaloneSong(grid);
   }
 
-  // ── 4+ items: Facebook-style 2×2 grid with "+N more" overflow ─
-  const show = items.slice(0, 4);
-  const overflow = items.length - 4;
+  const visibleItems = items.slice(0, 4);
+  const overflow = items.length - visibleItems.length;
   const grid = el("div", {
     class: "post-media",
     style: "display:grid;grid-template-columns:1fr 1fr;grid-template-rows:130px 130px;gap:3px;border-radius:14px;overflow:hidden;margin:8px 0;position:relative;",
   });
-  show.forEach((m, i) => {
-    const cell = _makeGridCell(m, false, items, i, postId);
-    if (i === 3 && overflow > 0) {
-      const moreOverlay = el("div", {
+  visibleItems.forEach((item, index) => {
+    const cell = _makeGridCell(item, false, items, index, postId);
+    if (index === 3 && overflow > 0) {
+      cell.appendChild(el("div", {
         style: "position:absolute;inset:0;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;cursor:pointer;",
-        onclick: (e) => { e.stopPropagation(); if (postId) location.hash = `#post/${postId}`; },
+        onclick: (event) => { event.stopPropagation(); if (postId) location.hash = `#post/${postId}`; },
       }, el("span", {
         style: "color:#fff;font-size:22px;font-weight:700;font-family:var(--font-display);letter-spacing:-0.02em;",
-      }, `+${overflow}`));
-      cell.appendChild(moreOverlay);
+      }, `+${overflow}`)));
     }
     grid.appendChild(cell);
   });
-  if (song) _wireStandaloneSong(grid);
-  return grid;
+  return _wireStandaloneSong(grid);
 };
 
 const postIsHidden = (p) => (state.me?.hiddenPosts || []).includes(p.id);
@@ -2444,10 +2365,6 @@ const openPostMenu = (p, author, isMine) => {
     sheet.appendChild(btn);
   };
   action("ri-share-forward-line", "Share to chats", () => openPostShareModal(p, author));
-  const isSaved = (state.me?.saved || []).includes(p.id);
-  action(isSaved ? "ri-bookmark-fill" : "ri-bookmark-line",
-    isSaved ? "Remove from Saved" : "Save post",
-    () => toggleSave(p.id, !isSaved));
   if (!isMine) {
     action("ri-eye-off-line", "Not interested — hide this post", async () => {
       await updateDoc(doc(db, "users", state.uid), { hiddenPosts: arrayUnion(p.id) });
@@ -2472,6 +2389,142 @@ const openPostMenu = (p, author, isMine) => {
   overlay.onclick = (e) => { if (e.target === overlay) close(); };
   document.body.appendChild(overlay);
   requestAnimationFrame(() => sheet.classList.add("is-visible"));
+};
+
+// =========================================================================
+// DROP-STYLE POST REACTIONS
+// =========================================================================
+// Orbit keeps its native "Orbit" interaction, while posts also support the
+// same compact reaction chips used by Drop. Reactions are stored as numeric
+// counters in posts/{postId}.reactions and the current user's selection is
+// stored in posts/{postId}.userReactions/{uid}.
+const DROP_REACTIONS = [
+  { key: "fire", emoji: "🔥" },
+  { key: "love", emoji: "❤️" },
+  { key: "lol",  emoji: "😂" },
+  { key: "wow",  emoji: "😮" },
+  { key: "clap", emoji: "👏" },
+];
+
+const dropReactionCount = (value) =>
+  Array.isArray(value) ? value.length : Math.max(0, Number(value) || 0);
+
+const renderDropReactionRow = (p, postId) => {
+  const reactions = p.reactions || {};
+  const myReaction = (p.userReactions || {})[state.uid] || null;
+  const row = el("div", { class: "reactions-row drop-reactions-row" });
+
+  DROP_REACTIONS.forEach(({ key, emoji }) => {
+    const count = dropReactionCount(reactions[key]);
+    if (!count && myReaction !== key) return;
+    const chip = el("button", {
+      type: "button",
+      class: `reaction-chip${myReaction === key ? " active" : ""}`,
+      "data-reaction": key,
+      "aria-label": `${emoji} reaction`,
+      onclick: async (event) => {
+        event.stopPropagation();
+        await toggleDropReaction(postId, key, chip);
+      },
+    },
+      el("span", { class: "emoji" }, emoji),
+      count ? el("span", { class: "count" }, String(count)) : null,
+    );
+    row.appendChild(chip);
+  });
+
+  const picker = el("button", {
+    type: "button",
+    class: "reaction-picker",
+    "aria-label": "Add reaction",
+    onclick: (event) => {
+      event.stopPropagation();
+      showDropReactionPicker(event.currentTarget, postId);
+    },
+  },
+    el("span", { class: "reaction-picker-emoji" }, "😊"),
+    el("span", { class: "reaction-picker-plus" }, "+"),
+  );
+  row.appendChild(picker);
+  return row;
+};
+
+const patchDropReactionRows = (postId, reactions, myReaction) => {
+  const fakePost = {
+    id: postId,
+    reactions,
+    userReactions: { [state.uid]: myReaction || null },
+  };
+  document.querySelectorAll(`.tfb-post[data-post-id="${postId}"] .reactions-row`).forEach((row) => {
+    row.replaceWith(renderDropReactionRow(fakePost, postId));
+  });
+};
+
+const toggleDropReaction = async (postId, reactionKey, anchorEl) => {
+  const ref = doc(db, "posts", postId);
+  const snap = await getDoc(ref).catch(() => null);
+  if (!snap?.exists()) return;
+  const postData = snap.data();
+  const reactions = { ...(postData.reactions || {}) };
+  const previous = (postData.userReactions || {})[state.uid] || null;
+  const updates = {};
+
+  if (previous === reactionKey) {
+    updates[`reactions.${reactionKey}`] = increment(-1);
+    updates[`userReactions.${state.uid}`] = deleteField();
+  } else {
+    if (previous) updates[`reactions.${previous}`] = increment(-1);
+    updates[`reactions.${reactionKey}`] = increment(1);
+    updates[`userReactions.${state.uid}`] = reactionKey;
+  }
+
+  if (previous !== reactionKey) {
+    const selected = DROP_REACTIONS.find((item) => item.key === reactionKey);
+    if (selected) spawnFloatingReaction(selected.emoji, anchorEl);
+  }
+
+  const optimistic = { ...reactions };
+  if (previous && previous !== reactionKey) {
+    optimistic[previous] = Math.max(0, dropReactionCount(optimistic[previous]) - 1);
+  }
+  if (previous === reactionKey) {
+    optimistic[reactionKey] = Math.max(0, dropReactionCount(optimistic[reactionKey]) - 1);
+  } else {
+    optimistic[reactionKey] = dropReactionCount(optimistic[reactionKey]) + 1;
+  }
+  patchDropReactionRows(postId, optimistic, previous === reactionKey ? null : reactionKey);
+
+  try {
+    await updateDoc(ref, updates);
+  } catch (error) {
+    console.warn("toggleDropReaction:", error);
+    patchDropReactionRows(postId, reactions, previous);
+    toast("Could not update reaction");
+  }
+};
+
+const showDropReactionPicker = (anchorEl, postId) => {
+  document.getElementById("orbit-drop-reaction-pop")?.remove();
+  const pop = el("div", { id: "orbit-drop-reaction-pop", class: "reaction-pop" });
+  DROP_REACTIONS.forEach(({ key, emoji }) => {
+    const button = el("button", {
+      type: "button",
+      "aria-label": `React ${emoji}`,
+      onclick: async (event) => {
+        event.stopPropagation();
+        await toggleDropReaction(postId, key, button);
+        pop.remove();
+      },
+    }, emoji);
+    pop.appendChild(button);
+  });
+  document.body.appendChild(pop);
+  const rect = anchorEl.getBoundingClientRect();
+  pop.style.top = `${window.scrollY + rect.top - pop.offsetHeight - 8}px`;
+  pop.style.left = `${Math.max(8, window.scrollX + rect.left)}px`;
+  setTimeout(() => {
+    document.addEventListener("click", () => pop.remove(), { once: true });
+  }, 0);
 };
 
 const renderPost = (p, author, opts = {}) => {
@@ -2511,10 +2564,7 @@ const renderPost = (p, author, opts = {}) => {
           ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' })
           : null,
       ),
-      el("div", { class: "tfb-sub-row" },
-        el("span", { class: "tfb-sub" }, `@${author?.username || "user"} · ${fmtTime(p.createdAt)}`),
-        p.isSponsored ? el("span", { class: "tfb-sponsored-pill" }, el("i", { class: "ri-advertisement-line" }), "Sponsored") : null,
-      ),
+      el("span", { class: "tfb-sub" }, `@${author?.username || "user"} · ${fmtTime(p.createdAt)}`),
     ),
     !isMine && author?.uid
       ? el("button", {
@@ -2602,27 +2652,6 @@ const renderPost = (p, author, opts = {}) => {
     post.appendChild(mediaNode);
   }
 
-  if (p.isSponsored) {
-    let destinationUrl = "";
-    try {
-      const parsedUrl = new URL(p.ad?.destinationUrl || "");
-      if (["http:", "https:"].includes(parsedUrl.protocol)) destinationUrl = parsedUrl.href;
-    } catch {}
-    const adHeadline = String(p.ad?.headline || "").trim();
-    const adCta = ["Learn more", "Shop now", "Sign up", "Contact us"].includes(p.ad?.cta) ? p.ad.cta : "Learn more";
-    if (adHeadline || destinationUrl) {
-      post.appendChild(el("div", { class: "tfb-ad-promo" },
-        adHeadline ? el("strong", { class: "tfb-ad-headline" }, adHeadline) : null,
-        destinationUrl ? el("a", {
-          class: "tfb-ad-cta",
-          href: destinationUrl,
-          target: "_blank",
-          rel: "noopener noreferrer",
-        }, adCta, el("i", { class: "ri-arrow-right-up-line" })) : null,
-      ));
-    }
-  }
-
   // ── Build / project extra detail block ───────────────────────────
   if (p.kind === "build" || p.kind === "project") {
     import("./features.js").then((m) => {
@@ -2633,24 +2662,12 @@ const renderPost = (p, author, opts = {}) => {
   }
 
   // ── Actions row ──────────────────────────────────────────────────
-  const orbitIcon = el("i", { class: iOrbited ? "ri-thumb-up-fill" : "ri-thumb-up-line" });
-  const likeTotal = el("span", { class: "tfb-like-total", text: p.orbitCount ? String(p.orbitCount) : "" });
-  const likeSummary = el("div", { class: `tfb-like-summary${p.orbitCount ? "" : " hidden"}` },
-    el("span", { class: "tfb-reaction-bubble" }, el("i", { class: "ri-thumb-up-fill" })),
-    likeTotal,
-  );
-  const cmtCountEl = el("span", { class: "tfb-comment-total", text: p.commentCount ? String(p.commentCount) : "" });
-  const cmtCountLabel = el("span", { class: "tfb-comment-label" }, p.commentCount === 1 ? " comment" : " comments");
-  const commentSummaryBtn = el("button", {
-    class: `tfb-comment-summary${p.commentCount ? "" : " hidden"}`,
-    onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; },
-  }, cmtCountEl, cmtCountLabel);
+  const orbitIcon  = el("i", { class: iOrbited ? "ri-fire-fill" : "ri-fire-line" });
+  const orbitCount = el("span", { text: String(p.orbitCount || 0) });
   let _iOrbited = iOrbited;
 
   const orbitBtn = el("button", {
-    class: `tfb-badge tfb-act tfb-like-btn${iOrbited ? " active" : ""}`,
-    title: "Like",
-    "aria-pressed": String(iOrbited),
+    class: `tfb-badge${iOrbited ? " active" : ""}`,
     onclick: async (e) => {
       e.stopPropagation();
       _iOrbited = !_iOrbited;
@@ -2658,12 +2675,9 @@ const renderPost = (p, author, opts = {}) => {
       orbitBtn.classList.remove("orbit-burst");
       void orbitBtn.offsetWidth;
       orbitBtn.classList.add("orbit-burst");
-      orbitIcon.className = _iOrbited ? "ri-thumb-up-fill" : "ri-thumb-up-line";
-      p.orbitCount = Math.max(0, (p.orbitCount || 0) + (_iOrbited ? 1 : -1));
-      likeTotal.textContent = p.orbitCount ? String(p.orbitCount) : "";
-      likeSummary.classList.toggle("hidden", !p.orbitCount);
+      orbitIcon.className   = _iOrbited ? "ri-fire-fill" : "ri-fire-line";
+      orbitCount.textContent = String((p.orbitCount || 0) + (_iOrbited ? 1 : -1));
       orbitBtn.classList.toggle("active", _iOrbited);
-      orbitBtn.setAttribute("aria-pressed", String(_iOrbited));
       await updateDoc(doc(db, "posts", p.id), {
         orbits:     _iOrbited ? arrayUnion(state.uid)   : arrayRemove(state.uid),
         orbitCount: increment(_iOrbited ? 1 : -1),
@@ -2671,21 +2685,28 @@ const renderPost = (p, author, opts = {}) => {
       if (_iOrbited && author?.uid && author.uid !== state.uid) {
         writeNotif(author.uid, "orbit", {
           postId: p.id,
-          text: `${state.me?.name || "Someone"} liked your post`,
+          text: `${state.me?.name || "Someone"} orbited your post`,
         }).catch(() => {});
         const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
         import("./notifications.js").then(({ notifyUser }) =>
-          notifyUser(author.uid, state.me?.name || "Someone", "liked your post",
+          notifyUser(author.uid, state.me?.name || "Someone", "orbited your post",
             "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
         ).catch(() => {});
       }
     },
-  }, orbitIcon, el("span", {}, "Like"));
+  }, orbitIcon, orbitCount);
+
+  let _saved = (state.me?.saved || []).includes(p.id);
+  const saveIconEl = el("i", { class: _saved ? "ri-bookmark-fill" : "ri-bookmark-line" });
+
+  // Live-updatable comment count element — updated by the feed onSnapshot below
+  const cmtCountEl = el("span", {});
+  cmtCountEl.textContent = " " + String(p.commentCount || 0);
 
   const actions = el("div", { class: "tfb-actions" },
-    orbitBtn,
     el("button", { class: "tfb-act", onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; } },
-      el("i", { class: "ri-chat-1-line" }), "Comment",
+      el("i", { class: "ri-chat-1-line" }),
+      cmtCountEl,
     ),
     el("button", {
       class: "tfb-act",
@@ -2696,8 +2717,20 @@ const renderPost = (p, author, opts = {}) => {
     },
       el("i", { class: "ri-share-forward-line" }), " Share",
     ),
+    el("button", { class: `tfb-act save-post-btn${_saved ? " saved" : ""}`, onclick: async (e) => {
+      e.stopPropagation();
+      _saved = !_saved;
+      saveIconEl.className = _saved ? "ri-bookmark-fill" : "ri-bookmark-line";
+      e.currentTarget.classList.toggle("saved", _saved);
+      e.currentTarget.classList.add("save-burst");
+      setTimeout(() => e.currentTarget.classList.remove("save-burst"), 420);
+      await toggleSave(p.id, _saved);
+    } }, saveIconEl),
+    el("span", { class: "spacer" }),
+    el("span", { class: "tfb-act", style: "cursor:default;pointer-events:none;" },
+      el("i", { class: "ri-eye-line" }), " " + String(p.views || 0)),
+    orbitBtn,
   );
-  post.appendChild(el("div", { class: "tfb-post-stats" }, likeSummary, commentSummaryBtn));
   post.appendChild(actions);
 
   // ── Comments (feed preview — top 5) ─────────────────────────────
@@ -2712,7 +2745,7 @@ const renderPost = (p, author, opts = {}) => {
       el("button", { class: "reply-cancel-btn", onclick: () => {
         _replyTo = null;
         replyBanner.classList.add("hidden");
-        cForm.querySelector("input").placeholder = "Write a comment…";
+        cForm.querySelector("input").placeholder = "Add your echo…";
         cForm.querySelector("input").value = "";
       }}, el("i", { class: "ri-close-line" })),
     );
@@ -2797,7 +2830,7 @@ const renderPost = (p, author, opts = {}) => {
     const cForm = el("form", { class: "comment-form" });
     const cFormRow = el("div", { class: "comment-form-row" },
       el("img", { class: "avatar xs", src: avatarFor(state.me), style: "cursor:pointer;", onclick: () => location.hash = `#profile/${state.uid}` }),
-      el("input", { type: "text", placeholder: "Write a comment…" }),
+      el("input", { type: "text", placeholder: "Add your echo…" }),
       cmtMediaBtn,
       cmtMicBtn,
       el("button", { class: "icon-btn", type: "submit" }, el("i", { class: "ri-send-plane-fill" })),
@@ -2827,7 +2860,7 @@ const renderPost = (p, author, opts = {}) => {
         }
       } catch { toast("Media upload failed"); submitBtn.disabled = false; return; }
       input.value = ""; _replyTo = null;
-      replyBanner.classList.add("hidden"); input.placeholder = "Write a comment…";
+      replyBanner.classList.add("hidden"); input.placeholder = "Add your echo…";
       clearCmtAttach();
       cBox.classList.remove("hidden");
       cBox.appendChild(el("div", { class: "comment" },
@@ -2863,14 +2896,13 @@ const renderPost = (p, author, opts = {}) => {
     const renderFeedComment = (c, a) => {
       const isLiked = (c.likes || []).includes(state.uid);
       const likeCountEl = el("span", { text: String((c.likes || []).length || "") });
-      const likeIconEl = el("i", { class: isLiked ? "ri-thumb-up-fill" : "ri-thumb-up-line", style: isLiked ? "color:#0866ff;" : "" });
+      const likeIconEl  = el("i", { class: isLiked ? "ri-heart-fill" : "ri-heart-line", style: isLiked ? "color:var(--danger);" : "" });
       let _liked = isLiked;
-      const likeBtn = el("button", { class: `cmt-like-btn${_liked ? " liked" : ""}`, onclick: async (e) => {
+      const likeBtn = el("button", { class: "cmt-like-btn", onclick: async (e) => {
         e.stopPropagation();
         _liked = !_liked;
-        likeIconEl.className = _liked ? "ri-thumb-up-fill" : "ri-thumb-up-line";
-        likeIconEl.style.color = _liked ? "#0866ff" : "";
-        likeBtn.classList.toggle("liked", _liked);
+        likeIconEl.className   = _liked ? "ri-heart-fill" : "ri-heart-line";
+        likeIconEl.style.color = _liked ? "var(--danger)" : "";
         const newCount = (c.likes?.length || 0) + (_liked ? 1 : -1);
         likeCountEl.textContent = newCount > 0 ? String(newCount) : "";
         await updateDoc(doc(db, "posts", p.id, "comments", c.id), {
@@ -2882,7 +2914,7 @@ const renderPost = (p, author, opts = {}) => {
             notifyUser(a.uid, state.me?.name || "Someone", "liked your comment", "/#post/" + p.id, state.me?.photoURL || "")
           ).catch(() => {});
         }
-      }}, likeIconEl, el("span", {}, "Like"), likeCountEl);
+      }}, likeIconEl, likeCountEl);
 
       const replyBtn = el("button", { class: "cmt-reply-btn", onclick: () => {
         _replyTo = { uid: a?.uid, name: a?.name || "user", username: a?.username || "" };
@@ -2936,10 +2968,8 @@ const renderPost = (p, author, opts = {}) => {
         const authors  = await Promise.all([...new Set(comments.map((c) => c.authorUid))].map(fetchUser));
         const map      = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
         comments.forEach((c) => cBox.appendChild(renderFeedComment(c, map[c.authorUid])));
-        // Keep the feed comment count badge in sync with live comment data
-        cmtCountEl.textContent = snap.size ? String(snap.size) : "";
-        cmtCountLabel.textContent = snap.size === 1 ? " comment" : " comments";
-        commentSummaryBtn.classList.toggle("hidden", snap.size === 0);
+        // Keep the feed comment count badge in sync with live comment data.
+        cmtCountEl.textContent = " " + String(snap.size);
       },
     );
 
@@ -3074,7 +3104,7 @@ const renderPostDetail = async (root, postId) => {
       ),
     ),
     el("div", { class: "detail-topbar-stats" },
-      el("span", {}, el("i", { class: "ri-thumb-up-line" }), ` ${p.orbitCount || 0} likes`),
+      el("span", {}, el("i", { class: "ri-fire-line" }), ` ${p.orbitCount || 0}`),
       el("span", {}, el("i", { class: "ri-eye-line" }), ` ${p.views || 0}`),
       el("span", {}, el("i", { class: "ri-chat-1-line" }), ` ${p.commentCount || 0}`),
     ),
@@ -3087,7 +3117,7 @@ const renderPostDetail = async (root, postId) => {
   const cmtSection = el("div", { class: "detail-comments" });
   root.appendChild(cmtSection);
 
-  const cmtHead = el("div", { class: "detail-cmt-head" }, "Comments");
+  const cmtHead = el("div", { class: "detail-cmt-head" }, "Echoes");
   cmtSection.appendChild(cmtHead);
 
   const cList = el("div", { class: "detail-cmt-list" });
@@ -3108,7 +3138,7 @@ const renderPostDetail = async (root, postId) => {
     _detailReplyTo = null;
     detailReplyBanner.classList.add("hidden");
     const inp = cmtSection.querySelector("input[type='text']");
-    if (inp) { inp.placeholder = "Write a comment…"; inp.value = ""; }
+    if (inp) { inp.placeholder = "Add your echo…"; inp.value = ""; }
   }}, el("i", { class: "ri-close-line" }));
   detailReplyBanner.appendChild(_replyBannerClose);
   cmtSection.appendChild(detailReplyBanner);
@@ -3117,7 +3147,7 @@ const renderPostDetail = async (root, postId) => {
     const isLiked = (c.likes || []).includes(state.uid);
     const likeCount = (c.likes || []).length;
     const likeCountEl = el("span", { class: "tw-cmt-act-count", text: likeCount > 0 ? String(likeCount) : "" });
-    const likeIconEl = el("i", { class: isLiked ? "ri-thumb-up-fill" : "ri-thumb-up-line" });
+    const likeIconEl  = el("i", { class: isLiked ? "ri-heart-fill" : "ri-heart-line" });
     let _liked = isLiked;
 
     const likeBtn = el("button", {
@@ -3125,7 +3155,7 @@ const renderPostDetail = async (root, postId) => {
       onclick: async (ev) => {
         ev.stopPropagation();
         _liked = !_liked;
-        likeIconEl.className = _liked ? "ri-thumb-up-fill" : "ri-thumb-up-line";
+        likeIconEl.className = _liked ? "ri-heart-fill" : "ri-heart-line";
         likeBtn.classList.toggle("liked", _liked);
         const newCount = (c.likes?.length || 0) + (_liked ? 1 : -1);
         likeCountEl.textContent = newCount > 0 ? String(newCount) : "";
@@ -3139,7 +3169,7 @@ const renderPostDetail = async (root, postId) => {
           ).catch(() => {});
         }
       },
-    }, likeIconEl, "Like", likeCountEl);
+    }, likeIconEl, likeCountEl);
 
     const replyBtn = el("button", {
       class: "tw-cmt-act-btn",
@@ -3151,7 +3181,7 @@ const renderPostDetail = async (root, postId) => {
         const inp = cmtSection.querySelector("input[type='text']");
         if (inp) { inp.placeholder = `Reply to @${handle}…`; inp.focus(); }
       },
-    }, el("i", { class: "ri-chat-1-line" }), "Reply");
+    }, el("i", { class: "ri-chat-1-line" }));
 
     const shareBtn = el("button", {
       class: "tw-cmt-act-btn",
@@ -3172,38 +3202,36 @@ const renderPostDetail = async (root, postId) => {
           }
         }
       },
-    }, el("i", { class: "ri-share-forward-line" }), "Share");
+    }, el("i", { class: "ri-share-forward-line" }));
 
     return el("div", { class: "tw-comment" },
       el("img", { class: "avatar xs tw-cmt-avatar", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
       el("div", { class: "tw-cmt-body" },
-        el("div", { class: "tw-cmt-bubble" },
-          el("div", { class: "tw-cmt-header" },
-            el("span", { class: "tw-cmt-name" }, a?.name || "User",
-              a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
-            ),
-            el("span", { class: "tw-cmt-username" }, `@${a?.username || "user"}`),
-            el("span", { class: "tw-cmt-dot" }, "·"),
-            el("span", { class: "tw-cmt-time" }, fmtTime(c.createdAt)),
+        el("div", { class: "tw-cmt-header" },
+          el("span", { class: "tw-cmt-name" }, a?.name || "User",
+            a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
           ),
-          (c.replyToUsername || c.replyToName) ? el("div", { class: "reply-to-label" },
-            el("i", { class: "ri-corner-down-right-line" }),
-            el("a", { class: "mention", href: `#profile-u/${c.replyToUsername || c.replyToName}` }, `@${c.replyToUsername || c.replyToName}`)
-          ) : null,
-          c.text ? el("div", { class: "tw-cmt-text" }, c.text) : null,
-          c.mediaUrl ? el("div", { class: "cmt-media", onclick: (ev) => { ev.stopPropagation(); c.mediaType === "video" ? openVideoViewer([{ type: "video", url: c.mediaUrl }], 0) : openImageZoom(c.mediaUrl); }},
-            c.mediaType === "video"
-              ? el("div", { class: "cmt-media-video-wrap" },
-                  el("video", { src: c.mediaUrl, muted: "", preload: "metadata", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;border-radius:10px;" }),
-                  el("div", { class: "cmt-media-video-play", html: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>` }),
-                )
-              : el("img", { src: c.mediaUrl, loading: "lazy", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;border-radius:10px;margin-top:8px;" }),
-          ) : null,
-          c.audioUrl ? el("div", { class: "cmt-voice-note" },
-            el("span", { html: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>` }),
-            el("audio", { src: c.audioUrl, controls: true, style: "height:28px;max-width:150px;" }),
-          ) : null,
+          el("span", { class: "tw-cmt-username" }, `@${a?.username || "user"}`),
+          el("span", { class: "tw-cmt-dot" }, "·"),
+          el("span", { class: "tw-cmt-time" }, fmtTime(c.createdAt)),
         ),
+        (c.replyToUsername || c.replyToName) ? el("div", { class: "reply-to-label" },
+          el("i", { class: "ri-corner-down-right-line" }),
+          el("a", { class: "mention", href: `#profile-u/${c.replyToUsername || c.replyToName}` }, `@${c.replyToUsername || c.replyToName}`)
+        ) : null,
+        c.text ? el("div", { class: "tw-cmt-text" }, c.text) : null,
+        c.mediaUrl ? el("div", { class: "cmt-media", onclick: (ev) => { ev.stopPropagation(); c.mediaType === "video" ? openVideoViewer([{ type: "video", url: c.mediaUrl }], 0) : openImageZoom(c.mediaUrl); }},
+          c.mediaType === "video"
+            ? el("div", { class: "cmt-media-video-wrap" },
+                el("video", { src: c.mediaUrl, muted: "", preload: "metadata", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;border-radius:10px;" }),
+                el("div", { class: "cmt-media-video-play", html: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>` }),
+              )
+            : el("img", { src: c.mediaUrl, loading: "lazy", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;border-radius:10px;margin-top:8px;" }),
+        ) : null,
+        c.audioUrl ? el("div", { class: "cmt-voice-note" },
+          el("span", { html: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>` }),
+          el("audio", { src: c.audioUrl, controls: true, style: "height:28px;max-width:150px;" }),
+        ) : null,
         el("div", { class: "tw-cmt-actions" }, replyBtn, shareBtn, likeBtn),
       ),
     );
@@ -3337,7 +3365,7 @@ const renderPostDetail = async (root, postId) => {
   cForm.appendChild(dCmtAttachPreview);
   const dFormRow = el("div", { class: "comment-form-row" },
     el("img", { class: "avatar xs", src: avatarFor(state.me), style: "cursor:pointer;", onclick: () => location.hash = `#profile/${state.uid}` }),
-    el("input", { type: "text", placeholder: "Write a comment…" }),
+    el("input", { type: "text", placeholder: "Add your echo…" }),
     dCmtMediaBtn,
     dCmtMicBtn,
     el("button", { class: "icon-btn", type: "submit" }, el("i", { class: "ri-send-plane-fill" })),
@@ -3372,7 +3400,7 @@ const renderPostDetail = async (root, postId) => {
       }
     } catch { toast("Media upload failed"); submitBtn.disabled = false; return; }
     input.value = ""; _detailReplyTo = null;
-    detailReplyBanner.classList.add("hidden"); input.placeholder = "Write a comment…";
+    detailReplyBanner.classList.add("hidden"); input.placeholder = "Add your echo…";
     clearDCmtAttach(); sfxComment(); submitBtn.disabled = false;
     await addDoc(collection(db, "posts", p.id, "comments"), commentData);
     await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
@@ -3406,1140 +3434,276 @@ const toggleSave = async (postId, shouldSave = null) => {
 };
 
 // =========================================================================
-// 10. GROUP CITY + GROUP ROOMS
+// 10. GROUPS
 // =========================================================================
-// Reuse the same local Kenney building models and Three.js modules as game.js.
-// The model loader resolves building-*.glb against the same page-relative paths.
-let _orbitThreeModulePromise = null;
-let _orbitGLTFLoaderPromise = null;
-let _orbitSkeletonUtilsPromise = null;
-const loadOrbitThree = () => {
-  if (!_orbitThreeModulePromise) {
-    _orbitThreeModulePromise = import("three")
-      .catch((error) => { _orbitThreeModulePromise = null; throw error; });
-  }
-  return _orbitThreeModulePromise;
-};
-const loadOrbitGLTFLoader = () => {
-  if (!_orbitGLTFLoaderPromise) {
-    _orbitGLTFLoaderPromise = import("three/addons/loaders/GLTFLoader.js")
-      .catch((error) => { _orbitGLTFLoaderPromise = null; throw error; });
-  }
-  return _orbitGLTFLoaderPromise;
-};
-const loadOrbitSkeletonUtils = () => {
-  if (!_orbitSkeletonUtilsPromise) {
-    _orbitSkeletonUtilsPromise = import("three/addons/utils/SkeletonUtils.js")
-      .catch((error) => { _orbitSkeletonUtilsPromise = null; throw error; });
-  }
-  return _orbitSkeletonUtilsPromise;
-};
-const GROUP_CITY_BUILDING_MODELS = [
-  "building-a.glb", "building-b.glb", "building-c.glb", "building-d.glb", "building-e.glb",
-  "building-f.glb", "building-g.glb", "building-h.glb", "building-i.glb", "building-j.glb",
-  "building-k.glb", "building-l.glb", "building-m.glb", "building-n.glb", "building-o.glb",
-  "building-p.glb", "building-q.glb", "building-r.glb", "building-s.glb", "building-t.glb",
-];
-
-const groupSeed = (value = "") => {
-  let n = 2166136261;
-  for (let i = 0; i < value.length; i++) n = Math.imul(n ^ value.charCodeAt(i), 16777619);
-  return n >>> 0;
-};
-
-class OrbitGroupsCity {
-  constructor(stage, groups, onNearby) {
-    this.stage = stage;
-    this.groups = groups;
-    this.onNearby = onNearby;
-    this.disposed = false;
-    this.keys = new Set();
-    this.moveX = 0;
-    this.moveY = 0;
-    this.joystickPointer = null;
-    this.swipePointer = null;
-    this.lastSwipeX = 0;
-    this.lastSwipeY = 0;
-    this.yaw = 0;
-    this.pitch = 0.34;
-    this.speed = 0.36;
-    this.nearbyId = null;
-    this.lastFrame = 0;
-    this.init().catch((error) => {
-      if (this.disposed || !this.stage.isConnected) return;
-      console.error("Orbit groups city failed to start:", error);
-      const loading = this.stage.querySelector(".grp-city-loading");
-      if (loading) {
-        loading.innerHTML = "<strong>City view unavailable</strong><span>Check your connection or WebGL support, then reload Groups.</span>";
-        loading.classList.remove("hidden");
-      }
-    });
-  }
-
-  async init() {
-    const THREE = await loadOrbitThree();
-    if (this.disposed || !this.stage.isConnected) return;
-    this.THREE = THREE;
-    const count = Math.max(1, this.groups.length);
-    this.cols = Math.min(10, Math.max(3, Math.ceil(Math.sqrt(count * 1.25))));
-    this.rows = Math.ceil(count / this.cols);
-    this.spacingX = 38;
-    this.spacingZ = 42;
-    this.startX = -((this.cols - 1) * this.spacingX) / 2;
-    this.startZ = -((this.rows - 1) * this.spacingZ) / 2;
-    this.mapWidth = this.cols * this.spacingX + 76;
-    this.mapDepth = this.rows * this.spacingZ + 118;
-
-    this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x87ceeb);
-    this.scene.fog = new THREE.Fog(0x87ceeb, 115, Math.max(260, this.mapDepth * 1.3));
-    this.camera = new THREE.PerspectiveCamera(62, 1, 0.1, 1200);
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.domElement.className = "grp-city-canvas";
-    this.renderer.domElement.setAttribute("aria-label", "Walkable 3D city of Orbit groups");
-    this.stage.insertBefore(this.renderer.domElement, this.stage.firstChild);
-
-    this.scene.add(new THREE.HemisphereLight(0xdaf3ff, 0x355333, 1.5));
-    const sun = new THREE.DirectionalLight(0xffeed4, 2.1);
-    sun.position.set(65, 100, 50);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(1024, 1024);
-    sun.shadow.camera.left = -150;
-    sun.shadow.camera.right = 150;
-    sun.shadow.camera.top = 150;
-    sun.shadow.camera.bottom = -150;
-    sun.shadow.camera.far = 400;
-    this.scene.add(sun);
-    const fill = new THREE.DirectionalLight(0x91c7ff, 0.55);
-    fill.position.set(-55, 35, -65);
-    this.scene.add(fill);
-
-    this.createLandscape();
-    this.buildings = this.groups.map((group, index) => this.createBuilding(group, index));
-    this.loadBuildingModels().catch((error) => console.warn("Orbit city building models unavailable; showing fallback buildings:", error));
-    this.createPlayer();
-    this.loadPlayerAvatar().catch((error) => console.warn("Could not load the Orbit player avatar:", error));
-    this.playerPos = new THREE.Vector3(0, 0, this.startZ + (this.rows - 1) * this.spacingZ + 27);
-    this.player.position.copy(this.playerPos);
-    this.camera.position.set(this.playerPos.x, 8, this.playerPos.z + 14);
-    this.camera.lookAt(this.playerPos.x, 2, this.playerPos.z);
-
-    this.bindControls();
-    this.resize();
-    this.resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => this.resize()) : null;
-    this.resizeObserver?.observe(this.stage);
-    this.resizeHandler = () => this.resize();
-    window.addEventListener("resize", this.resizeHandler);
-    this.stage.querySelector(".grp-city-loading")?.classList.add("hidden");
-    this.animate();
-  }
-
-  addMesh(geometry, material, x, y, z, parent = this.scene) {
-    const mesh = new this.THREE.Mesh(geometry, material);
-    mesh.position.set(x, y, z);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    parent.add(mesh);
-    return mesh;
-  }
-
-  createLandscape() {
-    const THREE = this.THREE;
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(this.mapWidth, this.mapDepth),
-      new THREE.MeshStandardMaterial({ color: 0x3a7e3a, roughness: 0.92 }),
-    );
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.set(0, -0.12, (this.startZ + this.rows * this.spacingZ / 2) / 2);
-    ground.receiveShadow = true;
-    this.scene.add(ground);
-
-    const roadMaterial = new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.9 });
-    const centerX = this.startX + (this.cols - 1) * this.spacingX / 2;
-    const centerZ = this.startZ + (this.rows - 1) * this.spacingZ / 2;
-    for (let i = 0; i <= this.cols; i++) {
-      const x = this.startX - this.spacingX / 2 + i * this.spacingX;
-      const road = new THREE.Mesh(new THREE.PlaneGeometry(7, this.mapDepth), roadMaterial);
-      road.rotation.x = -Math.PI / 2;
-      road.position.set(x, 0.015, centerZ);
-      road.receiveShadow = true;
-      this.scene.add(road);
-    }
-    for (let i = 0; i <= this.rows; i++) {
-      const z = this.startZ - this.spacingZ / 2 + i * this.spacingZ;
-      const road = new THREE.Mesh(new THREE.PlaneGeometry(this.mapWidth, 7), roadMaterial);
-      road.rotation.x = -Math.PI / 2;
-      road.position.set(centerX, 0.02, z);
-      road.receiveShadow = true;
-      this.scene.add(road);
-    }
-
-    for (let i = 0; i < 90; i++) {
-      const x = Math.sin(i * 12.9898) * (this.mapWidth * 0.47);
-      const z = Math.cos(i * 7.233) * (this.mapDepth * 0.45) + centerZ;
-      const patch = new THREE.Mesh(
-        new THREE.CircleGeometry(2.5 + (i % 5) * 0.7, 7),
-        new THREE.MeshStandardMaterial({ color: i % 2 ? 0x458a43 : 0x4a8e4a, roughness: 1 }),
-      );
-      patch.rotation.x = -Math.PI / 2;
-      patch.position.set(x, 0.025, z);
-      patch.receiveShadow = true;
-      this.scene.add(patch);
-    }
-  }
-
-  createBannerTexture(name) {
-    const canvas = document.createElement("canvas");
-    canvas.width = 512;
-    canvas.height = 128;
-    const ctx = canvas.getContext("2d");
-    const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-    gradient.addColorStop(0, "#39205e");
-    gradient.addColorStop(1, "#c84a8c");
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "rgba(255,255,255,.13)";
-    ctx.fillRect(0, 0, 12, canvas.height);
-    ctx.fillRect(canvas.width - 12, 0, 12, canvas.height);
-    ctx.fillStyle = "#ffffff";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    let fontSize = 52;
-    ctx.font = `800 ${fontSize}px system-ui, sans-serif`;
-    while (ctx.measureText(name).width > 465 && fontSize > 22) {
-      fontSize -= 2;
-      ctx.font = `800 ${fontSize}px system-ui, sans-serif`;
-    }
-    ctx.fillText(name, canvas.width / 2, canvas.height / 2, 456);
-    const texture = new this.THREE.CanvasTexture(canvas);
-    texture.colorSpace = this.THREE.SRGBColorSpace;
-    return texture;
-  }
-
-  async loadBuildingModels() {
-    const { GLTFLoader } = await loadOrbitGLTFLoader();
-    if (this.disposed || !this.stage.isConnected) return;
-    const loader = new GLTFLoader();
-    const templates = new Map();
-    const loadTemplate = (filename) => {
-      if (!templates.has(filename)) {
-        templates.set(filename, new Promise((resolve, reject) => {
-          // game.js uses this same relative filename lookup for its buildings.
-          loader.load(filename, (gltf) => resolve(gltf.scene), undefined, reject);
-        }));
-      }
-      return templates.get(filename);
-    };
-    let loaded = 0;
-    await Promise.all(this.buildings.map(async (building) => {
-      try {
-        const template = await loadTemplate(building.modelFile);
-        if (this.disposed || !this.stage.isConnected) return;
-        const model = template.clone(true);
-        model.traverse((node) => {
-          if (node.isMesh) { node.castShadow = true; node.receiveShadow = true; }
-        });
-        model.updateMatrixWorld(true);
-        const rawBounds = new this.THREE.Box3().setFromObject(model);
-        const rawSize = rawBounds.getSize(new this.THREE.Vector3());
-        if (!rawSize.y) return;
-        model.scale.multiplyScalar(building.height / rawSize.y);
-        model.updateMatrixWorld(true);
-        const bounds = new this.THREE.Box3().setFromObject(model);
-        model.position.x -= (bounds.min.x + bounds.max.x) / 2;
-        model.position.y -= bounds.min.y;
-        model.position.z -= (bounds.min.z + bounds.max.z) / 2;
-        building.modelRoot.add(model);
-        building.fallbackRoot.visible = false;
-        loaded++;
-      } catch (error) {
-        console.warn(`Could not load ${building.modelFile}; keeping its fallback building.`, error);
-      }
-    }));
-    if (!this.disposed && loaded) console.info(`Loaded ${loaded} Orbit group buildings from the game.js GLB set.`);
-  }
-
-  createBuilding(group, index) {
-    const THREE = this.THREE;
-    const seed = groupSeed(group.id || group.name || String(index));
-    const width = 15 + (seed % 6);
-    const depth = 15 + ((seed >>> 4) % 6);
-    const height = 11 + ((seed >>> 8) % 11);
-    const x = this.startX + (index % this.cols) * this.spacingX;
-    const z = this.startZ + Math.floor(index / this.cols) * this.spacingZ;
-    const palette = [0xb96f50, 0x8b7c67, 0x6d8790, 0xc19c64, 0x8a6f9d, 0x637966, 0xa56258, 0x8291a0];
-    const color = palette[seed % palette.length];
-    const building = new THREE.Group();
-    building.position.set(x, 0, z);
-    building.rotation.y = Math.floor((seed >>> 12) % 4) * Math.PI / 2;
-    this.scene.add(building);
-    const fallbackRoot = new THREE.Group();
-    const modelRoot = new THREE.Group();
-    const signRoot = new THREE.Group();
-    building.add(fallbackRoot, modelRoot, signRoot);
-
-    this.addMesh(new THREE.BoxGeometry(width + 1.2, 1, depth + 1.2), new THREE.MeshStandardMaterial({ color: 0x6c6a63, roughness: 0.95 }), 0, 0.5, 0, fallbackRoot);
-    this.addMesh(new THREE.BoxGeometry(width, height, depth), new THREE.MeshStandardMaterial({ color, roughness: 0.82 }), 0, height / 2 + 1, 0, fallbackRoot);
-    const roofColor = seed % 2 ? 0x554d49 : 0x4e5256;
-    this.addMesh(new THREE.BoxGeometry(width + 0.8, 0.65, depth + 0.8), new THREE.MeshStandardMaterial({ color: roofColor, roughness: 0.95 }), 0, height + 1.3, 0, fallbackRoot);
-
-    const roofStyle = (seed >>> 16) % 3;
-    if (roofStyle === 0) {
-      this.addMesh(new THREE.BoxGeometry(width * 0.36, 2.8, depth * 0.38), new THREE.MeshStandardMaterial({ color: roofColor, roughness: 0.85 }), -width * 0.17, height + 3, -depth * 0.1, fallbackRoot);
-    } else if (roofStyle === 1) {
-      this.addMesh(new THREE.CylinderGeometry(1.2, 1.2, 2.8, 8), new THREE.MeshStandardMaterial({ color: 0x9c9a8d, metalness: 0.28, roughness: 0.65 }), width * 0.2, height + 2.9, -depth * 0.1, fallbackRoot);
-    } else {
-      this.addMesh(new THREE.BoxGeometry(width * 0.22, 1.2, depth * 0.22), new THREE.MeshStandardMaterial({ color: 0x867e70, roughness: 0.8 }), 0, height + 2.2, 0, fallbackRoot);
-    }
-
-    const windowMaterial = new THREE.MeshStandardMaterial({ color: seed % 3 ? 0x88c4da : 0xf4d89b, emissive: seed % 3 ? 0x152d35 : 0x2d2110, roughness: 0.36, metalness: 0.08 });
-    const floors = Math.max(2, Math.floor(height / 3.2));
-    for (let floor = 0; floor < floors; floor++) {
-      const wy = 2 + floor * (height - 2) / floors;
-      for (let col = -1; col <= 1; col++) {
-        const wx = col * (width * 0.28);
-        this.addMesh(new THREE.BoxGeometry(1.8, 1.35, 0.18), windowMaterial, wx, wy, depth / 2 + 0.1, fallbackRoot);
-        this.addMesh(new THREE.BoxGeometry(0.18, 1.35, 1.8), windowMaterial, width / 2 + 0.1, wy, col * (depth * 0.26), fallbackRoot);
-      }
-    }
-
-    const signWidth = Math.min(width * 0.9, 15);
-    const signTexture = this.createBannerTexture(group.name || "Orbit group");
-    const banner = new THREE.Mesh(
-      new THREE.PlaneGeometry(signWidth, 2.9),
-      new THREE.MeshBasicMaterial({ map: signTexture, side: THREE.DoubleSide }),
-    );
-    banner.position.set(0, height * 0.69 + 1, depth / 2 + 0.55);
-    signRoot.add(banner);
-    const poleMaterial = new THREE.MeshStandardMaterial({ color: 0x453b36, metalness: 0.25, roughness: 0.65 });
-    this.addMesh(new THREE.BoxGeometry(signWidth + 0.6, 0.18, 0.18), poleMaterial, 0, height * 0.69 + 2.55, depth / 2 + 0.55, signRoot);
-
-    return { group, x, z, width, depth, height, mesh: building, modelFile: GROUP_CITY_BUILDING_MODELS[index % GROUP_CITY_BUILDING_MODELS.length], fallbackRoot, modelRoot };
-  }
-
-  createPlayer() {
-    const THREE = this.THREE;
-    this.player = new THREE.Group();
-    // Keep a small ground pointer visible while the user's GLB avatar loads.
-    const marker = new THREE.Mesh(
-      new THREE.CircleGeometry(1.1, 22),
-      new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.32, side: THREE.DoubleSide }),
-    );
-    marker.rotation.x = -Math.PI / 2;
-    marker.position.y = 0.035;
-    this.player.add(marker);
-    const pointer = new THREE.Mesh(
-      new THREE.ConeGeometry(0.48, 1.45, 5),
-      new THREE.MeshStandardMaterial({ color: 0xffd166, roughness: 0.42 }),
-    );
-    pointer.rotation.x = -Math.PI / 2;
-    pointer.position.set(0, 0.12, -1.15);
-    this.player.add(pointer);
-    this.scene.add(this.player);
-  }
-
-  loadModelFile(loader, url) {
-    return new Promise((resolve, reject) => loader.load(url, resolve, undefined, reject));
-  }
-
-  async loadPlayerAvatar() {
-    const { GLTFLoader } = await loadOrbitGLTFLoader();
-    if (this.disposed || !this.stage.isConnected) return;
-    const loader = new GLTFLoader();
-    const customModelURL = state.me?.avatarModelUrl || null;
-    let gltf;
-    try {
-      gltf = await this.loadModelFile(loader, customModelURL || "Soldier.glb");
-    } catch (error) {
-      if (!customModelURL) throw error;
-      console.warn("Orbit profile avatar failed; falling back to the game character.", error);
-      gltf = await this.loadModelFile(loader, "Soldier.glb");
-    }
-    if (this.disposed || !this.stage.isConnected) return;
-
-    const model = gltf.scene;
-    model.rotation.y = Math.PI;
-    model.traverse((node) => {
-      if (node.isMesh) { node.castShadow = true; node.receiveShadow = true; node.frustumCulled = false; }
-    });
-    model.updateMatrixWorld(true);
-    const bounds = new this.THREE.Box3().setFromObject(model);
-    const originalSize = bounds.getSize(new this.THREE.Vector3());
-    if (originalSize.y > 0) {
-      // The default Soldier.glb uses the same scale as game.js; personal Orbit
-      // avatar models are sized to fit the same walking character footprint.
-      model.scale.setScalar(customModelURL ? 3.35 / originalSize.y : 1.163);
-    }
-    model.updateMatrixWorld(true);
-    const scaledBounds = new this.THREE.Box3().setFromObject(model);
-    model.position.y -= scaledBounds.min.y;
-    this.playerAvatarHeight = scaledBounds.getSize(new this.THREE.Vector3()).y;
-    this.player.add(model);
-    this.playerModel = model;
-
-    if (gltf.animations?.length) {
-      this.playerMixer = new this.THREE.AnimationMixer(model);
-      this.playerAnimationClips = gltf.animations;
-      this.setPlayerAnimation(false);
-    }
-    this.addPlayerNameTag();
-  }
-
-  addPlayerNameTag() {
-    const canvas = document.createElement("canvas");
-    canvas.width = 512;
-    canvas.height = 112;
-    const ctx = canvas.getContext("2d");
-    ctx.fillStyle = "rgba(17, 21, 34, .84)";
-    ctx.beginPath();
-    ctx.roundRect(10, 12, 492, 88, 38);
-    ctx.fill();
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "700 32px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    const username = state.me?.username ? `@${String(state.me.username).replace(/^@/, "")}` : (state.me?.name || "You");
-    ctx.fillText(username, 256, 57, 460);
-    const texture = new this.THREE.CanvasTexture(canvas);
-    texture.colorSpace = this.THREE.SRGBColorSpace;
-    const tag = new this.THREE.Sprite(new this.THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }));
-    tag.scale.set(3.8, 0.84, 1);
-    tag.position.set(0, Math.max(3.8, (this.playerAvatarHeight || 3.2) + 0.65), 0);
-    this.player.add(tag);
-    this.playerNameTag = tag;
-  }
-
-  setPlayerAnimation(isMoving) {
-    if (!this.playerMixer || !this.playerAnimationClips?.length) return;
-    const pattern = isMoving ? /run|walk|move/i : /idle|stand|breath/i;
-    const clip = this.playerAnimationClips.find((candidate) => pattern.test(candidate.name))
-      || this.playerAnimationClips.find((candidate) => /idle|stand|breath|run|walk/i.test(candidate.name))
-      || this.playerAnimationClips[0];
-    if (!clip || clip.name === this.playerCurrentAnimation) return;
-    const next = this.playerMixer.clipAction(clip);
-    this.playerActions ||= new Map();
-    this.playerActions.set(clip.name, next);
-    this.playerActions.get(this.playerCurrentAnimation)?.fadeOut(0.14);
-    next.reset().fadeIn(0.14).play();
-    this.playerCurrentAnimation = clip.name;
-  }
-
-  bindControls() {
-    const joystick = this.stage.querySelector(".grp-city-joystick");
-    const thumb = this.stage.querySelector(".grp-city-joystick-thumb");
-    const swipe = this.stage.querySelector(".grp-city-swipe-zone");
-    if (joystick && thumb) {
-      const move = (event) => {
-        if (event.pointerId !== this.joystickPointer) return;
-        event.preventDefault();
-        const rect = joystick.getBoundingClientRect();
-        let dx = event.clientX - (rect.left + rect.width / 2);
-        let dy = event.clientY - (rect.top + rect.height / 2);
-        const max = Math.min(rect.width, rect.height) * 0.34;
-        const dist = Math.hypot(dx, dy);
-        if (dist > max) { dx *= max / dist; dy *= max / dist; }
-        thumb.style.transform = `translate(${dx}px,${dy}px)`;
-        this.moveX = dx / max;
-        this.moveY = -dy / max;
-      };
-      joystick.addEventListener("pointerdown", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        if (this.joystickPointer !== null) return;
-        this.joystickPointer = event.pointerId;
-        joystick.setPointerCapture?.(event.pointerId);
-        move(event);
-      });
-      joystick.addEventListener("pointermove", move);
-      const release = (event) => {
-        if (event.pointerId !== this.joystickPointer) return;
-        this.joystickPointer = null;
-        this.moveX = this.moveY = 0;
-        thumb.style.transform = "translate(0px,0px)";
-      };
-      joystick.addEventListener("pointerup", release);
-      joystick.addEventListener("pointercancel", release);
-      joystick.addEventListener("lostpointercapture", release);
-    }
-    if (swipe) {
-      swipe.addEventListener("pointerdown", (event) => {
-        if (event.target.closest("button, a")) return;
-        this.swipePointer = event.pointerId;
-        this.lastSwipeX = event.clientX;
-        this.lastSwipeY = event.clientY;
-        swipe.setPointerCapture?.(event.pointerId);
-      });
-      swipe.addEventListener("pointermove", (event) => {
-        if (event.pointerId !== this.swipePointer) return;
-        const dx = event.clientX - this.lastSwipeX;
-        const dy = event.clientY - this.lastSwipeY;
-        this.yaw -= dx * 0.005;
-        this.pitch = Math.max(0.16, Math.min(0.72, this.pitch + dy * 0.003));
-        this.lastSwipeX = event.clientX;
-        this.lastSwipeY = event.clientY;
-      });
-      const stopSwipe = (event) => { if (event.pointerId === this.swipePointer) this.swipePointer = null; };
-      swipe.addEventListener("pointerup", stopSwipe);
-      swipe.addEventListener("pointercancel", stopSwipe);
-      swipe.addEventListener("lostpointercapture", stopSwipe);
-    }
-    this.keyDown = (event) => {
-      if (!this.stage.isConnected || event.target.closest?.("input, textarea, button, a")) return;
-      const key = event.key.toLowerCase();
-      if (["w", "a", "s", "d", "arrowup", "arrowleft", "arrowdown", "arrowright"].includes(key)) {
-        this.keys.add(key);
-        event.preventDefault();
-      }
-    };
-    this.keyUp = (event) => this.keys.delete(event.key.toLowerCase());
-    window.addEventListener("keydown", this.keyDown);
-    window.addEventListener("keyup", this.keyUp);
-  }
-
-  resize() {
-    if (!this.renderer || this.disposed) return;
-    const width = Math.max(1, this.stage.clientWidth);
-    const height = Math.max(1, this.stage.clientHeight);
-    this.camera.aspect = width / height;
-    this.camera.updateProjectionMatrix();
-    this.renderer.setSize(width, height, false);
-  }
-
-  isFree(x, z) {
-    return this.buildings.every((building) =>
-      Math.abs(x - building.x) > building.width / 2 + 1.3 || Math.abs(z - building.z) > building.depth / 2 + 1.3,
-    );
-  }
-
-  animate = (now = performance.now()) => {
-    if (this.disposed || !this.stage.isConnected) { this.destroy(); return; }
-    this.frame = requestAnimationFrame(this.animate);
-    const dt = Math.min(40, this.lastFrame ? now - this.lastFrame : 16.7) / 16.7;
-    this.lastFrame = now;
-    let mx = this.moveX;
-    let my = this.moveY;
-    if (this.keys.has("a") || this.keys.has("arrowleft")) mx -= 1;
-    if (this.keys.has("d") || this.keys.has("arrowright")) mx += 1;
-    if (this.keys.has("w") || this.keys.has("arrowup")) my += 1;
-    if (this.keys.has("s") || this.keys.has("arrowdown")) my -= 1;
-    const magnitude = Math.hypot(mx, my);
-    if (magnitude > 1) { mx /= magnitude; my /= magnitude; }
-    const forwardX = -Math.sin(this.yaw), forwardZ = -Math.cos(this.yaw);
-    const rightX = Math.cos(this.yaw), rightZ = -Math.sin(this.yaw);
-    const dx = (forwardX * my + rightX * mx) * this.speed * dt;
-    const dz = (forwardZ * my + rightZ * mx) * this.speed * dt;
-    const limitX = this.mapWidth / 2 - 4;
-    const centerZ = this.startZ + (this.rows - 1) * this.spacingZ / 2;
-    const limitZ = this.mapDepth / 2 - 4;
-    const nx = Math.max(-limitX, Math.min(limitX, this.playerPos.x + dx));
-    const nz = Math.max(centerZ - limitZ, Math.min(centerZ + limitZ, this.playerPos.z + dz));
-    if (this.isFree(nx, this.playerPos.z)) this.playerPos.x = nx;
-    if (this.isFree(this.playerPos.x, nz)) this.playerPos.z = nz;
-    this.player.position.copy(this.playerPos);
-    this.player.rotation.y = this.yaw;
-    this.setPlayerAnimation(magnitude > 0.05);
-    this.playerMixer?.update(dt * 0.0167);
-
-    const horizontal = 13 * Math.cos(this.pitch);
-    const cameraTarget = new this.THREE.Vector3(
-      this.playerPos.x + Math.sin(this.yaw) * horizontal,
-      this.playerPos.y + 2.2 + 13 * Math.sin(this.pitch),
-      this.playerPos.z + Math.cos(this.yaw) * horizontal,
-    );
-    this.camera.position.lerp(cameraTarget, 0.11);
-    this.camera.lookAt(this.playerPos.x, this.playerPos.y + 1.4, this.playerPos.z);
-
-    let nearest = null;
-    let bestDistance = 18;
-    for (const building of this.buildings) {
-      const distance = Math.hypot(this.playerPos.x - building.x, this.playerPos.z - building.z);
-      if (distance < bestDistance) { nearest = building.group; bestDistance = distance; }
-    }
-    const nextId = nearest?.id || null;
-    if (nextId !== this.nearbyId) {
-      this.nearbyId = nextId;
-      this.onNearby(nearest || null);
-    }
-    this.renderer.render(this.scene, this.camera);
-  };
-
-  destroy() {
-    if (this.disposed) return;
-    this.disposed = true;
-    if (this.frame) cancelAnimationFrame(this.frame);
-    if (this.keyDown) window.removeEventListener("keydown", this.keyDown);
-    if (this.keyUp) window.removeEventListener("keyup", this.keyUp);
-    if (this.resizeHandler) window.removeEventListener("resize", this.resizeHandler);
-    this.resizeObserver?.disconnect();
-    if (this.scene) this.scene.traverse((node) => {
-      if (node.geometry) node.geometry.dispose();
-      if (node.material) {
-        const materials = Array.isArray(node.material) ? node.material : [node.material];
-        materials.forEach((material) => {
-          material.map?.dispose();
-          material.dispose();
-        });
-      }
-    });
-    this.renderer?.dispose();
-    this.renderer?.domElement.remove();
-  }
-}
-
-const groupMemberCount = (group) => (group.members || []).length;
-const setGroupMembership = async (group, joined) => {
-  if (!state.uid) { toast("Sign in to join this group"); return false; }
-  try {
-    group.members = await changeGroupMembers(group.id, joined ? { remove: [state.uid] } : { add: [state.uid] });
-    group.memberCount = group.members.length;
-    return true;
-  } catch (error) {
-    toast(error?.message || "Could not update group membership");
-    return false;
-  }
-};
-
-class OrbitGroupRoomScene {
-  constructor(stage, members) {
-    this.stage = stage;
-    this.members = members;
-    this.disposed = false;
-    this.frame = 0;
-    this.lastFrame = 0;
-    this.yaw = 0;
-    this.pitch = 0.32;
-    this.drag = null;
-    this.actors = [];
-    this.modelTemplates = new Map();
-    this.waveIndex = 0;
-    this.nextWaveAt = performance.now() + 2200;
-    this.init().catch((error) => {
-      if (this.disposed || !this.stage.isConnected) return;
-      console.error("Orbit group room failed to start:", error);
-      const loading = this.stage.querySelector(".grp-room-loading");
-      if (loading) loading.textContent = "The room could not be opened. Check WebGL support and your avatar model paths.";
-    });
-  }
-
-  async init() {
-    const [THREE, { GLTFLoader }, skeletonUtils] = await Promise.all([
-      loadOrbitThree(),
-      loadOrbitGLTFLoader(),
-      loadOrbitSkeletonUtils(),
-    ]);
-    if (this.disposed || !this.stage.isConnected) return;
-    this.THREE = THREE;
-    this.SkeletonUtils = skeletonUtils;
-    this.loader = new GLTFLoader();
-    const count = this.members.length;
-    this.rings = Math.max(1, Math.ceil(count / 14));
-    this.roomRadius = Math.max(25, 18 + (this.rings - 1) * 5);
-    this.roomSize = this.roomRadius * 2;
-    this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x171923);
-    this.scene.fog = new THREE.Fog(0x171923, this.roomSize * 1.1, this.roomSize * 2.7);
-    this.camera = new THREE.PerspectiveCamera(48, 1, 0.1, 1200);
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.domElement.className = "grp-room-canvas";
-    this.renderer.domElement.setAttribute("aria-label", "Three-dimensional group lounge with member avatars");
-    this.stage.insertBefore(this.renderer.domElement, this.stage.firstChild);
-    this.createInterior();
-    this.resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => this.resize()) : null;
-    this.resizeObserver?.observe(this.stage);
-    this.resizeHandler = () => this.resize();
-    window.addEventListener("resize", this.resizeHandler);
-    this.bindLookControls();
-    this.resize();
-    this.updateCamera();
-    this.loading = this.stage.querySelector(".grp-room-loading");
-    if (!count && this.loading) this.loading.textContent = "This group has no members yet.";
-    this.frame = requestAnimationFrame(this.animate);
-    await Promise.all(this.members.map((member, index) => this.loadMemberAvatar(member, index).catch((error) => {
-      console.warn(`Could not load the GLB avatar for ${member.username || member.uid || "a group member"}:`, error);
-    })));
-    if (this.loading) {
-      if (count) this.loading.classList.add("hidden");
-      else setTimeout(() => this.loading?.classList.add("hidden"), 900);
-    }
-  }
-
-  addMesh(geometry, material, x, y, z, parent = this.scene) {
-    const mesh = new this.THREE.Mesh(geometry, material);
-    mesh.position.set(x, y, z);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    parent.add(mesh);
-    return mesh;
-  }
-
-  createInterior() {
-    const THREE = this.THREE;
-    const half = this.roomSize / 2;
-    const wallHeight = 15;
-    const floor = new THREE.MeshStandardMaterial({ color: 0x695f59, roughness: 0.86 });
-    const wall = new THREE.MeshStandardMaterial({ color: 0x2d3441, roughness: 0.9 });
-    const accent = new THREE.MeshStandardMaterial({ color: 0x65517b, roughness: 0.74 });
-    const glass = new THREE.MeshStandardMaterial({ color: 0x83cbe3, emissive: 0x1e4151, emissiveIntensity: 0.4, roughness: 0.26, metalness: 0.12 });
-    const trim = new THREE.MeshStandardMaterial({ color: 0xd6b982, roughness: 0.66 });
-    const dark = new THREE.MeshStandardMaterial({ color: 0x302a30, roughness: 0.74 });
-    this.scene.add(new THREE.HemisphereLight(0xf2e8ff, 0x3a3028, 1.7));
-    const warm = new THREE.PointLight(0xffd5a2, 110, this.roomSize * 1.1, 2);
-    warm.position.set(0, wallHeight - 1, 0);
-    this.scene.add(warm);
-    const fill = new THREE.DirectionalLight(0xb8d7ff, 1.1);
-    fill.position.set(-half * 0.7, wallHeight * 1.8, half * 0.65);
-    fill.castShadow = true;
-    fill.shadow.mapSize.set(1024, 1024);
-    fill.shadow.camera.left = -half;
-    fill.shadow.camera.right = half;
-    fill.shadow.camera.top = half;
-    fill.shadow.camera.bottom = -half;
-    this.scene.add(fill);
-
-    this.addMesh(new THREE.BoxGeometry(this.roomSize, 1, this.roomSize), floor, 0, -0.5, 0);
-    const rugs = new THREE.MeshStandardMaterial({ color: 0x6a446b, roughness: 0.95 });
-    this.addMesh(new THREE.BoxGeometry(Math.min(17, this.roomSize * 0.35), 0.12, Math.min(14, this.roomSize * 0.29)), rugs, 0, 0.08, 0);
-    this.addMesh(new THREE.BoxGeometry(this.roomSize, wallHeight, 1), wall, 0, wallHeight / 2, -half, this.scene);
-    this.addMesh(new THREE.BoxGeometry(1, wallHeight, this.roomSize), wall, -half, wallHeight / 2, 0, this.scene);
-    this.addMesh(new THREE.BoxGeometry(1, wallHeight, this.roomSize), wall, half, wallHeight / 2, 0, this.scene);
-    // Entry-side walls leave a broad doorway into the lounge.
-    const doorHalf = 4.5;
-    this.addMesh(new THREE.BoxGeometry(half - doorHalf, wallHeight, 1), wall, -(half + doorHalf) / 2, wallHeight / 2, half, this.scene);
-    this.addMesh(new THREE.BoxGeometry(half - doorHalf, wallHeight, 1), wall, (half + doorHalf) / 2, wallHeight / 2, half, this.scene);
-    this.addMesh(new THREE.BoxGeometry(doorHalf * 2, 3.5, 1), accent, 0, wallHeight - 1.75, half, this.scene);
-
-    const windowWidth = Math.min(15, this.roomSize * 0.26);
-    for (const x of [-half * 0.53, 0, half * 0.53]) {
-      if (Math.abs(x) < windowWidth * 0.7 && Math.abs(x) < 1) continue;
-      this.addMesh(new THREE.BoxGeometry(windowWidth, 6, 0.3), glass, x, 8.1, -half + 0.56);
-      this.addMesh(new THREE.BoxGeometry(windowWidth + 0.55, 0.35, 0.42), trim, x, 11.25, -half + 0.5);
-      this.addMesh(new THREE.BoxGeometry(0.24, 6.3, 0.42), trim, x, 8.1, -half + 0.5);
-      this.addMesh(new THREE.BoxGeometry(0.24, 6.3, 0.42), trim, x + windowWidth, 8.1, -half + 0.5);
-    }
-    // Warm wall sconces and a few exposed ceiling beams make the space read as a building interior.
-    for (const side of [-1, 1]) {
-      for (const z of [-half * 0.55, 0, half * 0.48]) {
-        const lamp = new THREE.PointLight(0xffbd79, 19, 25, 2);
-        lamp.position.set(side * (half - 1.5), 7.5, z);
-        this.scene.add(lamp);
-        this.addMesh(new THREE.BoxGeometry(0.34, 1.8, 0.34), trim, side * (half - 1.1), 7.5, z);
-      }
-    }
-    for (const z of [-half * 0.72, -half * 0.2, half * 0.34]) {
-      this.addMesh(new THREE.BoxGeometry(this.roomSize - 1, 0.42, 0.42), dark, 0, wallHeight + 1.3, z);
-    }
-
-    // Low lounge furniture stays around the central rug, leaving the member circle open.
-    const sofaMat = new THREE.MeshStandardMaterial({ color: 0x536274, roughness: 0.92 });
-    const sofaAccent = new THREE.MeshStandardMaterial({ color: 0x82709a, roughness: 0.86 });
-    for (const side of [-1, 1]) {
-      const sofa = new THREE.Group();
-      sofa.position.set(side * 7, 0, -1);
-      sofa.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
-      this.addMesh(new THREE.BoxGeometry(3.6, 1.3, 8), sofaMat, 0, 0.65, 0, sofa);
-      this.addMesh(new THREE.BoxGeometry(3.6, 1.1, 0.7), sofaAccent, 0, 1.35, -3.6, sofa);
-      for (const z of [-2.25, 0, 2.25]) this.addMesh(new THREE.BoxGeometry(3.25, 0.25, 0.18), sofaAccent, 0, 1.25, z, sofa);
-      this.scene.add(sofa);
-    }
-    const tableTop = new THREE.MeshStandardMaterial({ color: 0x8b674b, roughness: 0.78 });
-    this.addMesh(new THREE.CylinderGeometry(2.8, 2.8, 0.42, 12), tableTop, 0, 1.45, 0);
-    this.addMesh(new THREE.CylinderGeometry(0.38, 0.58, 1.3, 8), dark, 0, 0.65, 0);
-    // Potted plants soften each corner without taking member standing space.
-    for (const [x, z] of [[-half + 4, -half + 4], [half - 4, -half + 4], [-half + 4, half - 5], [half - 4, half - 5]]) {
-      this.addMesh(new THREE.CylinderGeometry(0.9, 1.15, 1.35, 8), trim, x, 0.68, z);
-      this.addMesh(new THREE.ConeGeometry(1.7, 4.2, 7), new THREE.MeshStandardMaterial({ color: 0x4d885d, roughness: 1 }), x, 3.25, z);
-    }
-    const grid = new THREE.GridHelper(this.roomSize, Math.max(8, Math.round(this.roomSize / 5)), 0x9c7bad, 0x544e5a);
-    grid.position.y = 0.02;
-    grid.material.transparent = true;
-    grid.material.opacity = 0.18;
-    this.scene.add(grid);
-  }
-
-  getTemplate(url) {
-    if (!this.modelTemplates.has(url)) {
-      this.modelTemplates.set(url, new Promise((resolve, reject) => {
-        this.loader.load(url, resolve, undefined, reject);
-      }).catch((error) => {
-        this.modelTemplates.delete(url);
-        throw error;
-      }));
-    }
-    return this.modelTemplates.get(url);
-  }
-
-  createNameplate(member) {
-    const canvas = document.createElement("canvas");
-    canvas.width = 512;
-    canvas.height = 112;
-    const context = canvas.getContext("2d");
-    context.fillStyle = "rgba(18, 21, 30, .88)";
-    context.beginPath();
-    context.roundRect(8, 8, 496, 96, 34);
-    context.fill();
-    context.fillStyle = "#fff";
-    context.font = "700 27px system-ui, sans-serif";
-    context.textAlign = "center";
-    context.textBaseline = "middle";
-    const username = `@${String(member.username || member.handle || "member").replace(/^@/, "")}`;
-    context.fillText(username, 256, 57, 470);
-    const texture = new this.THREE.CanvasTexture(canvas);
-    texture.colorSpace = this.THREE.SRGBColorSpace;
-    const sprite = new this.THREE.Sprite(new this.THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }));
-    sprite.scale.set(3.6, 0.78, 1);
-    return sprite;
-  }
-
-  async loadMemberAvatar(member, index) {
-    if (this.disposed) return;
-    const customUrl = member.avatarModelUrl || null;
-    let gltf;
-    try {
-      gltf = await this.getTemplate(customUrl || "Soldier.glb");
-    } catch (error) {
-      if (!customUrl) throw error;
-      gltf = await this.getTemplate("Soldier.glb");
-    }
-    if (this.disposed || !this.stage.isConnected) return;
-    const model = this.SkeletonUtils.clone(gltf.scene);
-    model.rotation.y = Math.PI;
-    model.traverse((node) => {
-      if (node.isMesh) { node.castShadow = true; node.receiveShadow = true; node.frustumCulled = false; }
-    });
-    model.updateMatrixWorld(true);
-    const rawBounds = new this.THREE.Box3().setFromObject(model);
-    const rawSize = rawBounds.getSize(new this.THREE.Vector3());
-    if (rawSize.y > 0) model.scale.setScalar(customUrl ? 3.5 / rawSize.y : 1.163);
-    model.updateMatrixWorld(true);
-    const bounds = new this.THREE.Box3().setFromObject(model);
-    model.position.x -= (bounds.min.x + bounds.max.x) / 2;
-    model.position.y -= bounds.min.y;
-    model.position.z -= (bounds.min.z + bounds.max.z) / 2;
-    const height = bounds.getSize(new this.THREE.Vector3()).y;
-
-    const actor = new this.THREE.Group();
-    actor.add(model);
-    const ringIndex = Math.floor(index / 14);
-    const slot = index % 14;
-    const ringCount = Math.min(14, this.members.length - ringIndex * 14);
-    const angle = Math.PI * 2 * slot / Math.max(1, ringCount);
-    const radius = Math.min(this.roomRadius - 8, 10 + ringIndex * 5);
-    actor.position.set(Math.sin(angle) * radius, 0, Math.cos(angle) * radius);
-    actor.rotation.y = angle;
-    const nameplate = this.createNameplate(member);
-    nameplate.position.y = Math.max(4.6, height + 0.65);
-    actor.add(nameplate);
-    this.scene.add(actor);
-
-    const clips = gltf.animations || [];
-    const mixer = clips.length ? new this.THREE.AnimationMixer(model) : null;
-    const idleClip = clips.find((clip) => /idle|stand|relax|sit|breath/i.test(clip.name)) || clips[0] || null;
-    const waveClip = clips.find((clip) => /wave|hello|greet|welcome/i.test(clip.name)) || null;
-    const idleAction = mixer && idleClip ? mixer.clipAction(idleClip) : null;
-    const waveAction = mixer && waveClip ? mixer.clipAction(waveClip) : null;
-    if (idleAction) idleAction.play();
-    let waveBone = null;
-    let bodyBone = null;
-    model.traverse((node) => {
-      if (!waveBone && node.isBone && /right.*(upper.?arm|arm|shoulder)|upper.?arm.?r|arm.?r|shoulder.?r/i.test(node.name)) waveBone = node;
-      if (!bodyBone && node.isBone && /(hips|spine|chest|torso)/i.test(node.name)) bodyBone = node;
-    });
-    this.actors.push({ actor, mixer, idleAction, waveAction, waveBone, waveBase: waveBone?.rotation.clone(), bodyBone, bodyBase: bodyBone?.rotation.clone(), idlePhase: index * 0.9, waveStart: 0, waveEnd: 0, waved: false });
-  }
-
-  beginWave(actor, now) {
-    if (!actor) return;
-    actor.waveStart = now;
-    actor.waveEnd = now + 2400;
-    actor.waved = true;
-    if (actor.waveAction) {
-      actor.idleAction?.fadeOut(0.2);
-      actor.waveAction.reset();
-      actor.waveAction.setLoop(this.THREE.LoopOnce, 1);
-      actor.waveAction.clampWhenFinished = true;
-      actor.waveAction.fadeIn(0.2).play();
-    }
-  }
-
-  updateWave(actor, now) {
-    if (!actor.waved) return;
-    if (now < actor.waveEnd) {
-      if (!actor.waveAction && actor.waveBone && actor.waveBase) {
-        const phase = (now - actor.waveStart) / 1000;
-        actor.waveBone.rotation.z = actor.waveBase.z + 1.8 + Math.sin(phase * 13) * 0.24;
-        actor.waveBone.rotation.x = actor.waveBase.x + Math.sin(phase * 6) * 0.13;
-      }
-      return;
-    }
-    if (actor.waveBone && actor.waveBase) actor.waveBone.rotation.copy(actor.waveBase);
-    actor.waveAction?.fadeOut(0.2);
-    if (actor.idleAction) actor.idleAction.reset().fadeIn(0.2).play();
-    actor.waved = false;
-  }
-
-  bindLookControls() {
-    const canvas = this.renderer.domElement;
-    this.onPointerDown = (event) => {
-      this.drag = { id: event.pointerId, x: event.clientX, y: event.clientY };
-      canvas.setPointerCapture?.(event.pointerId);
-    };
-    this.onPointerMove = (event) => {
-      if (!this.drag || this.drag.id !== event.pointerId) return;
-      const dx = event.clientX - this.drag.x;
-      const dy = event.clientY - this.drag.y;
-      this.drag.x = event.clientX;
-      this.drag.y = event.clientY;
-      this.yaw -= dx * 0.005;
-      this.pitch = Math.max(0.12, Math.min(0.68, this.pitch + dy * 0.003));
-      this.updateCamera();
-    };
-    this.onPointerUp = () => { this.drag = null; };
-    canvas.addEventListener("pointerdown", this.onPointerDown);
-    canvas.addEventListener("pointermove", this.onPointerMove);
-    canvas.addEventListener("pointerup", this.onPointerUp);
-    canvas.addEventListener("pointercancel", this.onPointerUp);
-  }
-
-  updateCamera() {
-    if (!this.camera || !this.roomSize) return;
-    const distance = this.roomRadius * 0.72;
-    const horizontal = distance * Math.cos(this.pitch);
-    this.camera.position.set(Math.sin(this.yaw) * horizontal, distance * Math.sin(this.pitch) + 6, Math.cos(this.yaw) * horizontal);
-    this.camera.lookAt(0, 4, 0);
-  }
-
-  resize() {
-    if (!this.renderer || this.disposed) return;
-    const width = Math.max(1, this.stage.clientWidth);
-    const height = Math.max(1, this.stage.clientHeight);
-    this.camera.aspect = width / height;
-    this.camera.updateProjectionMatrix();
-    this.renderer.setSize(width, height, false);
-  }
-
-  animate = (now = performance.now()) => {
-    if (this.disposed || !this.stage.isConnected) { this.destroy(); return; }
-    this.frame = requestAnimationFrame(this.animate);
-    const dt = Math.min(50, this.lastFrame ? now - this.lastFrame : 16.7) / 1000;
-    this.lastFrame = now;
-    if (this.actors.length && now >= this.nextWaveAt) {
-      this.beginWave(this.actors[this.waveIndex % this.actors.length], now);
-      this.waveIndex++;
-      this.nextWaveAt = now + 4200 + (this.waveIndex % 3) * 900;
-    }
-    this.actors.forEach((actor) => {
-      actor.mixer?.update(dt);
-      this.updateWave(actor, now);
-      if (!actor.mixer && actor.bodyBone && actor.bodyBase && !actor.waved) {
-        actor.bodyBone.rotation.x = actor.bodyBase.x + Math.sin(now * 0.0015 + actor.idlePhase) * 0.035;
-        actor.actor.position.y = Math.sin(now * 0.0018 + actor.idlePhase) * 0.055;
-      }
-    });
-    this.renderer.render(this.scene, this.camera);
-  };
-
-  destroy() {
-    if (this.disposed) return;
-    this.disposed = true;
-    if (this.frame) cancelAnimationFrame(this.frame);
-    this.resizeObserver?.disconnect();
-    if (this.resizeHandler) window.removeEventListener("resize", this.resizeHandler);
-    const canvas = this.renderer?.domElement;
-    if (canvas) {
-      canvas.removeEventListener("pointerdown", this.onPointerDown);
-      canvas.removeEventListener("pointermove", this.onPointerMove);
-      canvas.removeEventListener("pointerup", this.onPointerUp);
-      canvas.removeEventListener("pointercancel", this.onPointerUp);
-    }
-    this.scene?.traverse((node) => {
-      if (node.geometry) node.geometry.dispose();
-      if (node.material) {
-        const materials = Array.isArray(node.material) ? node.material : [node.material];
-        materials.forEach((material) => { material.map?.dispose(); material.dispose(); });
-      }
-    });
-    this.renderer?.dispose();
-    canvas?.remove();
-  }
-}
-
-const renderGroupRoom = async (root, groupId) => {
-  const token = root._routeRenderToken;
-  let roomScene = null;
-  root._groupRoomCleanup = () => { roomScene?.destroy(); roomScene = null; };
-  const page = el("div", { class: "grp-room-experience" });
-  const stage = el("div", { class: "grp-room-stage", role: "application", "aria-label": "Group members' shared 3D building room" });
-  const loading = el("div", { class: "grp-room-loading" }, el("span", { class: "grp-city-spinner" }), el("strong", {}, "Opening the building room…"));
-  const top = el("div", { class: "grp-room-hud-top" },
-    el("button", { class: "grp-room-back", onclick: () => { location.hash = "#groups"; } }, el("i", { class: "ri-arrow-left-line" }), " City"),
-    el("div", { class: "grp-room-title-pill" }, "Entering group room…"),
-    el("span", { class: "grp-room-member-count" }, ""),
-  );
-  const chatButton = el("button", { class: "grp-room-chat-btn", disabled: true }, el("i", { class: "ri-chat-3-line" }), " Skip to chat");
-  const footer = el("div", { class: "grp-room-hud-bottom" }, el("span", { class: "grp-room-swipe-hint" }, "Swipe to look around"), chatButton);
-  stage.append(loading, top, footer);
-  page.appendChild(stage);
-  root.appendChild(page);
-  try {
-    const snap = await getDoc(doc(db, "groups", groupId));
-    if (root._routeRenderToken !== token || !root.isConnected) return;
-    if (!snap.exists()) {
-      loading.innerHTML = "";
-      loading.append(el("strong", {}, "Group not found"), el("button", { class: "grp-room-back", onclick: () => { location.hash = "#groups"; } }, "Back to city"));
-      return;
-    }
-    const group = { id: groupId, ...snap.data() };
-    const memberIds = [...new Set(group.members || [])];
-    const fetched = await Promise.all(memberIds.map(async (uid) => {
-      try { return await fetchUser(uid) || { uid, name: "Orbit member", username: "member" }; }
-      catch { return { uid, name: "Orbit member", username: "member" }; }
-    }));
-    if (root._routeRenderToken !== token || !root.isConnected) return;
-    const titlePill = page.querySelector(".grp-room-title-pill");
-    titlePill.textContent = group.name || "Orbit group";
-    page.querySelector(".grp-room-member-count").textContent = `${fetched.length}/${MAX_GROUP_MEMBERS} members`;
-    const updateChatButton = () => {
-      const joined = (group.members || []).includes(state.uid);
-      chatButton.disabled = false;
-      chatButton.innerHTML = "";
-      chatButton.appendChild(el("i", { class: "ri-chat-3-line" }));
-      chatButton.appendChild(document.createTextNode(joined ? " Skip to chat" : " Join group & open chat"));
-    };
-    updateChatButton();
-    chatButton.addEventListener("click", async () => {
-      const joined = (group.members || []).includes(state.uid);
-      if (!joined && !(await setGroupMembership(group, false))) return;
-      location.hash = `#chats/${group.id}`;
-    });
-    roomScene = new OrbitGroupRoomScene(stage, fetched);
-  } catch (error) {
-    if (root._routeRenderToken !== token) return;
-    loading.innerHTML = "";
-    loading.append(el("strong", {}, "Could not open this group room"), el("span", {}, error?.message || "Check your connection and try again."), el("button", { class: "grp-room-back", onclick: () => { location.hash = "#groups"; } }, "Back to city"));
-  }
-};
-
 const renderGroups = (root) => {
-  const wrap = el("div", { class: "grp-wrap grp-city-wrap" });
-  const modalHost = el("div", { class: "grp-city-modal-host" });
-  const stage = el("div", { class: "grp-city-stage grp-city-fullscreen", role: "application", "aria-label": "Interactive Orbit group city" });
-  const loading = el("div", { class: "grp-city-loading" },
-    el("span", { class: "grp-city-spinner" }),
-    el("strong", {}, "Loading the city…"),
-  );
-  const nearby = el("div", { class: "grp-city-nearby", "aria-live": "polite" },
-    el("span", { class: "grp-city-nearby-title" }, "Walk around to find a group"),
-    el("span", { class: "grp-city-nearby-hint" }, "Use the joystick to move · swipe to look"),
-  );
-  const enter = el("button", { class: "grp-city-enter hidden", type: "button" }, el("i", { class: "ri-door-open-line" }), " Group info & enter");
-  const joystick = el("div", { class: "grp-city-joystick", role: "application", "aria-label": "Move around the city" },
-    el("span", { class: "grp-city-joystick-arrows" }, "✥"),
-    el("span", { class: "grp-city-joystick-thumb" }),
-  );
-  const swipe = el("div", { class: "grp-city-swipe-zone", "aria-label": "Swipe to turn the view" });
-  stage.append(loading, swipe, nearby, enter, joystick, el("div", { class: "grp-city-control-hint" }, "MOVE"));
-  wrap.append(stage, modalHost);
+  const wrap = el("div", { class: "grp-wrap" });
   root.appendChild(wrap);
 
-  let allGroups = [];
-  let currentNearby = null;
-  let modalDismissedFor = null;
+  // 1. Header ──────────────────────────────────────────────────────────────
+  const searchBox   = el("div", { class: "grp-search-box hidden" });
+  const searchInput = el("input", { type: "text", placeholder: "Search groups…" });
+  searchBox.appendChild(searchInput);
 
-  const showGroupInfo = (group) => {
-    modalHost.innerHTML = "";
-    const joined = (group.members || []).includes(state.uid);
-    const about = group.about || group.description || "A place for members to meet, share, and keep the conversation going.";
-    const close = () => { modalHost.innerHTML = ""; modalDismissedFor = group.id; };
-    const backdrop = el("div", { class: "grp-city-modal-backdrop", role: "presentation", onclick: (event) => { if (event.target === backdrop) close(); } });
-    const joinButton = el("button", { class: "grp-city-modal-secondary", onclick: async () => {
-      if (!(await setGroupMembership(group, (group.members || []).includes(state.uid)))) return;
-      showGroupInfo(group);
-    } }, joined ? "Leave group" : "Join group");
-    const card = el("section", { class: "grp-city-modal", role: "dialog", "aria-modal": "true", "aria-label": `${group.name || "Group"} information` },
-      el("button", { class: "grp-city-modal-close", type: "button", "aria-label": "Close group info", onclick: close }, el("i", { class: "ri-close-line" })),
-      el("div", { class: "grp-city-modal-mark" }, group.iconUrl ? el("img", { src: group.iconUrl, alt: "" }) : (group.name || "G").trim().charAt(0).toUpperCase()),
-      el("span", { class: "grp-room-eyebrow" }, group.category || "ORBIT COMMUNITY"),
-      el("h2", {}, group.name || "Orbit group"),
-      el("p", { class: "grp-city-modal-about" }, about),
-      el("div", { class: "grp-city-modal-meta" }, el("span", {}, el("i", { class: "ri-group-line" }), ` ${groupMemberCount(group)}/${MAX_GROUP_MEMBERS} members`), joined ? el("span", { class: "grp-city-joined" }, "Joined") : null),
-      el("div", { class: "grp-city-modal-actions" },
-        joinButton,
-        el("button", { class: "grp-city-modal-enter", onclick: () => { location.hash = `#groups/${group.id}`; } }, el("i", { class: "ri-door-open-line" }), " Enter group room"),
+  const searchIcon = el("span", { class: "grp-search" }, "🔍");
+  searchIcon.onclick = () => {
+    searchBox.classList.toggle("hidden");
+    if (!searchBox.classList.contains("hidden")) searchInput.focus();
+  };
+
+  wrap.appendChild(el("div", { class: "grp-header" },
+    el("span", { class: "grp-back", onclick: () => history.back() }, "←"),
+    el("h1", {}, "Groups"),
+    el("div", { style: "display:flex;align-items:center;gap:14px;" },
+      searchIcon,
+      el("button", { class: "grp-new-btn", onclick: () => openCompose("group") },
+        el("i", { class: "ri-add-line" }),
+      ),
+    ),
+  ));
+  wrap.appendChild(searchBox);
+
+  // 2. Filter tabs ──────────────────────────────────────────────────────────
+  const GRP_CATEGORIES = ["Tech", "Gaming", "Music", "Art", "Sports", "Lifestyle", "Business", "Education", "Food", "Travel", "Science"];
+  let allGroups     = [];
+  let activeFilter  = "all";
+  let activeCategory = null;
+
+  const listContainer = el("div", { class: "grp-list-container" });
+  const catChips      = el("div", { class: "grp-cat-chips hidden" });
+
+  const getFilteredGroups = (q = "") => {
+    let groups = allGroups;
+    const lq = q.trim().toLowerCase();
+    if (lq) groups = groups.filter((g) => (g.name || "").toLowerCase().includes(lq) || (g.description || "").toLowerCase().includes(lq));
+    switch (activeFilter) {
+      case "trending":  return groups.filter((g) => g.isTrending);
+      case "categories": return activeCategory ? groups.filter((g) => (g.category || "").toLowerCase() === activeCategory.toLowerCase()) : groups;
+      case "mygroups":  return groups.filter((g) => (g.members || []).includes(state.uid));
+      default:          return groups;
+    }
+  };
+
+  const buildGroupRow = (g) => {
+    const member = (g.members || []).includes(state.uid);
+    const canManage = (g.admins || []).includes(state.uid) || g.ownerUid === state.uid;
+    const icon = g.iconUrl
+      ? el("img", { class: "grp-icon", src: g.iconUrl })
+      : el("div", { class: "grp-icon grp-icon-letter" }, (g.name || "?")[0].toUpperCase());
+
+    const joinBtn = el("button", {
+      class: "grp-join-btn",
+      "data-group-id": g.id,
+      "data-joined": member ? "true" : "false",
+      style: member ? "opacity:0.55;" : "",
+    }, member ? "Joined" : "Join");
+
+    joinBtn.onclick = async () => {
+      const wasMember = (g.members || []).includes(state.uid);
+      const ref = doc(db, "groups", g.id);
+      const actionsDiv = joinBtn.parentElement;
+      if (wasMember) {
+        g.members = (g.members || []).filter((id) => id !== state.uid);
+        joinBtn.textContent = "Join";
+        joinBtn.dataset.joined = "false";
+        joinBtn.style.opacity = "";
+        actionsDiv.querySelector(".grp-open-btn")?.remove();
+        await updateDoc(ref, { members: arrayRemove(state.uid) }).catch(() => {});
+        toast("Left group");
+      } else {
+        g.members = [...(g.members || []), state.uid];
+        joinBtn.textContent = "Joined";
+        joinBtn.dataset.joined = "true";
+        joinBtn.style.opacity = "0.55";
+        if (!actionsDiv.querySelector(".grp-open-btn")) {
+          actionsDiv.appendChild(el("button", {
+            class: "grp-open-btn",
+            onclick: () => location.hash = `#chats/${g.id}`,
+          }, el("i", { class: "ri-chat-3-line" })));
+        }
+        await updateDoc(ref, { members: arrayUnion(state.uid) }).catch(() => {});
+        toast("Joined!");
+      }
+      countEl.textContent = `${g.members.length} member${g.members.length !== 1 ? "s" : ""}`;
+      if (activeFilter === "mygroups") renderGroupList();
+    };
+
+    const countEl = el("span", { class: "grp-members" }, `${(g.members || []).length} member${(g.members || []).length !== 1 ? "s" : ""}`);
+
+    const row = el("div", { class: "grp-row" },
+      icon,
+      el("div", { class: "grp-info" },
+        el("span", { class: "grp-name" }, g.name || "Unnamed group"),
+        countEl,
+        g.about ? el("span", { class: "grp-desc" }, g.about.slice(0, 80)) : null,
+        g.groupLink ? el("a", {
+          class: "grp-link",
+          href: g.groupLink,
+          target: "_blank",
+          rel: "noopener noreferrer",
+          onclick: (e) => e.stopPropagation(),
+        }, el("i", { class: "ri-link" }), " Group link") : null,
+      ),
+      el("div", { class: "grp-row-actions" },
+        joinBtn,
+        canManage ? el("button", {
+          class: "grp-open-btn",
+          title: "Manage group",
+          onclick: () => openGroupAdmin(g.id),
+        }, el("i", { class: "ri-admin-line" })) : null,
+        (g.members || []).includes(state.uid)
+          ? el("button", { class: "grp-open-btn", onclick: () => location.hash = `#chats/${g.id}` },
+              el("i", { class: "ri-chat-3-line" })) : null,
       ),
     );
-    backdrop.appendChild(card);
-    modalHost.appendChild(backdrop);
+    return row;
   };
 
-  const onNearby = (group) => {
-    currentNearby = group;
-    if (!group) {
-      nearby.innerHTML = "";
-      nearby.append(el("span", { class: "grp-city-nearby-title" }, "Walk around to find a group"), el("span", { class: "grp-city-nearby-hint" }, "Use the joystick to move · swipe to look"));
-      enter.classList.add("hidden");
+  const renderGroupList = () => {
+    const q = searchInput.value;
+    const groups = getFilteredGroups(q);
+    listContainer.innerHTML = "";
+    if (!groups.length) {
+      listContainer.appendChild(el("div", { class: "grp-empty-state" },
+        el("i", { class: "ri-group-2-line" }),
+        el("div", {}, activeFilter === "mygroups" ? "You haven't joined any groups yet." : "No groups here yet."),
+      ));
       return;
     }
-    nearby.innerHTML = "";
-    nearby.append(el("span", { class: "grp-city-nearby-title" }, group.name || "Orbit group"), el("span", { class: "grp-city-nearby-hint" }, `${groupMemberCount(group)} members · nearby`));
-    enter.classList.remove("hidden");
-    if (modalDismissedFor !== group.id) showGroupInfo(group);
-  };
 
-  const renderCity = () => {
-    if (root._groupCityCleanup) { root._groupCityCleanup(); root._groupCityCleanup = null; }
-    stage.innerHTML = "";
-    modalHost.innerHTML = "";
-    currentNearby = null;
-    if (!allGroups.length) {
-      stage.appendChild(el("div", { class: "grp-city-loading" }, el("strong", {}, "No groups to explore yet")));
-      return;
+    // If "All" or non-category filter: Popular Right Now + New & Growing split
+    if (activeFilter === "all" || activeFilter === "trending") {
+      const sorted = [...groups].sort((a, b) => (b.members?.length || 0) - (a.members?.length || 0));
+      const popular = sorted.slice(0, Math.ceil(sorted.length / 2));
+      const growing = sorted.slice(Math.ceil(sorted.length / 2));
+
+      if (popular.length) {
+        listContainer.appendChild(el("div", { class: "grp-section-header" },
+          el("h3", {}, activeFilter === "trending" ? "Trending Groups 🔥" : "Popular Right Now"),
+          el("span", { class: "grp-see-all" }, "See all"),
+        ));
+        popular.forEach((g) => listContainer.appendChild(buildGroupRow(g)));
+      }
+      if (growing.length && activeFilter !== "trending") {
+        listContainer.appendChild(el("div", { class: "grp-section-header", style: "margin-top:8px;" },
+          el("h3", {}, "New & Growing"),
+          el("span", { class: "grp-see-all" }, "See all"),
+        ));
+        growing.forEach((g) => listContainer.appendChild(buildGroupRow(g)));
+      }
+    } else {
+      // My Groups / Categories: flat list
+      const header = activeFilter === "mygroups" ? "My Groups"
+        : activeCategory ? `#${activeCategory}` : "All Categories";
+      listContainer.appendChild(el("div", { class: "grp-section-header" },
+        el("h3", {}, header),
+      ));
+      groups.forEach((g) => listContainer.appendChild(buildGroupRow(g)));
     }
-    stage.append(
-      el("div", { class: "grp-city-loading" }, el("span", { class: "grp-city-spinner" }), el("strong", {}, "Loading the city…")),
-      el("div", { class: "grp-city-swipe-zone", "aria-label": "Swipe to turn the view" }),
-      nearby,
-      enter,
-      joystick,
-      el("div", { class: "grp-city-control-hint" }, "MOVE"),
-    );
-    const city = new OrbitGroupsCity(stage, allGroups, onNearby);
-    enter.onclick = () => { if (currentNearby) showGroupInfo(currentNearby); };
-    root._groupCityCleanup = () => city.destroy();
   };
 
-  const loadAllGroups = async () => {
-    const docs = [];
-    let cursor = null;
-    let hasMore = true;
-    while (hasMore) {
-      const constraints = [collection(db, "groups"), orderBy("createdAt", "desc"), limit(80)];
-      if (cursor) constraints.push(startAfter(cursor));
-      const page = await getDocs(query(...constraints));
-      docs.push(...page.docs);
-      cursor = page.docs[page.docs.length - 1] || null;
-      hasMore = page.docs.length === 80 && !!cursor;
-    }
-    return docs;
-  };
-
-  loadAllGroups().then((docs) => {
-    if (!wrap.isConnected) return;
-    allGroups = docs.map((d) => ({ id: d.id, ...d.data() }));
-    renderCity();
-  }).catch((error) => {
-    if (!wrap.isConnected) return;
-    stage.innerHTML = "";
-    stage.appendChild(el("div", { class: "grp-city-loading" }, el("strong", {}, "Could not load the city"), el("span", {}, "Check your connection and try again.")));
-    console.error("Could not load group city:", error);
+  // Tab row
+  const tabDefs = [
+    { label: "All",        filter: "all" },
+    { label: "Trending",   filter: "trending" },
+    { label: "Categories", filter: "categories" },
+    { label: "My Groups",  filter: "mygroups" },
+  ];
+  const tabEls = tabDefs.map(({ label, filter }) => {
+    const tab = el("button", { class: "grp-tab" + (filter === "all" ? " active" : ""), "data-filter": filter }, label);
+    tab.onclick = () => {
+      tabEls.forEach((t) => t.classList.remove("active"));
+      tab.classList.add("active");
+      activeFilter = filter;
+      activeCategory = null;
+      if (filter === "categories") {
+        catChips.classList.remove("hidden");
+      } else {
+        catChips.classList.add("hidden");
+      }
+      renderGroupList();
+    };
+    return tab;
   });
+  const tabRow = el("div", { class: "grp-tabs" });
+  tabEls.forEach((t) => tabRow.appendChild(t));
+  wrap.appendChild(tabRow);
+
+  // Category chips (shown when "Categories" tab is active)
+  GRP_CATEGORIES.forEach((cat) => {
+    const chip = el("span", { class: "grp-cat-chip" }, cat);
+    chip.onclick = () => {
+      catChips.querySelectorAll(".grp-cat-chip").forEach((c) => c.classList.remove("active"));
+      chip.classList.add("active");
+      activeCategory = cat;
+      renderGroupList();
+    };
+    catChips.appendChild(chip);
+  });
+  wrap.appendChild(catChips);
+
+  // Search input wires to live-filter
+  let _sd = null;
+  searchInput.addEventListener("input", () => { clearTimeout(_sd); _sd = setTimeout(renderGroupList, 180); });
+
+  // 3. Hero banner ──────────────────────────────────────────────────────────
+  const heroAvatarGrid = el("div", { class: "grp-hero-avatars" });
+  const hero = el("div", { class: "grp-hero" },
+    el("div", { class: "grp-hero-text" },
+      el("h2", {}, "Find your people.\nJoin the conversation."),
+      el("p", {}, "Thousands of communities around everything you love."),
+    ),
+    heroAvatarGrid,
+  );
+  wrap.appendChild(hero);
+
+  // Pull 4 real user avatars for hero
+  getDocs(query(collection(db, "users"), limit(8))).then((snap) => {
+    snap.docs.slice(0, 4).forEach((d) => {
+      const u = { uid: d.id, ...d.data() };
+      heroAvatarGrid.appendChild(el("img", { src: avatarFor(u), alt: u.name || "user" }));
+    });
+  }).catch(() => {});
+
+  // 4 & 5. Group list ───────────────────────────────────────────────────────
+  wrap.appendChild(listContainer);
+
+  // Skeleton while loading
+  for (let i = 0; i < 5; i++) {
+    listContainer.appendChild(el("div", { class: "grp-row grp-skel-row" },
+      el("div", { class: "grp-skel-icon" }),
+      el("div", { class: "grp-skel-info" },
+        el("div", { class: "grp-skel-line w60" }),
+        el("div", { class: "grp-skel-line w40" }),
+      ),
+      el("div", { class: "grp-skel-btn" }),
+    ));
+  }
+
+  // Firestore: one-time fetch (groups don't need real-time for this page)
+  getDocs(query(collection(db, "groups"), orderBy("createdAt", "desc"), limit(80)))
+    .then((snap) => {
+      listContainer.innerHTML = "";
+      allGroups = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      // Compute isTrending: top-third by member count
+      const sorted = [...allGroups].sort((a, b) => (b.members?.length || 0) - (a.members?.length || 0));
+      const trendCutoff = sorted[Math.floor(sorted.length / 3)]?.members?.length || 1;
+      allGroups.forEach((g) => { g.isTrending = (g.members?.length || 0) >= trendCutoff; });
+      renderGroupList();
+    })
+    .catch(() => {
+      listContainer.innerHTML = "";
+      listContainer.appendChild(el("div", { class: "grp-empty-state" },
+        el("i", { class: "ri-wifi-off-line" }),
+        el("div", {}, "Could not load groups. Check your connection."),
+      ));
+    });
+
+  // FAB — create new group
+  const fab = el("button", { class: "grp-fab", onclick: () => openCompose("group") },
+    el("i", { class: "ri-add-line" }),
+  );
+  wrap.appendChild(fab);
 };
 
 // =========================================================================
@@ -4729,9 +3893,9 @@ const renderExplore = (root, hashtagFilter = null) => {
       trendRow.appendChild(el("div", { style: "padding:0 16px;color:var(--text-mute);font-size:13px;" }, "Could not load trends"));
     });
 
-  // 5 & 6. People to Meet ───────────────────────────────────────────────────
+  // 5 & 6. People to Follow ─────────────────────────────────────────────────
   wrap.appendChild(el("div", { class: "disc-section-header" },
-    el("h2", {}, "People to meet"),
+    el("h2", {}, "People to Follow"),
     el("span", { class: "disc-see-all" }, "See all"),
   ));
   const peopleList = el("div", { class: "disc-people-list" });
@@ -4740,20 +3904,50 @@ const renderExplore = (root, hashtagFilter = null) => {
   getDocs(query(collection(db, "users"), limit(40)))
     .then((snap) => {
       const following = state.me?.following || [];
-      const friends = state.me?.friends || [];
       const suggestions = snap.docs
         .map((d) => ({ uid: d.id, ...d.data() }))
-        .filter((u) => u.uid !== state.uid && !following.includes(u.uid) && !friends.includes(u.uid))
+        .filter((u) => u.uid !== state.uid && !following.includes(u.uid))
         .sort((a, b) => (b.followers?.length || 0) - (a.followers?.length || 0))
         .slice(0, 6);
 
       if (!suggestions.length) {
         peopleList.appendChild(el("div", { style: "color:var(--text-mute);font-size:13px;padding:0 0 8px;" },
-          "No new people to meet right now — check back soon."));
+          "You're already following everyone — check back soon."));
         return;
       }
 
       suggestions.forEach((u) => {
+        let followed = (state.me?.following || []).includes(u.uid);
+        const followBtn = el("button", {
+          class: "disc-follow-btn",
+          style: followed ? "opacity:0.5;" : "",
+        }, followed ? "Following" : "Follow");
+
+        followBtn.onclick = async () => {
+          followed = !followed;
+          followBtn.textContent = followed ? "Following" : "Follow";
+          followBtn.style.opacity = followed ? "0.5" : "";
+          const meRef  = doc(db, "users", state.uid);
+          const themRef = doc(db, "users", u.uid);
+          const batch = writeBatch(db);
+          if (followed) {
+            batch.update(meRef,  { following: arrayUnion(u.uid) });
+            batch.update(themRef, { followers: arrayUnion(state.uid) });
+            if (state.me) state.me.following = [...new Set([...(state.me.following || []), u.uid])];
+            writeNotif(u.uid, "follow", {}).catch(() => {});
+          } else {
+            batch.update(meRef,  { following: arrayRemove(u.uid) });
+            batch.update(themRef, { followers: arrayRemove(state.uid) });
+            if (state.me) state.me.following = (state.me.following || []).filter((x) => x !== u.uid);
+          }
+          await batch.commit().catch(() => {
+            toast("Failed to update");
+            followed = !followed;
+            followBtn.textContent = followed ? "Following" : "Follow";
+            followBtn.style.opacity = followed ? "0.5" : "";
+          });
+        };
+
         const roleText = u.bio ? u.bio.slice(0, 42) : (u.verified ? "Verified member" : "Orbit member");
         peopleList.appendChild(el("div", { class: "disc-people-row" },
           el("img", {
@@ -4773,7 +3967,7 @@ const renderExplore = (root, hashtagFilter = null) => {
             el("span", { class: "disc-people-handle" }, `@${u.username || "user"}`),
             el("span", { class: "disc-people-role" }, roleText),
           ),
-          orbitFriendControls(u, { compact: true }),
+          followBtn,
         ));
       });
     }).catch(() => {});
@@ -4854,90 +4048,7 @@ const renderSaved = (root) => {
 // listener running and the visible tab always reflects Firestore live.
 let _profileTabUnsub = null;
 
-const formatProfileBirthday = (value) => {
-  const match = /^(\d{2})-(\d{2})$/.exec(String(value || ""));
-  if (!match) return "";
-  const date = new Date(2000, Number(match[1]) - 1, Number(match[2]), 12);
-  if (date.getMonth() !== Number(match[1]) - 1 || date.getDate() !== Number(match[2])) return "";
-  return date.toLocaleDateString(undefined, { month: "long", day: "numeric" });
-};
-
-const addOrbitFriend = async (peerUid) => {
-  if (!state.uid || !peerUid || peerUid === state.uid) return false;
-  const batch = writeBatch(db);
-  batch.update(doc(db, "users", state.uid), { friends: arrayUnion(peerUid) });
-  batch.update(doc(db, "users", peerUid), { friends: arrayUnion(state.uid) });
-  try {
-    await batch.commit();
-  } catch {
-    toast("Could not add friend. Check your connection and try again.");
-    return false;
-  }
-  const friends = [...new Set([...(state.me?.friends || []), peerUid])];
-  state.me = { ...(state.me || {}), uid: state.uid, friends };
-  state.cache.users.set(state.uid, state.me);
-  state.cache.users.delete(peerUid);
-  return true;
-};
-
-const removeOrbitFriend = async (peerUid) => {
-  if (!state.uid || !peerUid || peerUid === state.uid) return false;
-  const batch = writeBatch(db);
-  batch.update(doc(db, "users", state.uid), { friends: arrayRemove(peerUid) });
-  batch.update(doc(db, "users", peerUid), { friends: arrayRemove(state.uid) });
-  try {
-    await batch.commit();
-  } catch {
-    toast("Could not remove friend. Check your connection and try again.");
-    return false;
-  }
-  const friends = (state.me?.friends || []).filter((friendUid) => friendUid !== peerUid);
-  state.me = { ...(state.me || {}), uid: state.uid, friends };
-  state.cache.users.set(state.uid, state.me);
-  state.cache.users.delete(peerUid);
-  return true;
-};
-
-const orbitFriendControls = (user, { compact = false, stacked = false } = {}) => {
-  const peerUid = user?.uid;
-  if (!peerUid || peerUid === state.uid) return null;
-  let isFriend = (state.me?.friends || []).includes(peerUid);
-  const friendButton = el("button", {
-    class: `btn sm ${isFriend ? "ghost" : "primary"}`,
-    title: isFriend ? `Open ${user.name || "friend"} info` : `Add ${user.name || "user"} as a friend`,
-    onclick: async () => {
-      if (isFriend) {
-        location.hash = `#friends/${peerUid}`;
-        return;
-      }
-      friendButton.disabled = true;
-      friendButton.textContent = "Adding…";
-      const added = await addOrbitFriend(peerUid);
-      if (!added) {
-        friendButton.disabled = false;
-        friendButton.textContent = "Add friend";
-        return;
-      }
-      isFriend = true;
-      friendButton.className = "btn sm ghost";
-      friendButton.textContent = "Friends";
-      friendButton.title = `Open ${user.name || "friend"} info`;
-      location.hash = `#friends/${peerUid}`;
-    },
-  }, isFriend ? "Friends" : "Add friend");
-  const infoButton = el("button", {
-    class: "btn sm ghost",
-    title: `Info about ${user.name || "user"}`,
-    "aria-label": `Info about ${user.name || "user"}`,
-    onclick: () => { location.hash = `#friends/${peerUid}`; },
-  }, el("i", { class: "ri-information-line" }), compact ? "" : " Info");
-  return el("div", {
-    class: `orbit-user-actions${compact ? " compact" : ""}${stacked ? " stacked" : ""}`,
-  }, friendButton, infoButton);
-};
-
 const renderProfile = async (root, uid) => {
-  const routeRenderToken = root._routeRenderToken;
   // Always use fresh data for own profile (bypass stale cache after Pro activation)
   let u;
   if (uid === state.uid) {
@@ -4947,73 +4058,77 @@ const renderProfile = async (root, uid) => {
   } else {
     u = await fetchUser(uid);
   }
-  if (routeRenderToken !== root._routeRenderToken) return;
   if (!u) {
     root.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-user-line" }), el("div", { class: "t" }, "User not found")));
     return;
   }
   const isMe = uid === state.uid;
-  let _isFriend = (state.me?.friends || []).includes(uid);
-  const canViewPrivateProfile = isMe || !u.privateAccount || _isFriend || (state.me?.following || []).includes(uid);
+  let _iFollow = (state.me.following || []).includes(uid);
+  const canViewPrivateProfile = isMe || !u.privateAccount || _iFollow;
 
   // Live-update follower count in-place — no full page re-render on follow/unfollow
   const followersCountEl = el("strong", {}, String((u.followers || []).length));
   const postsCountEl = el("strong", {}, String(u.postCount || 0));
 
-  let profileFriendBtn = null;
-  let compactFriendBtn = null;
-  let friendWriteInProgress = false;
-  const syncFriendButtons = () => {
-    [profileFriendBtn, compactFriendBtn].filter(Boolean).forEach((button) => {
-      button.disabled = false;
-      button.className = `btn ${_isFriend ? "ghost" : "primary"}${button === compactFriendBtn ? " compact-follow" : ""}`;
-      button.textContent = _isFriend ? "Friends" : "Add friend";
+  let profileFollowBtn = null;
+  let compactFollowBtn = null;
+  const syncFollowButtons = () => {
+    [profileFollowBtn, compactFollowBtn].filter(Boolean).forEach((button) => {
+      button.textContent = _iFollow ? "Following" : "Follow";
+      button.className = `btn ${_iFollow ? "ghost" : "primary"}`;
     });
   };
-  const openFriendInfo = () => { location.hash = `#friends/${uid}`; };
-  const addFriendOrOpenPage = async () => {
-    if (_isFriend) { openFriendInfo(); return; }
-    if (friendWriteInProgress || isMe) return;
-    friendWriteInProgress = true;
-    [profileFriendBtn, compactFriendBtn].filter(Boolean).forEach((button) => {
-      button.disabled = true;
-      button.textContent = "Adding…";
+  const followProfile = async () => {
+    const prev = _iFollow;
+    _iFollow = !_iFollow;
+    syncFollowButtons();
+    const curCount = parseInt(followersCountEl.textContent) || 0;
+    followersCountEl.textContent = String(Math.max(0, curCount + (_iFollow ? 1 : -1)));
+    const meRef = doc(db, "users", state.uid);
+    const themRef = doc(db, "users", uid);
+    const batch = writeBatch(db);
+    if (_iFollow) {
+      batch.update(meRef, { following: arrayUnion(uid) });
+      batch.update(themRef, { followers: arrayUnion(state.uid) });
+    } else {
+      batch.update(meRef, { following: arrayRemove(uid) });
+      batch.update(themRef, { followers: arrayRemove(state.uid) });
+    }
+    await batch.commit().catch(() => {
+      _iFollow = prev;
+      syncFollowButtons();
+      followersCountEl.textContent = String(curCount);
+      toast("Failed to update follow status");
     });
-    const added = await addOrbitFriend(uid);
-    friendWriteInProgress = false;
-    if (!added) { syncFriendButtons(); return; }
-    _isFriend = true;
-    syncFriendButtons();
-    openFriendInfo();
+    state.cache.users.delete(uid);
+    state.cache.users.delete(state.uid);
+    if (state.me) {
+      state.me.following = _iFollow
+        ? [...new Set([...(state.me.following || []), uid])]
+        : (state.me.following || []).filter((x) => x !== uid);
+    }
+    if (_iFollow) {
+      writeNotif(uid, "follow", {}).catch(() => {});
+      import("./notifications.js").then(({ notifyUser }) =>
+        notifyUser(uid, state.me?.name || "Someone", "started following you", "/#profile/" + state.uid, state.me?.photoURL || "")
+      ).catch(() => {});
+    }
+    if (u.privateAccount && _iFollow) router();
   };
   if (!isMe) {
-    profileFriendBtn = el("button", {
-      class: `btn ${_isFriend ? "ghost" : "primary"}`,
-      onclick: addFriendOrOpenPage,
-    }, _isFriend ? "Friends" : "Add friend");
+    profileFollowBtn = el("button", { class: `btn ${_iFollow ? "ghost" : "primary"}` }, _iFollow ? "Following" : "Follow");
+    profileFollowBtn.addEventListener("click", followProfile);
   }
-  const profileInfoBtn = !isMe
-    ? el("button", {
-        class: "btn ghost friend-info-btn",
-        title: "Open friend info",
-        onclick: openFriendInfo,
-      }, el("i", { class: "ri-information-line" }), " Info")
-    : null;
 
   const profileShell = el("div", { class: "profile-shell" });
   root.appendChild(profileShell);
-  const profileAvatar = el("div", {
-    class: "avatar xl profile-main-avatar orbit-character",
-    role: "img",
-    "aria-label": `${u.name || "Profile"} 3D character`,
-  }, el("img", { class: "orbit-character-fallback", src: avatarFor(u), alt: "", loading: "lazy" }));
   const profileHead = el("div", { class: "profile-head" },
     profileCoverFor(u)
       ? el("div", { class: "profile-cover" },
           el("img", { src: profileCoverFor(u), alt: `${u.name || "Profile"} cover photo` }))
       : el("div", { class: "profile-cover profile-cover-empty" }),
     el("div", { class: "profile-head-main" },
-      profileAvatar,
+      el("img", { class: "avatar xl profile-main-avatar", src: avatarFor(u), alt: `${u.name || "Profile"} profile picture` }),
       el("div", { class: "profile-head-copy" },
         el("div", { class: "name-row" }, u.name,
           u.verified ? el("span", { class: "verified lg", title: "Location verified", html: '<i class="ri-check-line"></i>' }) : null,
@@ -5025,16 +4140,10 @@ const renderProfile = async (root, uid) => {
           el("div", { class: "stat" }, el("strong", {}, String((u.following || []).length)), el("span", {}, "following")),
         ),
         u.bio ? el("div", { class: "bio", text: u.bio }) : null,
-        u.birthday && formatProfileBirthday(u.birthday)
-          ? el("div", { class: "profile-birthday" }, el("i", { class: "ri-cake-2-line" }), `Birthday ${formatProfileBirthday(u.birthday)}`)
-          : null,
         el("div", { class: "profile-actions" },
           isMe
             ? el("button", { class: "btn ghost", onclick: () => openProfileEditModal() }, el("i", { class: "ri-edit-line" }), "Edit profile")
-            : profileFriendBtn,
-          profileInfoBtn,
-          isMe ? el("button", { class: "btn ghost", onclick: () => { location.hash = "#friends"; } },
-            el("i", { class: "ri-group-line" }), "Friends") : null,
+            : profileFollowBtn,
           !isMe && u.allowMessages !== false ? el("button", { class: "btn ghost", onclick: () => location.hash = `#chats/${uid}` },
             el("i", { class: "ri-chat-3-line" }), "Message") : null,
           isMe && !u.verified ? el("button", { class: "btn ghost", onclick: requestLocationVerification },
@@ -5044,16 +4153,10 @@ const renderProfile = async (root, uid) => {
     ),
   );
   profileShell.appendChild(profileHead);
-  const profileCharacterCleanup = [];
 
   const compactPostsCountEl = el("span", {}, `${postsCountEl.textContent} posts`);
-  const compactAvatar = el("div", {
-    class: "avatar sm profile-compact-avatar orbit-character",
-    role: "img",
-    "aria-label": `${u.name || "Profile"} 3D character`,
-  }, el("img", { class: "orbit-character-fallback", src: avatarFor(u), alt: "", loading: "lazy" }));
   const compactBar = el("div", { class: "profile-compact-bar" },
-    compactAvatar,
+    el("img", { class: "avatar sm", src: avatarFor(u), alt: `${u.name || "Profile"} profile picture` }),
     el("div", { class: "profile-compact-name" },
       el("strong", {}, u.name || "User"),
       compactPostsCountEl,
@@ -5061,43 +4164,14 @@ const renderProfile = async (root, uid) => {
     el("span", { class: "profile-compact-count" }, `${postsCountEl.textContent} posts`),
   );
   if (!isMe) {
-    compactFriendBtn = el("button", {
-      class: `btn compact-follow ${_isFriend ? "ghost" : "primary"}`,
-      onclick: addFriendOrOpenPage,
-    }, _isFriend ? "Friends" : "Add friend");
-    compactBar.appendChild(compactFriendBtn);
+    compactFollowBtn = el("button", { class: `btn compact-follow ${_iFollow ? "ghost" : "primary"}` }, _iFollow ? "Following" : "Follow");
+    compactFollowBtn.addEventListener("click", followProfile);
+    compactBar.appendChild(compactFollowBtn);
   }
   profileShell.appendChild(compactBar);
-import("./character.js?v=orbit-avatar-1").then(({ mountProfileCharacter }) => {
-  if (routeRenderToken !== root._routeRenderToken || !profileShell.isConnected) return;
-  profileCharacterCleanup.push(
-    mountProfileCharacter(profileAvatar, {
-      photoURL: avatarFor(u),
-      alt: `${u.name || "Profile"} character avatar`,
-      scrollRoot: root,
-      modelURL: u.avatarModelUrl || null,
-      animationMap: u.avatarAnimationMap || null,
-    }),
-    mountProfileCharacter(compactAvatar, {
-      photoURL: avatarFor(u),
-      alt: `${u.name || "Profile"} character avatar`,
-      scrollRoot: root,
-      modelURL: u.avatarModelUrl || null,
-      animationMap: u.avatarAnimationMap || null,
-    }),
-  );
-}).catch((error) => console.warn("Orbit character module failed to load.", error));
   const onProfileScroll = () => profileShell.classList.toggle("profile-scrolled", root.scrollTop > 170);
   root.addEventListener("scroll", onProfileScroll, { passive: true });
   profileShell._cleanupScroll = () => root.removeEventListener("scroll", onProfileScroll);
-  root._profileCleanup = () => {
-    profileShell._cleanupScroll?.();
-    profileCharacterCleanup.forEach((cleanup) => cleanup());
-    if (_profileTabUnsub) {
-      _profileTabUnsub();
-      _profileTabUnsub = null;
-    }
-  };
 
   // Feature: Pro section — rendered directly below header, always visible
   const proSection = el("div", { class: "profile-pro-section" });
@@ -5278,14 +4352,6 @@ const openProfileEditModal = () => {
   const ni = document.getElementById("editName");    if (ni) ni.value = state.me.name || "";
   const ui = document.getElementById("editUsername"); if (ui) ui.value = state.me.username || "";
   const bi = document.getElementById("editBio");      if (bi) bi.value = state.me.bio || "";
-  const birthdayInput = document.getElementById("editBirthday");
-  if (birthdayInput) {
-    const birthday = String(state.me.birthday || "");
-    const monthDay = /^\d{2}-\d{2}$/.test(birthday) ? birthday : /^\d{4}-\d{2}-\d{2}$/.test(birthday) ? birthday.slice(5) : "";
-    birthdayInput.value = monthDay ? `2000-${monthDay}` : "";
-  }
-  const birthdayAnnounce = document.getElementById("editBirthdayAnnounce");
-  if (birthdayAnnounce) birthdayAnnounce.checked = state.me.birthdayAnnounceEnabled === true;
   const av = document.getElementById("editAvatar");   if (av) av.src = state.me.photoURL || avatarFor(state.me);
   const cover = document.getElementById("editCover"); if (cover) {
     cover.src = profileCoverFor(state.me) || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='180' viewBox='0 0 640 180'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' x2='1'%3E%3Cstop stop-color='%237c5cff'/%3E%3Cstop offset='1' stop-color='%23ff5cae'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='640' height='180' fill='url(%23g)'/%3E%3C/svg%3E";
@@ -5296,9 +4362,7 @@ const openProfileEditModal = () => {
 
 const renderProfileByUsername = async (root, username) => {
   if (!username) { location.hash = "#feed"; return; }
-  const routeRenderToken = root._routeRenderToken;
   const qs = await getDocs(query(collection(db, "users"), where("username", "==", username.toLowerCase()), limit(1)));
-  if (routeRenderToken !== root._routeRenderToken) return;
   if (qs.empty) {
     root.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-user-unfollow-line" }), el("div", { class: "t" }, `@${username} not found`)));
     return;
@@ -5307,264 +4371,10 @@ const renderProfileByUsername = async (root, username) => {
   renderProfile(root, u.uid);
 };
 
-const friendLastActive = (profile) => {
-  if (profile?.showOnline === false) return "Hidden by privacy settings";
-  if (profile?.online) return "Online now";
-  const raw = profile?.lastSeen;
-  const stamp = raw?.toMillis?.() || raw?.seconds * 1000 || (raw instanceof Date ? raw.getTime() : Date.parse(raw));
-  if (!Number.isFinite(stamp) || stamp <= 0) return "Activity unavailable";
-  const elapsed = Math.max(0, Date.now() - stamp);
-  if (elapsed < 60_000) return "Active just now";
-  if (elapsed < 3_600_000) return `Active ${Math.floor(elapsed / 60_000)} min ago`;
-  if (elapsed < 86_400_000) return `Active ${Math.floor(elapsed / 3_600_000)} hr ago`;
-  return `Last active ${new Date(stamp).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}`;
-};
-
-const friendLocationLabel = (profile, canSeeLocation) => {
-  if (!canSeeLocation) return "Visible to friends";
-  if (profile?.showLocation === false || !profile?.verified || !profile?.location) return "Not shared";
-  return profile.location.city || "Verified area";
-};
-
-const approximateFriendDistance = (first, second) => {
-  const a = first?.location;
-  const b = second?.location;
-  if (!first?.verified || !second?.verified || !a || !b ||
-      !Number.isFinite(Number(a.lat)) || !Number.isFinite(Number(a.lng)) ||
-      !Number.isFinite(Number(b.lat)) || !Number.isFinite(Number(b.lng))) return null;
-  const toRad = (value) => Number(value) * Math.PI / 180;
-  const lat1 = toRad(a.lat), lat2 = toRad(b.lat);
-  const dLat = lat2 - lat1, dLng = toRad(b.lng) - toRad(a.lng);
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
-  return Math.round(6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h)));
-};
-
-const renderFriends = async (root, peerUid = null) => {
-  const routeRenderToken = root._routeRenderToken;
-  const page = el("div", { class: "friends-page" });
-  root.appendChild(page);
-  const isDetail = Boolean(peerUid && peerUid !== state.uid);
-  page.appendChild(el("header", { class: "friends-page-head" },
-    isDetail
-      ? el("button", {
-          class: "icon-btn friends-page-back",
-          title: "Back to friends",
-          onclick: () => { location.hash = "#friends"; },
-        }, el("i", { class: "ri-arrow-left-line" }))
-      : el("span", { class: "friends-page-mark" }, el("i", { class: "ri-group-line" })),
-    el("div", {},
-      el("h1", {}, isDetail ? "Friend info" : "Friends"),
-      el("p", {}, isDetail ? "Your Orbit connection" : "People in your Orbit"),
-    ),
-  ));
-
-  if (!isDetail) {
-    const friendIds = [...new Set((state.me?.friends || []).filter((id) => id && id !== state.uid))];
-    let friends = [];
-    try {
-      friends = (await Promise.all(friendIds.map((id) => fetchUser(id)))).filter(Boolean);
-    } catch {
-      if (routeRenderToken === root._routeRenderToken) {
-        page.appendChild(el("div", { class: "friends-empty" },
-          el("i", { class: "ri-wifi-off-line" }),
-          el("h2", {}, "Couldn’t load friends"),
-          el("p", {}, "Check your connection and try again."),
-        ));
-      }
-      return;
-    }
-    if (routeRenderToken !== root._routeRenderToken || !page.isConnected) return;
-    if (!friends.length) {
-      page.appendChild(el("div", { class: "friends-empty" },
-        el("i", { class: "ri-user-heart-line" }),
-        el("h2", {}, "Your Orbit starts with a friend"),
-        el("p", {}, "Open someone’s profile and choose Add friend to meet them here."),
-        el("button", { class: "btn primary", onclick: () => { location.hash = "#explore"; } },
-          el("i", { class: "ri-compass-3-line" }), " Explore people"),
-      ));
-      return;
-    }
-
-    const list = el("div", { class: "friends-list" });
-    page.appendChild(list);
-    friends.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-    friends.forEach((friend) => {
-      const infoButton = el("button", {
-        class: "btn ghost",
-        title: `Info about ${friend.name || "friend"}`,
-        onclick: () => { location.hash = `#friends/${friend.uid}`; },
-      }, el("i", { class: "ri-information-line" }), " Info");
-      const messageButton = friend.allowMessages !== false
-        ? el("button", {
-            class: "btn primary",
-            title: `Message ${friend.name || "friend"}`,
-            onclick: () => { location.hash = `#chats/${friend.uid}`; },
-          }, el("i", { class: "ri-chat-3-line" }))
-        : null;
-      list.appendChild(el("article", { class: "friend-list-card" },
-        el("img", { class: "avatar md", src: avatarFor(friend), alt: `${friend.name || "Friend"} profile photo` }),
-        el("div", { class: "friend-list-meta" },
-          el("strong", {}, friend.name || "Orbit friend"),
-          el("span", {}, `@${friend.username || "member"} · ${friendLastActive(friend)}`),
-        ),
-        el("div", { class: "friend-list-actions" }, infoButton, messageButton),
-      ));
-    });
-    return;
-  }
-
-  let peer;
-  try {
-    peer = await fetchUser(peerUid);
-  } catch {
-    peer = null;
-  }
-  if (routeRenderToken !== root._routeRenderToken || !page.isConnected) return;
-  if (!peer) {
-    page.appendChild(el("div", { class: "friends-empty" },
-      el("i", { class: "ri-user-unfollow-line" }),
-      el("h2", {}, "This profile isn’t available"),
-      el("p", {}, "The account may have been removed or is temporarily unavailable."),
-      el("button", { class: "btn ghost", onclick: () => { location.hash = "#friends"; } }, "Back to friends"),
-    ));
-    return;
-  }
-
-  const me = state.me || await fetchUser(state.uid);
-  if (routeRenderToken !== root._routeRenderToken || !page.isConnected) return;
-  const isFriend = (me?.friends || []).includes(peerUid);
-  const canSeePeerDetails = !peer.privateAccount || isFriend || (me?.following || []).includes(peerUid);
-  const leftCharacter = el("div", { class: "friend-character-model friend-character-left" });
-  const rightCharacter = el("div", { class: "friend-character-model friend-character-right" });
-  const scene = el("section", {
-    class: "friend-meet-scene",
-    "aria-label": `A green Orbit scene with ${me?.name || "you"} and ${peer.name || "your friend"}`,
-  },
-    el("div", { class: "friend-scene-sun", "aria-hidden": "true" }),
-    el("div", { class: "friend-scene-cloud cloud-a", "aria-hidden": "true" }),
-    el("div", { class: "friend-scene-cloud cloud-b", "aria-hidden": "true" }),
-    el("div", { class: "friend-scene-tree tree-a", "aria-hidden": "true" }),
-    el("div", { class: "friend-scene-tree tree-b", "aria-hidden": "true" }),
-    el("div", { class: "friend-scene-road", "aria-hidden": "true" }),
-    el("div", { class: "friend-meet-badge" }, isFriend ? "Orbit friends" : "Friend preview"),
-    el("div", { class: "friend-character-slot left" },
-      leftCharacter,
-      el("div", { class: "friend-character-label" }, me?.name || "You"),
-    ),
-    el("div", { class: "friend-character-slot right" },
-      rightCharacter,
-      el("div", { class: "friend-character-label" }, peer.name || "Orbit friend"),
-    ),
-  );
-  page.appendChild(scene);
-
-  const actions = el("div", { class: "friend-detail-actions" });
-  if (isFriend) {
-    actions.appendChild(el("button", {
-      class: "btn ghost",
-      onclick: async () => {
-        if (!confirm(`Remove ${peer.name || "this friend"} from your friends?`)) return;
-        if (await removeOrbitFriend(peerUid)) location.hash = "#friends";
-      },
-    }, el("i", { class: "ri-user-unfollow-line" }), " Remove friend"));
-  } else {
-    actions.appendChild(el("button", {
-      class: "btn primary",
-      onclick: async (event) => {
-        const button = event.currentTarget;
-        button.disabled = true;
-        button.textContent = "Adding…";
-        if (await addOrbitFriend(peerUid)) router();
-        else { button.disabled = false; button.textContent = "Add friend"; }
-      },
-    }, el("i", { class: "ri-user-add-line" }), " Add friend"));
-  }
-  actions.appendChild(el("button", {
-    class: "btn ghost",
-    onclick: () => { location.hash = `#profile/${peerUid}`; },
-  }, el("i", { class: "ri-user-line" }), " View profile"));
-  if (peer.allowMessages !== false) {
-    actions.appendChild(el("button", {
-      class: "btn primary",
-      onclick: () => { location.hash = `#chats/${peerUid}`; },
-    }, el("i", { class: "ri-chat-3-line" }), " Message"));
-  }
-  page.appendChild(actions);
-
-  const infoRow = (label, value) => el("div", { class: "friend-info-row" },
-    el("span", {}, label),
-    el("span", {}, value || "—"),
-  );
-  const aboutCard = el("article", { class: "friend-info-card" },
-    el("h3", {}, el("i", { class: "ri-user-line" }), " About"),
-    el("div", { class: "friend-info-bio" }, canSeePeerDetails
-      ? (peer.bio || "No bio added yet.")
-      : "Private profile. Add each other as friends to see more details."),
-    infoRow("Username", peer.username ? `@${peer.username}` : "—"),
-    canSeePeerDetails && peer.birthday ? infoRow("Birthday", formatProfileBirthday(peer.birthday) || "—") : null,
-    infoRow("Member since", peer.createdAt?.toDate
-      ? peer.createdAt.toDate().toLocaleDateString([], { month: "long", year: "numeric" })
-      : "—"),
-  );
-  const activityCard = el("article", { class: "friend-info-card" },
-    el("h3", {}, el("i", { class: "ri-pulse-line" }), " Activity"),
-    infoRow("Last active", canSeePeerDetails ? friendLastActive(peer) : "Available to friends"),
-    infoRow("Connection", isFriend ? "Friends on Orbit" : "Not friends yet"),
-    canSeePeerDetails && peer.verified ? infoRow("Verification", "Location verified") : null,
-  );
-
-  const canSeeLocations = isFriend;
-  const locationPair = el("div", { class: "friend-location-pair" },
-    el("div", { class: "friend-location-person" },
-      el("img", { class: "avatar", src: avatarFor(me), alt: "" }),
-      el("div", {}, el("strong", {}, me?.name || "You"), el("span", {}, friendLocationLabel(me, true))),
-    ),
-    el("div", { class: "friend-location-person" },
-      el("img", { class: "avatar", src: avatarFor(peer), alt: "" }),
-      el("div", {}, el("strong", {}, peer.name || "Friend"), el("span", {}, friendLocationLabel(peer, canSeeLocations))),
-    ),
-  );
-  const distance = canSeeLocations ? approximateFriendDistance(me, peer) : null;
-  const locationCard = el("article", { class: "friend-info-card" },
-    el("h3", {}, el("i", { class: "ri-map-pin-line" }), " Location"),
-    locationPair,
-    distance == null ? null : el("div", { class: "friend-distance" }, `About ${distance} km apart · approximate`),
-  );
-  page.appendChild(el("section", { class: "friend-info-grid" }, aboutCard, activityCard, locationCard));
-
-  const characterCleanup = [];
-  root._friendsCleanup = () => characterCleanup.forEach((cleanup) => cleanup());
-import("./character.js?v=orbit-avatar-1").then(({ mountProfileCharacter }) => {
-  if (routeRenderToken !== root._routeRenderToken || !page.isConnected) return;
-  characterCleanup.push(
-    mountProfileCharacter(leftCharacter, {
-      photoURL: avatarFor(me),
-      alt: `${me?.name || "You"} character`,
-      scrollRoot: root,
-      rotationY: Math.PI / 2,
-      waveOnInitialView: true,
-      modelURL: me?.avatarModelUrl || null,
-      animationMap: me?.avatarAnimationMap || null,
-    }),
-    mountProfileCharacter(rightCharacter, {
-      photoURL: avatarFor(peer),
-      alt: `${peer.name || "Friend"} character`,
-      scrollRoot: root,
-      rotationY: -Math.PI / 2,
-      waveOnInitialView: true,
-      modelURL: peer?.avatarModelUrl || null,
-      animationMap: peer?.avatarAnimationMap || null,
-    }),
-  );
-}).catch((error) => console.warn("Orbit friend characters failed to load.", error));
-};
-
 // =========================================================================
 // 13. SETTINGS — theme, verification, notifications
 // =========================================================================
-const renderSettings = async (root) => {
-  const routeRenderToken = root._routeRenderToken;
-  root.innerHTML = "";
+const renderSettings = (root) => {
   const settingSwitch = (key, title, description, onChange = null) => {
     const defaultValue = !["privateAccount", "hideSensitive"].includes(key);
     const current = state.me?.[key] ?? defaultValue;
@@ -5592,12 +4402,11 @@ const renderSettings = async (root) => {
       el("div", { class: "label" }, el("div", { class: "t" }, title), el("div", { class: "d" }, description)),
       sw,
     );
+  };
 
-
-
-};
-const wrap = el("div", { class: "settings" },
+  const wrap = el("div", { class: "settings" },
     el("h2", { style: "margin-top:0;font-family:var(--font-display);" }, "Settings"),
+
     el("div", { class: "group" },
       el("h3", {}, "Appearance"),
       el("div", { class: "row" },
@@ -5831,11 +4640,7 @@ const wrap = el("div", { class: "settings" },
       ),
     ),
   );
-// ── Custom avatar section ──────────────────────────────────────────
-const avatarSettingsCard = await mountAvatarSettingsCard();
-if (routeRenderToken !== root._routeRenderToken) return;
-wrap.appendChild(avatarSettingsCard);
-root.appendChild(wrap);
+  root.appendChild(wrap);
 };
 
 // Verification by location (one-time geolocation)
@@ -5902,18 +4707,14 @@ $("#groupForm").addEventListener("submit", async (e) => {
   const btn = e.target.querySelector("button[type='submit']");
   btn.disabled = true; btn.textContent = "Creating…";
   try {
-    const invitedMemberIds = await resolveGroupMemberIds(fd.get("memberUsernames") || "");
-    const memberIds = [...new Set([state.uid, ...invitedMemberIds])];
-    if (memberIds.length > MAX_GROUP_MEMBERS) {
-      toast(`A group can have at most ${MAX_GROUP_MEMBERS} members, including you.`);
-      return;
-    }
     const iconFile = fd.get("iconFile");
     let iconUrl = "";
     if (iconFile instanceof File && iconFile.size > 0) {
       btn.textContent = "Uploading picture…";
       iconUrl = (await uploadToCloudinary(iconFile, "image")).url;
     }
+    const invitedMemberIds = await resolveGroupMemberIds(fd.get("memberUsernames") || "");
+    const memberIds = [...new Set([state.uid, ...invitedMemberIds])];
     const ref = await addDoc(collection(db, "groups"), {
       name,
       about: fd.get("about") || "",
@@ -5957,10 +4758,6 @@ const _crFreshState = () => ({
   step: "pick",           // pick | cam | editor | music | details
   slides: [],             // [{ type:'image'|'video', file, url, overlays:[], recordedInApp? }]
   textOnly: false,        // true when publishing a text-only post (no media)
-  isSponsored: false,
-  adHeadline: "",
-  adLink: "",
-  adCta: "Learn more",
   song: null,             // { id, name, artist, url, duration }
   caption: "",
   location: null,
@@ -6002,7 +4799,7 @@ function crRenderShell(root) {
   const closeBtn = el("button", { class: "cr-head-close", onclick: () => crClose() }, el("i", { class: "ri-close-line" }));
   const backBtn = el("button", { class: "cr-head-close", style: "display:none;", onclick: () => crBack() }, el("i", { class: "ri-arrow-left-line" }));
   const title = el("div", { class: "cr-head-title", text: "New post" });
-  const nextBtn = el("button", { class: "cr-head-btn primary", type: "button", style: "display:none;" }, "Next");
+  const nextBtn = el("button", { class: "cr-head-btn primary", style: "display:none;" }, "Next");
   const head = el("div", { class: "cr-head" }, el("div", { style: "display:flex;align-items:center;gap:8px;" }, backBtn, closeBtn), title, nextBtn);
   const stepsWrap = el("div", { class: "cr-steps" });
   root.appendChild(head);
@@ -6027,7 +4824,7 @@ function crGoto(step) {
   stepsWrap.innerHTML = "";
   backBtn.style.display = step === "pick" ? "none" : "";
   nextBtn.style.display = "none";
-   if (step === "pick") { title.textContent = crState.isSponsored ? "New sponsored ad" : "New post"; stepsWrap.appendChild(crBuildPickStep()); }
+  if (step === "pick") { title.textContent = "New post"; stepsWrap.appendChild(crBuildPickStep()); }
   else if (step === "cam") { title.textContent = "Record video"; stepsWrap.appendChild(crBuildCamStep()); }
   else if (step === "editor") {
     title.textContent = "Edit";
@@ -6038,9 +4835,9 @@ function crGoto(step) {
     stepsWrap.appendChild(crBuildMusicStep());
     nextBtn.style.display = ""; nextBtn.textContent = "Next"; nextBtn.onclick = () => crGoto("details");
   } else if (step === "details") {
-     title.textContent = crState.isSponsored ? "Create ad" : "Share";
+    title.textContent = "Share";
     stepsWrap.appendChild(crBuildDetailsStep());
-     nextBtn.style.display = ""; nextBtn.textContent = crState.isSponsored ? "Create ad" : "Post"; nextBtn.onclick = () => crSubmitPost(nextBtn);
+    nextBtn.style.display = ""; nextBtn.textContent = "Post"; nextBtn.onclick = () => crSubmitPost(nextBtn);
   }
 }
 
@@ -6048,19 +4845,6 @@ function crGoto(step) {
 function crBuildPickStep() {
   crState.textOnly = false;
   const fileInput = el("input", { type: "file", accept: "image/*,video/*", multiple: true, hidden: true });
-  const sponsoredInput = el("input", { type: "checkbox" });
-  sponsoredInput.checked = crState.isSponsored === true;
-  sponsoredInput.addEventListener("change", () => {
-    crState.isSponsored = sponsoredInput.checked;
-    if (_crShellRefs?.title) _crShellRefs.title.textContent = crState.isSponsored ? "New sponsored ad" : "New post";
-  });
-  const sponsoredToggle = el("label", { class: "cr-ad-mode-toggle" },
-    sponsoredInput,
-    el("span", {},
-      el("strong", {}, "Create this as an ad"),
-      el("small", {}, "Adds a Sponsored label and a destination link. No ad budget or paid placement is set up."),
-    ),
-  );
   fileInput.addEventListener("change", (e) => {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
@@ -6087,7 +4871,6 @@ function crBuildPickStep() {
         el("button", { class: "cr-pick-opt", onclick: () => { crState.textOnly = true; crState.slides = []; crGoto("details"); } },
           el("i", { class: "ri-text" }), el("span", {}, "Text post")),
       ),
-      sponsoredToggle,
       el("div", { class: "cr-pick-hint" }, "Pick multiple photos to make a swipeable carousel. Music can be added to videos you record in-app."),
       fileInput,
     ),
@@ -6445,30 +5228,6 @@ function crBuildDetailsStep() {
   caption.value = crState.caption;
   caption.addEventListener("input", () => { crState.caption = caption.value; });
 
-  let sponsoredFields = null;
-  if (crState.isSponsored) {
-    const headline = el("input", { type: "text", maxlength: "80", placeholder: "Ad headline (optional)" });
-    headline.value = crState.adHeadline || "";
-    headline.addEventListener("input", () => { crState.adHeadline = headline.value; });
-    const destination = el("input", { type: "url", placeholder: "https://your-site.com" });
-    destination.value = crState.adLink || "";
-    destination.addEventListener("input", () => { crState.adLink = destination.value; });
-    const cta = el("select", {},
-      el("option", { value: "Learn more" }, "Learn more"),
-      el("option", { value: "Shop now" }, "Shop now"),
-      el("option", { value: "Sign up" }, "Sign up"),
-      el("option", { value: "Contact us" }, "Contact us"),
-    );
-    cta.value = crState.adCta || "Learn more";
-    cta.addEventListener("change", () => { crState.adCta = cta.value; });
-    sponsoredFields = el("div", { class: "cr-ad-fields" },
-      el("div", { class: "cr-ad-fields-title" }, el("i", { class: "ri-advertisement-line" }), "Sponsored ad details"),
-      el("label", {}, "Headline", headline),
-      el("label", {}, "Destination link (required)", destination),
-      el("label", {}, "Button text", cta),
-    );
-  }
-
   const locRow = el("div", { class: "cr-details-row" },
     el("div", { class: "l" }, el("i", { class: "ri-map-pin-line" }), "Tag location"),
     el("div", { class: "v" }, crState.location?.city || "Not tagged"),
@@ -6504,7 +5263,6 @@ function crBuildDetailsStep() {
           crState.slides.length > 1 ? `${crState.slides.length} photos in this post` : (thumbSlide.type === "video" ? "1 video" : "1 photo")),
       ),
       caption,
-      sponsoredFields,
       locRow,
       musicRow,
     ),
@@ -6550,21 +5308,7 @@ function crFlattenImageSlide(slide) {
 async function crSubmitPost(btn) {
   if (!crState.textOnly && !crState.slides.length) { toast("Pick a photo or video first"); return; }
   if (crState.textOnly && !crState.caption.trim()) { toast("Write something first"); return; }
-  const isSponsored = crState.isSponsored === true;
-  let adDestinationUrl = "";
-  if (isSponsored) {
-    if (!crState.adLink?.trim()) { toast("Add a destination link for your ad"); return; }
-    if (!crState.caption.trim() && !crState.adHeadline?.trim()) { toast("Add ad text or a headline"); return; }
-    try {
-      const parsedUrl = new URL(crState.adLink.trim());
-      if (!["http:", "https:"].includes(parsedUrl.protocol)) throw new Error("Unsupported link");
-      adDestinationUrl = parsedUrl.href;
-    } catch {
-      toast("Enter a valid link starting with https://");
-      return;
-    }
-  }
-  btn.disabled = true; btn.textContent = isSponsored ? "Creating ad…" : "Posting…";
+  btn.disabled = true; btn.textContent = "Posting…";
   try {
     let media;
     if (!crState.textOnly) {
@@ -6591,23 +5335,15 @@ async function crSubmitPost(btn) {
     if (media) postData.media = media;
     if (crState.location) postData.location = crState.location;
     if (crState.song) postData.song = crState.song;
-    if (isSponsored) {
-      postData.isSponsored = true;
-      postData.ad = {
-        headline: crState.adHeadline.trim(),
-        destinationUrl: adDestinationUrl,
-        cta: crState.adCta || "Learn more",
-      };
-    }
     const newPostRef = await addDoc(collection(db, "posts"), postData);
     sfxPost();
-    toast(isSponsored ? "Ad created and marked Sponsored" : "Posted!");
+    toast("Posted!");
     showPostSuccess();
     crClose();
     addDoc(collection(db, "notifications", state.uid, "items"), {
       type: "postConfirm", postId: newPostRef.id, text: "Your post is live!", read: false, createdAt: serverTimestamp(),
     }).catch(() => {});
-    if (!isSponsored) (async () => {
+    (async () => {
       let followers = state.me?.followers || [];
       try {
         const freshSnap = await getDoc(doc(db, "users", state.uid));
@@ -6625,7 +5361,7 @@ async function crSubmitPost(btn) {
     })().catch(() => {});
   } catch (err) {
     toast("Failed to post: " + (err.message || "unknown error"));
-    btn.disabled = false; btn.textContent = isSponsored ? "Create ad" : "Post";
+    btn.disabled = false; btn.textContent = "Post";
   }
 }
 
@@ -6651,11 +5387,33 @@ const renderInlinePeopleSuggestion = () => {
     _all.forEach((u) => {
       if (added >= 6) return;
       added++;
+      let iFollow = (state.me?.following || []).includes(u.uid);
+      const btn = el("button", {
+        class: `btn sm ${iFollow ? "ghost" : "primary"}`,
+        onclick: async (e) => {
+          const meRef = doc(db, "users", state.uid);
+          const themRef = doc(db, "users", u.uid);
+          const batch = writeBatch(db);
+          if (iFollow) {
+            batch.update(meRef, { following: arrayRemove(u.uid) });
+            batch.update(themRef, { followers: arrayRemove(state.uid) });
+          } else {
+            batch.update(meRef, { following: arrayUnion(u.uid) });
+            batch.update(themRef, { followers: arrayUnion(state.uid) });
+          }
+          await batch.commit();
+          state.cache.users.delete(u.uid);
+          state.cache.users.delete(state.uid);
+          iFollow = !iFollow;
+          btn.textContent = iFollow ? "Following" : "Follow";
+          btn.className = `btn sm ${iFollow ? "ghost" : "primary"}`;
+        }
+      }, iFollow ? "Following" : "Follow");
       scroller.appendChild(el("div", { class: "feed-sugg-person" },
         el("img", { class: "avatar md", src: avatarFor(u), onclick: () => location.hash = `#profile/${u.uid}` }),
         el("div", { class: "feed-sugg-name" }, u.name || "User"),
         el("div", { class: "feed-sugg-meta" }, "@" + (u.username || "")),
-        orbitFriendControls(u, { compact: true, stacked: true })
+        btn
       ));
     });
     if (added === 0) card.remove();
@@ -6681,13 +5439,13 @@ const renderInlineGroupSuggestion = () => {
       const btn = el("button", {
         class: `btn sm ${member ? "ghost" : "primary"}`,
         onclick: async () => {
-          try {
-            const members = await changeGroupMembers(g.id, member ? { remove: [state.uid] } : { add: [state.uid] });
-            member = members.includes(state.uid);
-          } catch (error) {
-            toast(error?.message || "Could not update group membership");
-            return;
+          const ref = doc(db, "groups", g.id);
+          if (member) {
+            await updateDoc(ref, { members: arrayRemove(state.uid) });
+          } else {
+            await updateDoc(ref, { members: arrayUnion(state.uid) });
           }
+          member = !member;
           btn.textContent = member ? "Joined" : "Join";
           btn.className = `btn sm ${member ? "ghost" : "primary"}`;
         }
@@ -6810,21 +5568,15 @@ const showOnboardingGuide = () => {
           let selected = step === 1 ? (state.me.following || []).includes(item.id) : (item.members || []).includes(state.uid);
           const button = el("button", { class: `onboarding-guide-select${selected ? " selected" : ""}` }, selected ? "Selected" : "Select");
           button.onclick = async () => {
-            const nextSelected = !selected;
-            try {
-              if (step === 1) {
-                await updateDoc(doc(db, "users", state.uid), { following: nextSelected ? arrayUnion(item.id) : arrayRemove(item.id) });
-                state.me.following = nextSelected ? [...new Set([...(state.me.following || []), item.id])] : (state.me.following || []).filter((id) => id !== item.id);
-                selected = nextSelected;
-              } else {
-                const members = await changeGroupMembers(item.id, nextSelected ? { add: [state.uid] } : { remove: [state.uid] });
-                selected = members.includes(state.uid);
-              }
-              button.textContent = selected ? "Selected" : "Select";
-              button.classList.toggle("selected", selected);
-            } catch (error) {
-              toast(error?.message || "Could not update group membership");
+            selected = !selected;
+            if (step === 1) {
+              await updateDoc(doc(db, "users", state.uid), { following: selected ? arrayUnion(item.id) : arrayRemove(item.id) });
+              state.me.following = selected ? [...new Set([...(state.me.following || []), item.id])] : (state.me.following || []).filter((id) => id !== item.id);
+            } else {
+              await updateDoc(doc(db, "groups", item.id), { members: selected ? arrayUnion(state.uid) : arrayRemove(state.uid) });
             }
+            button.textContent = selected ? "Selected" : "Select";
+            button.classList.toggle("selected", selected);
           };
           list.appendChild(el("div", { class: "onboarding-guide-row" },
             el("img", { class: "avatar sm", src: step === 1 ? avatarFor(item) : (item.iconUrl || item.photoURL || `https://api.dicebear.com/7.x/shapes/svg?seed=${item.id}`) }),
@@ -6935,21 +5687,21 @@ const showOnboardingModal = () => {
     if (snap.empty) return;
     snap.docs.forEach((d) => {
       const g = { id: d.id, ...d.data() };
-      let member = (g.members || []).includes(state.uid);
+      let member = false;
       const btn = el("button", {
-        class: `btn sm ${member ? "ghost" : "primary"}`,
+        class: "btn sm primary",
         onclick: async () => {
-          try {
-            const members = await changeGroupMembers(g.id, member ? { remove: [state.uid] } : { add: [state.uid] });
-            member = members.includes(state.uid);
-          } catch (error) {
-            toast(error?.message || "Could not update group membership");
-            return;
+          const ref = doc(db, "groups", g.id);
+          if (member) {
+            await updateDoc(ref, { members: arrayRemove(state.uid) });
+          } else {
+            await updateDoc(ref, { members: arrayUnion(state.uid) });
           }
+          member = !member;
           btn.textContent = member ? "✓ Joined" : "Join";
           btn.className = `btn sm ${member ? "ghost" : "primary"}`;
         }
-      }, member ? "✓ Joined" : "Join");
+      }, "Join");
       groupList.appendChild(el("div", { class: "onboard-row" },
         el("div", { class: "onboard-group-icon" }, (g.name || "?")[0].toUpperCase()),
         el("div", { class: "onboard-row-meta" },
@@ -7175,6 +5927,7 @@ const startSuggestions = () => {
       .filter(u => u.uid !== state.uid);
     for (let i = _all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [_all[i], _all[j]] = [_all[j], _all[i]]; }
     _all.slice(0, 5).forEach((u) => {
+      const iFollow = (state.me.following || []).includes(u.uid);
       list.appendChild(el("div", { class: "suggest-row" },
         el("img", { class: "avatar sm", src: avatarFor(u), onclick: () => location.hash = `#profile/${u.uid}` }),
         el("div", { class: "meta" },
@@ -7182,7 +5935,21 @@ const startSuggestions = () => {
             u.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null),
           el("div", { class: "uname" }, "@" + u.username),
         ),
-        orbitFriendControls(u, { compact: true, stacked: true }),
+        el("button", { class: `btn sm ${iFollow ? "ghost" : "primary"}`, onclick: async () => {
+          const meRef = doc(db, "users", state.uid);
+          const themRef = doc(db, "users", u.uid);
+          const batch = writeBatch(db);
+          if (iFollow) {
+            batch.update(meRef, { following: arrayRemove(u.uid) });
+            batch.update(themRef, { followers: arrayRemove(state.uid) });
+          } else {
+            batch.update(meRef, { following: arrayUnion(u.uid) });
+            batch.update(themRef, { followers: arrayUnion(state.uid) });
+          }
+          await batch.commit();
+          state.cache.users.delete(u.uid);
+          state.cache.users.delete(state.uid);
+        }}, iFollow ? "Following" : "Follow"),
       ));
     });
   });
@@ -7237,22 +6004,13 @@ $("#globalSearch").addEventListener("keydown", async (e) => {
     const nameV = (document.getElementById("editName")?.value || "").trim();
     const userV = (document.getElementById("editUsername")?.value || "").trim().toLowerCase().replace(/[^a-z0-9_]/g, "");
     const bioV  = (document.getElementById("editBio")?.value || "").trim();
-    const birthdayDate = document.getElementById("editBirthday")?.value || "";
-    const birthday = /^\d{4}-(\d{2}-\d{2})$/.exec(birthdayDate)?.[1] || null;
-    const birthdayAnnounceEnabled = !!birthday && document.getElementById("editBirthdayAnnounce")?.checked === true;
     if (!nameV) { toast("Name cannot be empty"); return; }
     const st = document.getElementById("editSaveText"); if (st) st.textContent = "Saving..."; save.disabled = true;
     try {
-      const updates = {
-        name: nameV, bio: bioV, username: userV || state.me.username,
-        birthday, birthdayAnnounceEnabled,
-      };
+      const updates = { name: nameV, bio: bioV, username: userV || state.me.username };
       if (pendingAvFile) { toast("Uploading photo..."); const up = await uploadToCloudinary(pendingAvFile, "image"); updates.photoURL = up.url; }
       if (pendingCoverFile) { toast("Uploading cover photo..."); const up = await uploadToCloudinary(pendingCoverFile, "image"); updates.coverURL = up.url; }
       await updateDoc(doc(db, "users", state.uid), updates);
-      state.me = { ...state.me, ...updates };
-      state.cache.users.delete(state.uid);
-      announceBirthdayIfDue().catch((err) => console.warn("Birthday announcement failed:", err));
       toast("Profile updated"); closeModal(); router();
     } catch (err) { toast("Save failed: " + (err.message || "unknown")); }
     finally { save.disabled = false; if (st) st.textContent = "Save changes"; }
@@ -7395,7 +6153,6 @@ window._aiSend = async function() {
   const ta   = document.getElementById("aiChatInput");
   const text = ta?.value?.trim();
   if (!text || _aiTyping) return;
-  if (!window.GROQ_API_KEY) { toast("Set window.GROQ_API_KEY to use the AI assistant"); return; }
   ta.value = "";
   ta.style.height = "auto";
 
@@ -7408,14 +6165,11 @@ window._aiSend = async function() {
       role:    m.role === "ai" ? "assistant" : "user",
       content: m.text,
     }));
-    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method:  "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${window.GROQ_API_KEY}` },
+    const res = await fetch("/api/groq", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model:       window.GROQ_MODEL,
-        messages:    [{ role: "system", content: getAIChatSystem() }, ...history],
-        max_tokens:  280,
-        temperature: 0.9,
+        messages: [{ role: "system", content: getAIChatSystem() }, ...history],
       }),
     });
     if (!res.ok) {
