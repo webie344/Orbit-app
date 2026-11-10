@@ -250,12 +250,12 @@ textarea { resize: vertical; min-height: 80px; }
   box-shadow: 0 10px 30px rgba(124, 92, 255, 0.4);
 }
 .orbit-mark span {
-  position: absolute; top: 50%; transform: translateY(-50%); width: 9%; border-radius: 99px;
-  background: #fff; border: 0; box-shadow: 0 0 10px rgba(255,255,255,0.55);
+  position: absolute; border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.85);
 }
-.orbit-mark span:nth-child(1) { height: 28%; left: 31%; }
-.orbit-mark span:nth-child(2) { height: 52%; left: 45.5%; }
-.orbit-mark span:nth-child(3) { height: 38%; left: 60%; }
+.orbit-mark span:nth-child(1) { width: 70%; height: 70%; }
+.orbit-mark span:nth-child(2) { width: 50%; height: 50%; border-color: rgba(255,255,255,0.7); transform: rotate(45deg); }
+.orbit-mark span:nth-child(3) { width: 28%; height: 28%; background: white; border: 0; box-shadow: 0 0 12px rgba(255,255,255,0.7); }
 .orbit-mark.sm { width: 44px; height: 44px; box-shadow: 0 6px 16px rgba(124,92,255,.35); }
 .orbit-mark.xs { width: 32px; height: 32px; box-shadow: none; }
 
@@ -4598,6 +4598,13 @@ html[data-theme="glass"] .detail-comments .tw-comment {
 }
 
 /* ---------- Brand mark: replaces the old Get better rings everywhere ---------- */
+.orbit-mark {
+  background: url("/icon.svg") center / 100% 100% no-repeat;
+  border-radius: 24%;
+  box-shadow: 0 8px 22px rgba(124, 92, 255, .35);
+}
+.orbit-mark span { display: none; }
+.orbit-mark.xs { box-shadow: none; }
 
 /* ---------- Shell: server rail + channel column ---------- */
 .content:has(.gb-shell) { padding-bottom: 0; }
@@ -4855,25 +4862,3 @@ html[data-theme="glass"] .detail-comments .tw-comment {
   .gb-children { margin-left: 15px; }
 }
 @media (min-width: 641px) { .gb-composer { bottom: 0; } }
-
-/* ---- Feed declutter: no bottom nav, right rail, or extra topbar buttons on the feed ---- */
-body[data-route="feed"] .rightrail { display: none; }
-body[data-route="feed"] .layout { grid-template-columns: var(--sidebar-w) minmax(0, 1fr); }
-@media (max-width: 640px) { body[data-route="feed"] .layout { grid-template-columns: minmax(0, 1fr); } }
-body[data-route="feed"] #topbarComposeBtn,
-body[data-route="feed"] #themeToggle { display: none; }
-.gb-post:not(.detail) .gb-tools { display: none; }
-
-/* ---- No bottom nav anywhere ---- */
-:root { --bottomnav-h: 0px; }
-.bottomnav { display: none !important; }
-@media (max-width: 640px) { .content { padding-bottom: 0; } }
-
-/* ---- Explore / profile / saved pages use the voice-post style ---- */
-.gb-page { min-height: 100%; }
-.gb-pills { display: flex; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
-.gb-pill { border: 1px solid var(--line); background: transparent; color: var(--text-dim); border-radius: 999px; padding: 6px 14px; font-weight: 700; font-size: 13px; cursor: pointer; }
-.gb-pill.on { background: var(--primary); border-color: var(--primary); color: #fff; }
-.gb-list { display: flex; flex-direction: column; }
-.profile-feed-list .gb-post, #content .gb-post { border-radius: 0; }
-
