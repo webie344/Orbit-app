@@ -1,3 +1,4 @@
+// BUILD 2026-11-10 21:08 — onboarding cartoon + CSS logo + voice-only pages
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
@@ -1592,7 +1593,8 @@ const router = () => {
 
   // Hide bottom nav in post detail, restore on all other routes
   const _bnEl = document.querySelector(".bottomnav");
-  if (_bnEl) _bnEl.classList.toggle("detail-hidden", target === "post");
+  if (_bnEl) _bnEl.classList.toggle("detail-hidden", target === "post" || target === "feed");
+  document.body.dataset.route = target;
 
   // ── Leaving the feed ──────────────────────────────────────────────────
   if (prevRoute === "feed") {
@@ -1902,7 +1904,7 @@ const renderTrendingCard = (p, author) => {
     el("div", { class: "t-text", text: (p.text || "").slice(0, 140) }),
     el("div", { class: "t-meta" },
       el("i", { class: "ri-fire-fill", style: "color: var(--grad-2);" }),
-      `${p.orbitCount || 0} Orbits · ${fmtTime(p.createdAt)}`
+      `${p.orbitCount || 0} likes · ${fmtTime(p.createdAt)}`
     ),
   );
 };
@@ -2230,7 +2232,13 @@ const openPostMenu = (p, author, isMine) => {
   requestAnimationFrame(() => sheet.classList.add("is-visible"));
 };
 
-const renderPost = (p, author, opts = {}) => {
+// Text + voice-note posts only (Get better). Media posts render nothing.
+function renderPost(p, author, opts = {}) {
+  const hasMedia = Array.isArray(p.media) ? p.media.length > 0 : !!p.media;
+  if (hasMedia || (!p.audio?.url && !p.text)) return el("div", { style: "display:none" });
+  return gb().renderVoicePost(p, author, { detail: !!opts.detailView });
+}
+const _renderMediaPost = (p, author, opts = {}) => {
   const iOrbited = (p.orbits || []).includes(state.uid);
   const isMine = p.authorUid === state.uid;
   const { hideComments = false, detailView: _detailView = false } = opts;
@@ -3438,6 +3446,42 @@ const renderGroups = (root) => {
 // 11. EXPLORE / SAVED
 // =========================================================================
 const renderExplore = (root, hashtagFilter = null) => {
+  const col = el("div", { class: "gb-col gb-page" });
+  const head = el("div", { class: "gb-head" },
+    hashtagFilter ? el("button", { class: "gb-icon-btn", type: "button", onclick: () => history.back() }, el("i", { class: "ri-arrow-left-line" })) : el("i", { class: "ri-compass-3-fill gb-head-ic" }),
+    el("div", { class: "gb-head-t" }, el("strong", {}, hashtagFilter ? `#${hashtagFilter}` : "Explore")));
+  let sort = "new";
+  const pills = el("div", { class: "gb-pills" });
+  const list = el("div", { class: "gb-list" });
+  let docs = [];
+  const draw = async () => {
+    const posts = docs.map((d) => ({ id: d.id, ...d.data() }))
+      .filter((p) => !(Array.isArray(p.media) ? p.media.length : p.media) && (p.audio?.url || p.text))
+      .filter((p) => !(state.me?.hiddenPosts || []).includes(p.id));
+    posts.sort(sort === "top"
+      ? (a, b) => (b.orbitCount || 0) - (a.orbitCount || 0)
+      : (a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+    list.innerHTML = "";
+    if (!posts.length) { list.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-mic-line" }), el("div", { class: "t" }, "Nothing here yet"))); return; }
+    const users = await Promise.all([...new Set(posts.map((p) => p.authorUid))].map(fetchUser));
+    const map = Object.fromEntries(users.filter(Boolean).map((u) => [u.uid, u]));
+    posts.slice(0, 60).forEach((p) => list.appendChild(gb().renderVoicePost(p, map[p.authorUid])));
+  };
+  [["new", "Latest"], ["top", "Popular"]].forEach(([k, label]) => {
+    const b = el("button", { class: `gb-pill${k === sort ? " on" : ""}`, type: "button", onclick: () => {
+      sort = k; [...pills.children].forEach((x) => x.classList.toggle("on", x === b)); draw();
+    } }, label);
+    pills.appendChild(b);
+  });
+  col.append(head, pills, list);
+  root.appendChild(col);
+  const q = hashtagFilter
+    ? query(collection(db, "posts"), where("hashtags", "array-contains", hashtagFilter.toLowerCase()), limit(80))
+    : query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(80));
+  const unsub = onSnapshot(q, (snap) => { docs = snap.docs; draw(); }, () => {});
+  root._unsub = () => { unsub(); gb().stopAllAudio?.(); };
+};
+const _renderExploreOld = (root, hashtagFilter = null) => {
   // ── Hashtag filter view (grid) ────────────────────────────────────────────
   if (hashtagFilter) {
     root.appendChild(el("div", { class: "section-head" },
@@ -3927,10 +3971,9 @@ const renderProfile = async (root, uid) => {
     m.renderLearnBadges(proSection, uid);
   }).catch(() => {});
 
-  // Tabs: Posts | Media | About | Mutuals
+  // Tabs: Posts | About | Mutuals
   const tabs = el("div", { class: "profile-tabs" },
     el("button", { class: "profile-tab active", "data-ptab": "posts" }, "Posts"),
-    el("button", { class: "profile-tab", "data-ptab": "media" }, "Media"),
     el("button", { class: "profile-tab", "data-ptab": "about" }, "About"),
     el("button", { class: "profile-tab", "data-ptab": "mutuals" },
       el("i", { class: "ri-team-line" }), " Mutuals"),
@@ -4270,7 +4313,7 @@ const renderSettings = (root) => {
       el("div", { class: "row" },
         el("div", { class: "label" },
           el("div", { class: "t" }, "Browser notifications"),
-          el("div", { class: "d" }, "Get pings for new messages and Orbits.")),
+          el("div", { class: "d" }, "Get pings for new messages and likes.")),
         el("button", { class: "btn ghost", onclick: async () => {
           const p = await Notification.requestPermission();
           toast(p === "granted" ? "Notifications enabled" : "Notifications denied");
@@ -5410,7 +5453,7 @@ const showOnboardingGuide = () => {
   };
   card.append(
     el("button", { class: "icon-btn onboarding-guide-close", onclick: close }, el("i", { class: "ri-close-line" })),
-    el("div", { class: "onboarding-guide-brand" }, el("i", { class: "ri-planet-fill" }), " GET BETTER"),
+    el("div", { class: "onboarding-guide-brand" }, el("i", { class: "ri-mic-fill" }), " GET BETTER"),
     progress,
     body,
   );
@@ -5778,7 +5821,7 @@ const startSuggestions = () => {
       const p = d.data();
       list.appendChild(el("div", {},
         el("div", { class: "trend-tag", text: (p.text || "Untitled").slice(0, 60) }),
-        el("div", { class: "trend-meta" }, `${p.orbitCount || 0} Orbits · ${fmtTime(p.createdAt)}`),
+        el("div", { class: "trend-meta" }, `${p.orbitCount || 0} likes · ${fmtTime(p.createdAt)}`),
       ));
     });
   });
@@ -6500,12 +6543,12 @@ function _gbInit() {
   // -------------------------------------------------------------------------
   // POST ROW
   // -------------------------------------------------------------------------
-  const nameLine = (u, ts) => el("div", { class: "gb-line" },
+  const nameLine = (u, ts, full = false) => el("div", { class: "gb-line" },
     el("span", { class: "gb-name", onclick: (e) => { e.stopPropagation(); goProfile(u?.uid); } },
       u?.name || "User",
       u?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null),
-    el("span", { class: "gb-sub" }, `@${u?.username || "user"}`),
-    el("span", { class: "gb-dot" }, "·"),
+    full ? el("span", { class: "gb-sub" }, `@${u?.username || "user"}`) : null,
+    full ? el("span", { class: "gb-dot" }, "·") : null,
     el("span", { class: "gb-sub" }, when(ts)),
   );
 
@@ -6567,7 +6610,7 @@ function _gbInit() {
     const actions = el("div", { class: "gb-actions" }, likeBtn, replyBtn);
 
     const main = el("div", { class: "gb-main" },
-      el("div", { class: "gb-headrow" }, nameLine(author, p.createdAt), tools),
+      el("div", { class: "gb-headrow" }, nameLine(author, p.createdAt, detail), tools),
       p.text ? el("div", { class: "gb-text allow-select", html: linkify(p.text) }) : null,
       p.audio?.url ? buildVoicePlayer(p.audio) : null,
       actions,
@@ -6579,7 +6622,7 @@ function _gbInit() {
     if (hasThread) {
       const box = el("div", { class: "gb-replies" });
       post.appendChild(box);
-      getDocs(query(collection(db, "posts", p.id, "comments"), orderBy("createdAt", "desc"), limit(3)))
+      getDocs(query(collection(db, "posts", p.id, "comments"), orderBy("createdAt", "desc"), limit(2)))
         .then(async (snap) => {
           const cs = snap.docs.map((d) => ({ id: d.id, ...d.data() })).reverse();
           if (!cs.length) { avline?.remove(); return; }
@@ -6620,7 +6663,7 @@ function _gbInit() {
     const col = el("div", { class: "gb-col" });
     const head = el("div", { class: "gb-head" },
       el("i", { class: "ri-mic-fill gb-head-ic" }),
-      el("div", { class: "gb-head-t" }, el("strong", {}, "voice-feed"), el("span", {}, "Voice notes & text only")));
+      el("div", { class: "gb-head-t" }, el("strong", {}, "voice-feed")));
     const list = el("div", { class: "gb-list" });
     [1, 2, 3, 4].forEach(() => list.appendChild(skeletonRow()));
     const sentinel = el("div", { class: "gb-sentinel" });
@@ -6849,5 +6892,5 @@ function _gbInit() {
 
     return dispose;
   };
-  return { renderVoiceFeed, renderVoiceDetail, stopAllAudio };
+  return { renderVoiceFeed, renderVoiceDetail, renderVoicePost, stopAllAudio };
 }
