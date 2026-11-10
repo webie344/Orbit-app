@@ -250,12 +250,12 @@ textarea { resize: vertical; min-height: 80px; }
   box-shadow: 0 10px 30px rgba(124, 92, 255, 0.4);
 }
 .orbit-mark span {
-  position: absolute; border-radius: 50%;
-  border: 2px solid rgba(255,255,255,0.85);
+  position: absolute; top: 50%; transform: translateY(-50%); width: 9%; border-radius: 99px;
+  background: #fff; border: 0; box-shadow: 0 0 10px rgba(255,255,255,0.55);
 }
-.orbit-mark span:nth-child(1) { width: 70%; height: 70%; }
-.orbit-mark span:nth-child(2) { width: 50%; height: 50%; border-color: rgba(255,255,255,0.7); transform: rotate(45deg); }
-.orbit-mark span:nth-child(3) { width: 28%; height: 28%; background: white; border: 0; box-shadow: 0 0 12px rgba(255,255,255,0.7); }
+.orbit-mark span:nth-child(1) { height: 28%; left: 31%; }
+.orbit-mark span:nth-child(2) { height: 52%; left: 45.5%; }
+.orbit-mark span:nth-child(3) { height: 38%; left: 60%; }
 .orbit-mark.sm { width: 44px; height: 44px; box-shadow: 0 6px 16px rgba(124,92,255,.35); }
 .orbit-mark.xs { width: 32px; height: 32px; box-shadow: none; }
 
@@ -4598,13 +4598,6 @@ html[data-theme="glass"] .detail-comments .tw-comment {
 }
 
 /* ---------- Brand mark: replaces the old Get better rings everywhere ---------- */
-.orbit-mark {
-  background: url("/icon.svg") center / 100% 100% no-repeat;
-  border-radius: 24%;
-  box-shadow: 0 8px 22px rgba(124, 92, 255, .35);
-}
-.orbit-mark span { display: none; }
-.orbit-mark.xs { box-shadow: none; }
 
 /* ---------- Shell: server rail + channel column ---------- */
 .content:has(.gb-shell) { padding-bottom: 0; }
