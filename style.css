@@ -4871,3 +4871,16 @@ body[data-route="feed"] #topbarComposeBtn,
 body[data-route="feed"] #themeToggle { display: none; }
 .gb-post:not(.detail) .gb-tools { display: none; }
 
+/* ---- No bottom nav anywhere ---- */
+:root { --bottomnav-h: 0px; }
+.bottomnav { display: none !important; }
+@media (max-width: 640px) { .content { padding-bottom: 0; } }
+
+/* ---- Explore / profile / saved pages use the voice-post style ---- */
+.gb-page { min-height: 100%; }
+.gb-pills { display: flex; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.gb-pill { border: 1px solid var(--line); background: transparent; color: var(--text-dim); border-radius: 999px; padding: 6px 14px; font-weight: 700; font-size: 13px; cursor: pointer; }
+.gb-pill.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+.gb-list { display: flex; flex-direction: column; }
+.profile-feed-list .gb-post, #content .gb-post { border-radius: 0; }
+

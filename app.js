@@ -2231,7 +2231,13 @@ const openPostMenu = (p, author, isMine) => {
   requestAnimationFrame(() => sheet.classList.add("is-visible"));
 };
 
-const renderPost = (p, author, opts = {}) => {
+// Text + voice-note posts only (Get better). Media posts render nothing.
+function renderPost(p, author, opts = {}) {
+  const hasMedia = Array.isArray(p.media) ? p.media.length > 0 : !!p.media;
+  if (hasMedia || (!p.audio?.url && !p.text)) return el("div", { style: "display:none" });
+  return gb().renderVoicePost(p, author, { detail: !!opts.detailView });
+}
+const _renderMediaPost = (p, author, opts = {}) => {
   const iOrbited = (p.orbits || []).includes(state.uid);
   const isMine = p.authorUid === state.uid;
   const { hideComments = false, detailView: _detailView = false } = opts;
@@ -3439,6 +3445,42 @@ const renderGroups = (root) => {
 // 11. EXPLORE / SAVED
 // =========================================================================
 const renderExplore = (root, hashtagFilter = null) => {
+  const col = el("div", { class: "gb-col gb-page" });
+  const head = el("div", { class: "gb-head" },
+    hashtagFilter ? el("button", { class: "gb-icon-btn", type: "button", onclick: () => history.back() }, el("i", { class: "ri-arrow-left-line" })) : el("i", { class: "ri-compass-3-fill gb-head-ic" }),
+    el("div", { class: "gb-head-t" }, el("strong", {}, hashtagFilter ? `#${hashtagFilter}` : "Explore")));
+  let sort = "new";
+  const pills = el("div", { class: "gb-pills" });
+  const list = el("div", { class: "gb-list" });
+  let docs = [];
+  const draw = async () => {
+    const posts = docs.map((d) => ({ id: d.id, ...d.data() }))
+      .filter((p) => !(Array.isArray(p.media) ? p.media.length : p.media) && (p.audio?.url || p.text))
+      .filter((p) => !(state.me?.hiddenPosts || []).includes(p.id));
+    posts.sort(sort === "top"
+      ? (a, b) => (b.orbitCount || 0) - (a.orbitCount || 0)
+      : (a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+    list.innerHTML = "";
+    if (!posts.length) { list.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-mic-line" }), el("div", { class: "t" }, "Nothing here yet"))); return; }
+    const users = await Promise.all([...new Set(posts.map((p) => p.authorUid))].map(fetchUser));
+    const map = Object.fromEntries(users.filter(Boolean).map((u) => [u.uid, u]));
+    posts.slice(0, 60).forEach((p) => list.appendChild(gb().renderVoicePost(p, map[p.authorUid])));
+  };
+  [["new", "Latest"], ["top", "Popular"]].forEach(([k, label]) => {
+    const b = el("button", { class: `gb-pill${k === sort ? " on" : ""}`, type: "button", onclick: () => {
+      sort = k; [...pills.children].forEach((x) => x.classList.toggle("on", x === b)); draw();
+    } }, label);
+    pills.appendChild(b);
+  });
+  col.append(head, pills, list);
+  root.appendChild(col);
+  const q = hashtagFilter
+    ? query(collection(db, "posts"), where("hashtags", "array-contains", hashtagFilter.toLowerCase()), limit(80))
+    : query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(80));
+  const unsub = onSnapshot(q, (snap) => { docs = snap.docs; draw(); }, () => {});
+  root._unsub = () => { unsub(); gb().stopAllAudio?.(); };
+};
+const _renderExploreOld = (root, hashtagFilter = null) => {
   // ── Hashtag filter view (grid) ────────────────────────────────────────────
   if (hashtagFilter) {
     root.appendChild(el("div", { class: "section-head" },
@@ -3928,10 +3970,9 @@ const renderProfile = async (root, uid) => {
     m.renderLearnBadges(proSection, uid);
   }).catch(() => {});
 
-  // Tabs: Posts | Media | About | Mutuals
+  // Tabs: Posts | About | Mutuals
   const tabs = el("div", { class: "profile-tabs" },
     el("button", { class: "profile-tab active", "data-ptab": "posts" }, "Posts"),
-    el("button", { class: "profile-tab", "data-ptab": "media" }, "Media"),
     el("button", { class: "profile-tab", "data-ptab": "about" }, "About"),
     el("button", { class: "profile-tab", "data-ptab": "mutuals" },
       el("i", { class: "ri-team-line" }), " Mutuals"),
@@ -6850,5 +6891,5 @@ function _gbInit() {
 
     return dispose;
   };
-  return { renderVoiceFeed, renderVoiceDetail, stopAllAudio };
+  return { renderVoiceFeed, renderVoiceDetail, renderVoicePost, stopAllAudio };
 }
