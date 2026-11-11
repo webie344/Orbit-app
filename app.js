@@ -1,4 +1,4 @@
-// BUILD 2026-11-11 14:05 — onboarding cartoon + CSS logo + voice-only pages
+// BUILD 2026-11-11 15:20 — onboarding cartoon + CSS logo + voice-only pages
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
@@ -923,10 +923,26 @@ const CHAR = {
   ink: "#1e1b4b",
   colors: ["#8b5cf6", "#f472b6", "#fb923c", "#2dd4bf", "#fde047", "#60a5fa", "#34d399", "#f87171", "#a78bfa", "#94a3b8"],
   bgs: ["#ede9fe", "#fce7f3", "#ffedd5", "#ccfbf1", "#fef9c3", "#dbeafe", "#dcfce7", "#e2e8f0"],
-  eyes: { round: "Round", dots: "Dots", happy: "Happy", sleepy: "Sleepy", wink: "Wink" },
+  eyes: { round: "Round", dots: "Dots", happy: "Happy", sleepy: "Sleepy", wink: "Wink", hearts: "Hearts" },
   mouth: { smile: "Smile", grin: "Grin", open: "Open", cat: "Cat", meh: "Calm" },
-  acc: { none: "None", glasses: "Glasses", cap: "Cap", headphones: "Headphones", crown: "Crown", bow: "Bow", sprout: "Sprout" },
+  acc: { none: "None", glasses: "Glasses", cap: "Cap", headphones: "Headphones", crown: "Crown", bow: "Bow", sprout: "Sprout",
+         party: "Party hat", bubble: "Chat bubble", bolt: "Lightning", flame: "Flame", wizard: "Wizard hat", mic: "Mic", shades: "Shades", beret: "Beret", halo: "Halo" },
 };
+// Special characters: unlocked by doing things in the app. `item` = the look piece they unlock for the editor.
+const SPECIALS = [
+  { id: "firstpost",    name: "Echo",   hint: "Make your first post",                 item: ["acc", "party"],   look: { color: "#2dd4bf", bg: "#fef9c3", eyes: "happy",  mouth: "grin",  acc: "party" } },
+  { id: "firstcomment", name: "Chatty", hint: "Write your first reply",               item: ["acc", "bubble"],  look: { color: "#fb923c", bg: "#dbeafe", eyes: "round",  mouth: "open",  acc: "bubble" } },
+  { id: "firstlike",    name: "Lovey",  hint: "Like your first post",                 item: ["eyes", "hearts"], look: { color: "#f472b6", bg: "#fce7f3", eyes: "hearts", mouth: "smile", acc: "bow" } },
+  { id: "likerun",      name: "Zap",    hint: "Like 10 posts in a row",               item: ["acc", "bolt"],    look: { color: "#fde047", bg: "#ede9fe", eyes: "dots",   mouth: "grin",  acc: "bolt" } },
+  { id: "week",         name: "Blaze",  hint: "Keep a 7-day streak",                  item: ["acc", "flame"],   look: { color: "#f87171", bg: "#ffedd5", eyes: "round",  mouth: "grin",  acc: "flame" } },
+  { id: "daily",        name: "Sage",   hint: "Answer the daily question",            item: ["acc", "wizard"],  look: { color: "#a78bfa", bg: "#dbeafe", eyes: "sleepy", mouth: "smile", acc: "wizard" } },
+  { id: "react",        name: "Beat",   hint: "Send your first voice reaction",       item: ["acc", "mic"],     look: { color: "#60a5fa", bg: "#ccfbf1", eyes: "wink",   mouth: "open",  acc: "mic" } },
+  { id: "video",        name: "Star",   hint: "Post your first video note",           item: ["acc", "shades"],  look: { color: "#94a3b8", bg: "#fef9c3", eyes: "dots",   mouth: "cat",   acc: "shades" } },
+  { id: "story",        name: "Bard",   hint: "Write a post of 100+ words",           item: ["acc", "beret"],   look: { color: "#34d399", bg: "#fce7f3", eyes: "happy",  mouth: "smile", acc: "beret" } },
+  { id: "month",        name: "Legend", hint: "Keep a 30-day streak",                 item: ["acc", "halo"],    look: { color: "#fde047", bg: "#e2e8f0", eyes: "happy",  mouth: "grin",  acc: "halo" } },
+];
+const LOCKED_ITEM = Object.fromEntries(SPECIALS.map((sp) => [sp.item.join(":"), sp.id]));
+const isSpecialLook = (c) => !!LOCKED_ITEM[`acc:${c.acc}`] || !!LOCKED_ITEM[`eyes:${c.eyes}`];
 function defaultCharacter(seed = "x") {
   let h = 0; for (const c of String(seed)) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return { color: CHAR.colors[h % CHAR.colors.length], bg: CHAR.bgs[(h >> 3) % CHAR.bgs.length], eyes: "round", mouth: "smile", acc: "none" };
@@ -942,6 +958,7 @@ function characterSVG(c = {}, size = 100) {
     happy: arc(eyeL) + arc(eyeR),
     sleepy: `<path d="M32 51 Q38 57 44 51" fill="none" stroke="${k}" stroke-width="3" stroke-linecap="round"/><path d="M56 51 Q62 57 68 51" fill="none" stroke="${k}" stroke-width="3" stroke-linecap="round"/>`,
     wink: ball(eyeL) + `<path d="M56 52 Q62 46 68 52" fill="none" stroke="${k}" stroke-width="3" stroke-linecap="round"/>`,
+    hearts: [38, 62].map((x) => `<path transform="translate(${x} 51) scale(1.25)" d="M0 5 C-10 -3 -7 -11 0 -6 C7 -11 10 -3 0 5Z" fill="#ef4444" stroke="${k}" stroke-width="1.8" stroke-linejoin="round"/>`).join(""),
   }[c.eyes] || "";
   const mouth = {
     smile: `<path d="M42 64 Q50 72 58 64" fill="none" stroke="${k}" stroke-width="3" stroke-linecap="round"/>`,
@@ -956,17 +973,109 @@ function characterSVG(c = {}, size = 100) {
     headphones: `<path d="M19 54 Q19 14 50 14 Q81 14 81 54" fill="none" stroke="${k}" stroke-width="4.5" stroke-linecap="round"/><rect x="13" y="47" width="10" height="20" rx="5" fill="#f472b6" stroke="${k}" stroke-width="3"/><rect x="77" y="47" width="10" height="20" rx="5" fill="#f472b6" stroke="${k}" stroke-width="3"/>`,
     crown: `<path d="M32 28 L35 11 L44 22 L50 8 L56 22 L65 11 L68 28 Z" fill="#fde047" stroke="${k}" stroke-width="2.8" stroke-linejoin="round"/>`,
     bow: `<path d="M64 22 L78 13 L78 31 Z M64 22 L50 13 L50 31 Z" fill="#f472b6" stroke="${k}" stroke-width="2.6" stroke-linejoin="round"/><circle cx="64" cy="22" r="4.5" fill="#ec4899" stroke="${k}" stroke-width="2.4"/>`,
+    party: `<path d="M37 29 L50 4 L63 29 Z" fill="#8b5cf6" stroke="${k}" stroke-width="2.8" stroke-linejoin="round"/><path d="M42 21 H58 M45 14 H55" stroke="#fde047" stroke-width="3"/><circle cx="50" cy="5" r="4.2" fill="#fde047" stroke="${k}" stroke-width="2"/>`,
+    bubble: `<path d="M54 4 h30 a6 6 0 0 1 6 6 v11 a6 6 0 0 1 -6 6 h-16 l-8 8 v-8 h-6 a6 6 0 0 1 -6 -6 v-11 a6 6 0 0 1 6 -6z" fill="#fff" stroke="${k}" stroke-width="2.6" stroke-linejoin="round"/><circle cx="62" cy="16" r="2.2" fill="${k}"/><circle cx="70" cy="16" r="2.2" fill="${k}"/><circle cx="78" cy="16" r="2.2" fill="${k}"/>`,
+    bolt: `<path d="M54 1 L38 21 H49 L44 35 L63 12 H52 Z" fill="#fde047" stroke="${k}" stroke-width="2.6" stroke-linejoin="round"/>`,
+    flame: `<path d="M50 1 C57 13 68 15 63 29 C60 36 40 36 37 29 C32 17 45 15 50 1Z" fill="#fb923c" stroke="${k}" stroke-width="2.6" stroke-linejoin="round"/><path d="M50 15 C54 21 58 22 56 29 C54 33 46 33 44 29 C43 23 47 21 50 15Z" fill="#fde047"/>`,
+    wizard: `<path d="M30 33 L50 2 L70 33 Z" fill="#6d28d9" stroke="${k}" stroke-width="2.8" stroke-linejoin="round"/><ellipse cx="50" cy="33" rx="28" ry="6" fill="#5b21b6" stroke="${k}" stroke-width="2.8"/><circle cx="49" cy="20" r="2.4" fill="#fde047"/><circle cx="56" cy="27" r="1.8" fill="#fde047"/>`,
+    mic: `<path d="M72 78 L84 90" stroke="${k}" stroke-width="3.5" stroke-linecap="round"/><rect x="62" y="58" width="14" height="20" rx="7" fill="#94a3b8" stroke="${k}" stroke-width="2.8"/><path d="M64 66 H74 M64 71 H74" stroke="${k}" stroke-width="1.8"/>`,
+    shades: `<path d="M27 45 h19 v9 a7 7 0 0 1 -7 7 h-5 a7 7 0 0 1 -7 -7z M54 45 h19 v9 a7 7 0 0 1 -7 7 h-5 a7 7 0 0 1 -7 -7z" fill="${k}"/><path d="M46 47 h8" stroke="${k}" stroke-width="3"/><path d="M31 48 h6 M58 48 h6" stroke="#fff" stroke-width="2" opacity=".6" stroke-linecap="round"/>`,
+    beret: `<ellipse cx="46" cy="27" rx="28" ry="11" transform="rotate(-8 46 27)" fill="#ef4444" stroke="${k}" stroke-width="3"/><circle cx="52" cy="14" r="3.4" fill="${k}"/>`,
+    halo: `<ellipse cx="50" cy="12" rx="21" ry="6" fill="none" stroke="${k}" stroke-width="8"/><ellipse cx="50" cy="12" rx="21" ry="6" fill="none" stroke="#fde047" stroke-width="4.2"/>`,
     sprout: `<path d="M50 22 V10" stroke="${k}" stroke-width="3.4" stroke-linecap="round"/><path d="M50 14 Q38 6 33 14 Q42 20 50 14 Z M50 12 Q62 2 68 10 Q58 17 50 12 Z" fill="#34d399" stroke="${k}" stroke-width="2.4" stroke-linejoin="round"/>`,
   }[c.acc] || "";
+  const star4 = (x, y, r) => `<path d="M${x} ${y - r} Q${x} ${y} ${x + r} ${y} Q${x} ${y} ${x} ${y + r} Q${x} ${y} ${x - r} ${y} Q${x} ${y} ${x} ${y - r}Z" fill="#fde047" stroke="${k}" stroke-width="1.4" stroke-linejoin="round"/>`;
+  const spark = star4(13, 24, 8) + star4(88, 36, 6) + star4(84, 86, 5);
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="${size}" height="${size}">` +
     `<rect width="100" height="100" fill="${bg}"/>` +
     `<ellipse cx="38" cy="90" rx="9" ry="5" fill="${k}"/><ellipse cx="62" cy="90" rx="9" ry="5" fill="${k}"/>` +
     `<circle cx="50" cy="56" r="34" fill="${col}" stroke="${k}" stroke-width="3.5"/>` +
     `<path d="M26 40 Q32 28 44 26" fill="none" stroke="#fff" stroke-width="3.6" stroke-linecap="round" opacity=".5"/>` +
     `<ellipse cx="29" cy="64" rx="4.4" ry="3.2" fill="#fb7185" opacity=".55"/><ellipse cx="71" cy="64" rx="4.4" ry="3.2" fill="#fb7185" opacity=".55"/>` +
-    eyes + mouth + acc + `</svg>`;
+    eyes + mouth + acc + (isSpecialLook(c) ? spark : "") + `</svg>`;
 }
 const characterDataUri = (c) => `data:image/svg+xml;utf8,${encodeURIComponent(characterSVG(c, 128))}`;
+
+// ---------------- Unlock engine: achievements, streaks and the celebration
+let _likeRun = 0;
+const isUnlocked = (id) => (state.me?.unlocked || []).includes(id);
+const dayStr = (d = new Date()) => d.toLocaleDateString("en-CA");
+
+async function saveCharacter(ch, use) {
+  await updateDoc(doc(db, "users", state.uid), { character: ch, useCharacter: use });
+  state.me = { ...state.me, character: ch, useCharacter: use };
+  state.cache.users.set(state.uid, { ...(state.cache.users.get(state.uid) || {}), uid: state.uid, ...state.me });
+  const mine = document.querySelector("#meAvatar"); if (mine) mine.src = avatarFor(state.me);
+}
+
+const _unlockQueue = [];
+let _unlockBusy = false;
+async function _drainUnlocks() {
+  if (_unlockBusy) return;
+  _unlockBusy = true;
+  while (_unlockQueue.length) await showUnlock(_unlockQueue.shift());
+  _unlockBusy = false;
+}
+
+// kind: "post" | "comment" | "like" | "react"
+async function trackAction(kind, extra = {}) {
+  if (!state.uid || !state.me) return;
+  if (kind === "like" && !extra.on) { _likeRun = 0; return; }
+  const have = new Set(state.me.unlocked || []);
+  const got = [];
+  const want = (id) => { if (!have.has(id) && !got.includes(id)) got.push(id); };
+  if (kind === "post") { want("firstpost"); if (extra.video) want("video"); if (extra.prompt) want("daily"); if ((extra.words || 0) >= 100) want("story"); }
+  if (kind === "comment") want("firstcomment");
+  if (kind === "react") want("react");
+  if (kind === "like") { want("firstlike"); _likeRun += 1; if (_likeRun >= 10) want("likerun"); }
+  // daily streak: any post / reply / like / reaction counts for the day
+  const st = state.me.streak || { count: 0, last: "" }, today = dayStr();
+  let streak = st;
+  if (st.last !== today) {
+    const y = new Date(); y.setDate(y.getDate() - 1);
+    streak = { count: st.last === dayStr(y) ? (st.count || 0) + 1 : 1, last: today };
+  }
+  if (streak.count >= 7) want("week");
+  if (streak.count >= 30) want("month");
+  const patch = {};
+  if (streak !== st) patch.streak = streak;
+  if (got.length) patch.unlocked = arrayUnion(...got);
+  if (!Object.keys(patch).length) return;
+  try { await updateDoc(doc(db, "users", state.uid), patch); } catch { return; }
+  state.me = { ...state.me, streak, unlocked: [...have, ...got] };
+  state.cache.users.set(state.uid, { ...(state.cache.users.get(state.uid) || {}), uid: state.uid, ...state.me });
+  got.forEach((id) => { const sp = SPECIALS.find((x) => x.id === id); if (sp) _unlockQueue.push(sp); });
+  _drainUnlocks();
+}
+
+function showUnlock(sp) {
+  return new Promise((resolve) => {
+    try { sfxPost(); } catch {}
+    const confetti = el("div", { class: "gbu-confetti" });
+    const cols = ["#fde047", "#f472b6", "#8b5cf6", "#2dd4bf", "#fb923c", "#60a5fa"];
+    for (let i = 0; i < 44; i++) {
+      const p = el("i", { style: `left:${Math.random() * 100}%;--dx:${(Math.random() - .5) * 160}px;--rot:${Math.round(Math.random() * 720 - 360)}deg;--dl:${(1.0 + Math.random() * .7).toFixed(2)}s;--du:${(2.2 + Math.random() * 1.6).toFixed(2)}s;background:${cols[i % cols.length]};width:${6 + Math.random() * 6}px;height:${8 + Math.random() * 8}px;border-radius:${Math.random() > .5 ? "50%" : "2px"}` });
+      confetti.appendChild(p);
+    }
+    const close = () => { ov.classList.add("out"); setTimeout(() => { ov.remove(); resolve(); }, 260); };
+    const wear = el("button", { class: "gbu-btn primary", type: "button", onclick: async () => {
+      wear.disabled = true;
+      try { await saveCharacter(sp.look, true); toast(`${sp.name} is now your character`); } catch { toast("Couldn't save"); }
+      close();
+    } }, "Wear it");
+    const ov = el("div", { class: "gbu" },
+      el("div", { class: "gbu-rays" }), confetti,
+      el("div", { class: "gbu-stage" },
+        el("div", { class: "gbu-lock", html: '<i class="ri-lock-2-fill"></i>' }),
+        el("div", { class: "gbu-burst" }),
+        el("div", { class: "gbu-char", html: characterSVG(sp.look, 200) })),
+      el("div", { class: "gbu-k" }, "New character unlocked!"),
+      el("div", { class: "gbu-name" }, sp.name),
+      el("div", { class: "gbu-hint" }, sp.hint),
+      el("div", { class: "gbu-btns" }, wear, el("button", { class: "gbu-btn", type: "button", onclick: close }, "Keep going")));
+    document.body.appendChild(ov);
+  });
+}
 
 // ---------------- Character studio page (#character)
 function renderCharacterPage(root) {
@@ -976,61 +1085,80 @@ function renderCharacterPage(root) {
   const preview = el("div", { class: "gbc-preview" });
   const draw = () => { preview.innerHTML = characterSVG(ch, 180); };
   const rows = el("div", { class: "gbc-rows" });
+  const optRows = [];
+  const lockedId = (key, k) => LOCKED_ITEM[`${key}:${k}`];
   const swatchRow = (label, list, key) => {
     const row = el("div", { class: "gbc-swatches" });
     list.forEach((c) => {
       const b = el("button", { class: `gbc-sw${ch[key] === c ? " on" : ""}`, type: "button", style: `background:${c}`, "aria-label": c, onclick: () => {
-        ch[key] = c; [...row.children].forEach((x) => x.classList.toggle("on", x === b)); draw(); refreshOpts();
+        ch[key] = c; [...row.children].forEach((x) => x.classList.toggle("on", x === b)); draw(); optRows.forEach((r) => r());
       } });
       row.appendChild(b);
     });
     return el("div", { class: "gbc-sec" }, el("div", { class: "gb-st-label" }, label), row);
   };
-  const optRows = [];
   const optRow = (label, map, key) => {
     const row = el("div", { class: "gbc-opts" });
     const refresh = () => {
       row.innerHTML = "";
       Object.entries(map).forEach(([k, name]) => {
-        const b = el("button", { class: `gbc-opt${ch[key] === k ? " on" : ""}`, type: "button", title: name, onclick: () => { ch[key] = k; draw(); optRows.forEach((r) => r()); } });
-        b.innerHTML = characterSVG({ ...ch, [key]: k }, 56);
+        const lid = lockedId(key, k), locked = lid && !isUnlocked(lid);
+        const b = el("button", { class: `gbc-opt${ch[key] === k ? " on" : ""}${locked ? " locked" : ""}`, type: "button", title: locked ? SPECIALS.find((x) => x.id === lid).hint : name, onclick: () => {
+          if (locked) { toast(`Locked: ${SPECIALS.find((x) => x.id === lid).hint}`); return; }
+          ch[key] = k; draw(); optRows.forEach((r) => r());
+        } });
+        b.innerHTML = characterSVG({ ...ch, [key]: k }, 56) + (locked ? '<span class="gbc-lock"><i class="ri-lock-2-fill"></i></span>' : "");
         row.appendChild(b);
       });
     };
     optRows.push(refresh); refresh();
     return el("div", { class: "gbc-sec" }, el("div", { class: "gb-st-label" }, label), row);
   };
-  const refreshOpts = () => optRows.forEach((r) => r());
-  rows.append(
-    swatchRow("Colour", CHAR.colors, "color"), swatchRow("Background", CHAR.bgs, "bg"),
-    optRow("Eyes", CHAR.eyes, "eyes"), optRow("Mouth", CHAR.mouth, "mouth"), optRow("Extras", CHAR.acc, "acc"));
-  const pick = (o) => Object.keys(o)[Math.floor(Math.random() * Object.keys(o).length)];
+  const buildRows = () => {
+    optRows.length = 0;
+    return [swatchRow("Colour", CHAR.colors, "color"), swatchRow("Background", CHAR.bgs, "bg"),
+      optRow("Eyes", CHAR.eyes, "eyes"), optRow("Mouth", CHAR.mouth, "mouth"), optRow("Extras", CHAR.acc, "acc")];
+  };
+  const rebuild = () => { rows.innerHTML = ""; rows.append(...buildRows()); };
+  const openKeys = (key) => Object.keys(CHAR[key]).filter((k) => { const l = lockedId(key, k); return !l || isUnlocked(l); });
+  const pickKey = (key) => { const ks = openKeys(key); return ks[Math.floor(Math.random() * ks.length)]; };
   const dice = el("button", { class: "gb-chip", type: "button", onclick: () => {
-    ch = { color: CHAR.colors[Math.floor(Math.random() * CHAR.colors.length)], bg: CHAR.bgs[Math.floor(Math.random() * CHAR.bgs.length)], eyes: pick(CHAR.eyes), mouth: pick(CHAR.mouth), acc: pick(CHAR.acc) };
-    draw(); rows.replaceWith(rows); rows.innerHTML = ""; rows.append(...buildRows());
+    ch = { color: CHAR.colors[Math.floor(Math.random() * CHAR.colors.length)], bg: CHAR.bgs[Math.floor(Math.random() * CHAR.bgs.length)], eyes: pickKey("eyes"), mouth: pickKey("mouth"), acc: pickKey("acc") };
+    draw(); rebuild();
   } }, el("i", { class: "ri-dice-line" }), " Surprise me");
-  const buildRows = () => { optRows.length = 0; return [swatchRow("Colour", CHAR.colors, "color"), swatchRow("Background", CHAR.bgs, "bg"), optRow("Eyes", CHAR.eyes, "eyes"), optRow("Mouth", CHAR.mouth, "mouth"), optRow("Extras", CHAR.acc, "acc")]; };
-  rows.innerHTML = ""; rows.append(...buildRows());
+
+  // collection of special characters
+  const streakN = me.streak?.count || 0;
+  const progress = (id) => id === "week" ? `${Math.min(streakN, 7)}/7 days` : id === "month" ? `${Math.min(streakN, 30)}/30 days` : id === "likerun" ? `${Math.min(_likeRun, 10)}/10 likes` : "";
+  const coll = el("div", { class: "gbc-coll" });
+  SPECIALS.forEach((sp) => {
+    const ok = isUnlocked(sp.id);
+    const card = el("button", { class: `gbc-card${ok ? " open" : ""}`, type: "button", onclick: () => {
+      if (!ok) { toast(`Locked: ${sp.hint}`); return; }
+      ch = { ...sp.look }; draw(); rebuild(); window.scrollTo?.(0, 0); document.getElementById("content")?.scrollTo({ top: 0, behavior: "smooth" });
+    } });
+    card.innerHTML = `<span class="gbc-card-art">${characterSVG(sp.look, 84)}${ok ? "" : '<span class="gbc-lock big"><i class="ri-lock-2-fill"></i></span>'}</span>` +
+      `<strong>${ok ? sp.name : "???"}</strong><small>${ok ? "Tap to try it on" : sp.hint}</small>` + (!ok && progress(sp.id) ? `<em>${progress(sp.id)}</em>` : "");
+    coll.appendChild(card);
+  });
   const useBox = el("input", { type: "checkbox" }); useBox.checked = !!use;
   useBox.addEventListener("change", () => { use = useBox.checked; });
   const save = el("button", { class: "gb-st-done", type: "button", onclick: async () => {
     save.disabled = true;
-    try {
-      await updateDoc(doc(db, "users", state.uid), { character: ch, useCharacter: use });
-      state.me = { ...state.me, character: ch, useCharacter: use };
-      state.cache.users.set(state.uid, { ...(state.cache.users.get(state.uid) || {}), uid: state.uid, ...state.me });
-      const mine = document.querySelector("#meAvatar"); if (mine) mine.src = avatarFor(state.me);
-      toast("Character saved");
-      history.length > 1 ? history.back() : (location.hash = "#feed");
-    } catch (e) { toast("Couldn't save: " + (e.message || "try again")); save.disabled = false; }
+    try { await saveCharacter(ch, use); toast("Character saved"); history.length > 1 ? history.back() : (location.hash = "#feed"); }
+    catch (e) { toast("Couldn't save: " + (e.message || "try again")); save.disabled = false; }
   } }, "Save");
-  draw();
+  draw(); rebuild();
   const col = el("div", { class: "gb-col gb-page" },
     el("div", { class: "gb-head" },
       el("button", { class: "gb-icon-btn", type: "button", onclick: () => history.back() }, el("i", { class: "ri-arrow-left-line" })),
       el("div", { class: "gb-head-t" }, el("strong", {}, "Your character")), save),
-    el("div", { class: "gbc-wrap" }, preview, el("div", { class: "gbc-center" }, dice), rows,
-      el("label", { class: "gbc-use" }, useBox, el("span", {}, "Use my character as my profile picture"))));
+    el("div", { class: "gbc-wrap" }, preview,
+      el("div", { class: "gbc-center" }, dice, streakN ? el("span", { class: "gbc-streak" }, el("i", { class: "ri-fire-fill" }), ` ${streakN}-day streak`) : null),
+      rows,
+      el("label", { class: "gbc-use" }, useBox, el("span", {}, "Use my character as my profile picture")),
+      el("div", { class: "gbc-coll-h" }, el("strong", {}, "Special characters"), el("span", {}, `${SPECIALS.filter((x) => isUnlocked(x.id)).length}/${SPECIALS.length} unlocked`)),
+      coll));
   root.appendChild(col);
 }
 
@@ -6738,6 +6866,7 @@ function _gbInit() {
     const ref = await addDoc(collection(db, "posts"), data);
     sfxPost();
     toast("Posted");
+    trackAction("post", { video: !!video, prompt: !!prompt, words: (text || "").trim().split(/\s+/).filter(Boolean).length });
     (async () => {
       const followers = (state.me?.followers || []).slice(0, 100);
       if (!followers.length) return;
@@ -6763,6 +6892,7 @@ function _gbInit() {
     await addDoc(collection(db, "posts", p.id, "comments"), data);
     await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
     sfxComment();
+    trackAction("comment");
     const snippet = text ? `"${text.slice(0, 60)}"` : "sent a voice note";
     const me = state.me?.name || "Someone";
     if (author?.uid && author.uid !== state.uid) {
@@ -7167,7 +7297,7 @@ function _gbInit() {
           if (!had) updateDoc(doc(db, "posts", p.id), { vreactCount: increment(1) }).catch(() => {});
           row.querySelectorAll(".gb-vr-chip").forEach((c) => { if (c.title.startsWith((state.me?.name || "") + "'s")) c.remove(); });
           addChip({ audio }, state.me);
-          sfxComment(); toast("Reaction sent");
+          sfxComment(); toast("Reaction sent"); trackAction("react");
           if (author?.uid && author.uid !== state.uid && !had) writeNotif(author.uid, "comment", { postId: p.id, text: `${state.me?.name || "Someone"} reacted to your post with a voice note` }).catch(() => {});
         } catch (err) { toast("Couldn't send: " + (err.message || "try again")); }
         rec.classList.remove("busy"); close();
@@ -7279,6 +7409,7 @@ function _gbInit() {
       likeBtn.classList.toggle("on", liked);
       p.orbitCount = Math.max(0, (p.orbitCount || 0) + (liked ? 1 : -1));
       likeCount.textContent = p.orbitCount ? String(p.orbitCount) : "";
+      trackAction("like", { on: liked });
       await updateDoc(doc(db, "posts", p.id), {
         orbits: liked ? arrayUnion(state.uid) : arrayRemove(state.uid),
         orbitCount: increment(liked ? 1 : -1),

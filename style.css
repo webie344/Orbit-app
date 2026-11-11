@@ -1,4 +1,4 @@
-/* BUILD 2026-11-11 14:05 */
+/* BUILD 2026-11-11 15:20 */
 /* =================================================================
    Get better — style.css
    Global tokens, layout, auth, feed (flat IG/FB style), reels,
@@ -5111,4 +5111,51 @@ body.gb-studio-open .gb-composer { z-index: 1; }
 .gbc-use { display: flex; align-items: center; gap: 10px; font-weight: 600; padding: 8px 0; }
 .gbc-use input { width: 20px; height: 20px; accent-color: var(--primary); }
 .gb-head .gb-st-done { margin-left: auto; padding: 7px 18px; }
+
+/* ================= Special characters: collection + lock states ================= */
+.gbc-opt { position: relative; }
+.gbc-opt.locked svg { filter: brightness(.15) saturate(0); opacity: .55; }
+.gbc-lock { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-size: 18px; text-shadow: 0 1px 4px rgba(0,0,0,.6); pointer-events: none; }
+.gbc-lock.big { font-size: 26px; }
+.gbc-streak { margin-left: 10px; display: inline-flex; align-items: center; gap: 4px; font-weight: 800; font-size: 13px; color: #f97316; }
+.gbc-coll-h { display: flex; align-items: baseline; justify-content: space-between; margin-top: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+.gbc-coll-h span { font-size: 12px; color: var(--text-mute); font-weight: 700; }
+.gbc-coll { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px; }
+.gbc-card { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 3px; padding: 10px 6px; border-radius: 16px; border: 1px solid var(--line); background: var(--bg-elev); min-width: 0; }
+.gbc-card strong { font-size: 13px; }
+.gbc-card small { font-size: 11px; color: var(--text-mute); line-height: 1.25; }
+.gbc-card em { font-style: normal; font-size: 11px; font-weight: 800; color: var(--primary); }
+.gbc-card-art { position: relative; width: 74px; height: 74px; border-radius: 50%; overflow: hidden; }
+.gbc-card-art svg { width: 100%; height: 100%; display: block; }
+.gbc-card:not(.open) .gbc-card-art svg { filter: brightness(.12) saturate(0); opacity: .5; }
+.gbc-card.open { border-color: color-mix(in srgb, var(--primary) 50%, var(--line)); background: color-mix(in srgb, var(--primary) 7%, var(--bg-elev)); }
+
+/* ================= Unlock celebration ================= */
+.gbu { position: fixed; inset: 0; z-index: 10100; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; color: #fff; background: radial-gradient(circle at 50% 40%, rgba(76, 29, 149, .92), rgba(15, 10, 40, .97)); animation: gbuIn .35s ease both; overflow: hidden; }
+.gbu.out { animation: gbuOut .26s ease forwards; }
+@keyframes gbuIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes gbuOut { to { opacity: 0; } }
+.gbu-rays { position: absolute; width: 150vmax; height: 150vmax; left: 50%; top: 40%; margin: -75vmax 0 0 -75vmax; background: repeating-conic-gradient(from 0deg, rgba(253, 224, 71, .16) 0 8deg, transparent 8deg 24deg); border-radius: 50%; animation: gbuSpin 18s linear infinite, gbuIn 1s 1s ease both; opacity: 0; -webkit-mask-image: radial-gradient(circle, #000 0, transparent 55%); mask-image: radial-gradient(circle, #000 0, transparent 55%); }
+@keyframes gbuSpin { to { transform: rotate(360deg); } }
+.gbu-stage { position: relative; width: 220px; height: 220px; display: grid; place-items: center; }
+.gbu-lock { position: absolute; font-size: 84px; color: #fde047; filter: drop-shadow(0 0 18px rgba(253, 224, 71, .6)); animation: gbuShake .9s ease both, gbuLockOut .25s .9s ease forwards; }
+@keyframes gbuShake { 0% { transform: scale(0) rotate(0); } 25% { transform: scale(1.1) rotate(-12deg); } 40% { transform: rotate(12deg); } 55% { transform: rotate(-10deg); } 70% { transform: rotate(8deg); } 100% { transform: rotate(0) scale(1); } }
+@keyframes gbuLockOut { to { transform: scale(1.6); opacity: 0; } }
+.gbu-burst { position: absolute; width: 40px; height: 40px; border-radius: 50%; border: 6px solid #fde047; opacity: 0; animation: gbuBurst .7s .9s ease-out both; }
+@keyframes gbuBurst { 0% { transform: scale(.4); opacity: 1; } 100% { transform: scale(7); opacity: 0; } }
+.gbu-char { width: 200px; height: 200px; border-radius: 50%; overflow: hidden; border: 4px solid #fde047; box-shadow: 0 0 0 6px rgba(253, 224, 71, .25), 0 0 60px rgba(253, 224, 71, .55); opacity: 0; animation: gbuPop .8s 1s cubic-bezier(.2, 1.5, .4, 1) both, gbuFloat 2.6s 1.8s ease-in-out infinite; }
+.gbu-char svg { width: 100%; height: 100%; display: block; }
+@keyframes gbuPop { from { opacity: 0; transform: scale(0) rotate(-200deg); } to { opacity: 1; transform: scale(1) rotate(0); } }
+@keyframes gbuFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+.gbu-k { margin-top: 14px; font-size: 13px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; color: #fde047; opacity: 0; animation: gbuRise .5s 1.5s ease both; }
+.gbu-name { font-size: 40px; font-weight: 900; letter-spacing: -.02em; opacity: 0; animation: gbuRise .5s 1.65s ease both; }
+.gbu-hint { font-size: 15px; opacity: 0; color: rgba(255, 255, 255, .8); animation: gbuRise .5s 1.8s ease both; }
+.gbu-btns { display: flex; gap: 10px; margin-top: 18px; opacity: 0; animation: gbuRise .5s 2.1s ease both; }
+.gbu-btn { padding: 12px 22px; border-radius: 999px; font-weight: 800; color: #fff; border: 2px solid rgba(255, 255, 255, .35); background: transparent; }
+.gbu-btn.primary { background: #fde047; color: #1e1b4b; border-color: #fde047; }
+@keyframes gbuRise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+.gbu-confetti { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.gbu-confetti i { position: absolute; top: -20px; opacity: 0; animation: gbuFall var(--du) var(--dl) ease-in both; }
+@keyframes gbuFall { 0% { opacity: 1; transform: translate(0, 0) rotate(0); } 100% { opacity: 1; transform: translate(var(--dx), 110vh) rotate(var(--rot)); } }
+@media (prefers-reduced-motion: reduce) { .gbu *, .gbu { animation-duration: .01s !important; animation-delay: 0s !important; } }
 
