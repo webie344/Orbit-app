@@ -1,4 +1,4 @@
-// BUILD 2026-11-11 10:10 — onboarding cartoon + CSS logo + voice-only pages
+// BUILD 2026-11-11 12:25 — onboarding cartoon + CSS logo + voice-only pages
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
@@ -4503,7 +4503,7 @@ const openCompose = (which = "group") => {
 // instead of the group/build/project modal above.
 const goCompose = () => {
   if (location.hash !== "#feed") location.hash = "#feed";
-  setTimeout(() => document.querySelector(".gb-composer input")?.focus(), 150);
+  setTimeout(() => document.querySelector(".gb-composer textarea")?.focus(), 150);
 };
 $("#composeBtn")?.addEventListener("click", goCompose);
 $("#composeBtnMobile")?.addEventListener("click", goCompose);
@@ -6409,8 +6409,10 @@ function _gbInit() {
   // -------------------------------------------------------------------------
   // COMPOSER (text + voice only)
   // -------------------------------------------------------------------------
-  const buildComposer = ({ placeholder, maxSec, onSend, allowImage = false, allowVideo = false }) => {
-    const input = el("input", { type: "text", placeholder, maxlength: "500", autocomplete: "off" });
+  const buildComposer = ({ placeholder, maxSec, onSend, allowImage = false, allowVideo = false, maxChars = 1000 }) => {
+    const input = el("textarea", { rows: "1", placeholder, maxlength: String(maxChars), autocomplete: "off", enterkeyhint: "send" });
+    const grow = () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 132) + "px"; };
+    input.addEventListener("input", grow);
     const mic = el("button", { class: "gb-icon-btn gb-mic", type: "button", title: "Record a voice note" }, el("i", { class: "ri-mic-fill" }));
     const send = el("button", { class: "gb-send hidden", type: "button", title: "Send" }, el("i", { class: "ri-send-plane-fill" }));
     const imgBtn = allowImage ? el("button", { class: "gb-icon-btn", type: "button", title: "Add a cover image" }, el("i", { class: "ri-image-add-line" })) : null;
@@ -6495,14 +6497,14 @@ function _gbInit() {
       const progress = (f) => { if (label) label.textContent = `Uploading ${Math.round(f * 100)}%…`; };
       try {
         await onSend({ text, voice: null, image, imageEdit, video, videoEdit, progress });
-        input.value = ""; image = null; imageEdit = null; if (imageUrl) URL.revokeObjectURL(imageUrl); imageUrl = null;
+        input.value = ""; grow(); image = null; imageEdit = null; if (imageUrl) URL.revokeObjectURL(imageUrl); imageUrl = null;
         clearVideo(); attach.classList.add("hidden"); attach.innerHTML = ""; syncButtons();
       }
       catch (err) { toast("Couldn't send: " + (err.message || "try again")); if (video) showAttach("video"); }
       finally { setBusy(false); }
     };
     send.addEventListener("click", sendText);
-    input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendText(); } });
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !window.matchMedia("(pointer: coarse)").matches) { e.preventDefault(); sendText(); } });
 
     const endRec = () => { clearInterval(timer); rec.classList.add("hidden"); bar.classList.remove("hidden"); };
     mic.addEventListener("click", async () => {
@@ -6921,6 +6923,14 @@ function _gbInit() {
 
   // Text post with an image. Feed: text overlays a blurred lower half (clamped, "See more" moves the
   // full text below the image). Detail page: image and text are separate. Tap image = original photo.
+  // Long text posts: clamp in the feed, "Read more" opens the post page
+  const longText = (p, detail) => {
+    const t = el("div", { class: "gb-text allow-select", html: linkify(p.text) });
+    if (detail || (p.text.length < 420 && p.text.split("\n").length < 8)) return el("div", { class: "gb-text-wrap" }, t);
+    t.classList.add("clamp");
+    return el("div", { class: "gb-text-wrap" }, t, el("button", { class: "gb-more", type: "button", onclick: () => { location.hash = `#post/${p.id}`; } }, "Read more"));
+  };
+
   const buildCover = (p, detail) => {
     const open = (e) => { if (e.target.closest("a,button")) return; e.stopPropagation(); openLightbox(coverUrl(p.cover, 1800, { crop: false })); };
     if (detail) {
@@ -7009,7 +7019,7 @@ function _gbInit() {
 
     const main = el("div", { class: "gb-main" },
       el("div", { class: "gb-headrow" }, nameLine(author, p.createdAt, detail), tools),
-      p.cover?.url && p.text ? buildCover(p, detail) : (p.text ? el("div", { class: "gb-text allow-select", html: linkify(p.text) }) : null),
+      p.cover?.url && p.text ? buildCover(p, detail) : (p.text ? longText(p, detail) : null),
       p.audio?.url ? buildVoicePlayer(p.audio) : null,
       p.video?.url ? buildVideoNote(p.video) : null,
       actions,
@@ -7063,7 +7073,7 @@ function _gbInit() {
     const list = el("div", { class: "gb-list" });
     [1, 2, 3, 4].forEach(() => list.appendChild(skeletonRow()));
     const sentinel = el("div", { class: "gb-sentinel" });
-    const composer = buildComposer({ placeholder: "Share a thought, or tap the mic…", maxSec: MAX_POST_SEC, onSend: createPost, allowImage: true, allowVideo: true });
+    const composer = buildComposer({ placeholder: "Share a thought, or tap the mic…", maxSec: MAX_POST_SEC, onSend: createPost, allowImage: true, allowVideo: true, maxChars: 2500 });
     col.append(list, composer);
     shell.append(buildRail(), col);
     root.appendChild(shell);

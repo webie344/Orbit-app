@@ -1,4 +1,4 @@
-/* BUILD 2026-11-11 10:10 */
+/* BUILD 2026-11-11 12:25 */
 /* =================================================================
    Get better — style.css
    Global tokens, layout, auth, feed (flat IG/FB style), reels,
@@ -5061,3 +5061,11 @@ body.gb-studio-open .gb-composer { z-index: 1; }
 .gb-st-tools { display: flex; flex-direction: column; gap: 4px; }
 .gb-st-tools .gb-st-label { margin-top: 10px; }
 .gb-st-tools .gb-st-label:first-child { margin-top: 0; }
+
+/* multi-line composer + long text */
+.gb-input-bar input, .gb-input-bar textarea { flex: 1; min-width: 0; padding: 9px 0; background: transparent !important; border: 0 !important; border-radius: 0 !important; outline: none; font-size: 15px; line-height: 1.4; resize: none; max-height: 132px; font-family: inherit; color: inherit; box-shadow: none !important; }
+.gb-input-bar { align-items: flex-end; }
+.gb-input-bar .gb-icon-btn, .gb-input-bar .gb-send { margin-bottom: 0; }
+.gb-text.clamp { display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden; }
+.gb-more { background: none; border: 0; padding: 6px 0 2px; color: var(--primary); font-weight: 800; font-size: 14px; }
+
