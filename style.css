@@ -1,4 +1,4 @@
-/* BUILD 2026-11-10 21:08 */
+/* BUILD 2026-11-11 07:30 */
 /* =================================================================
    Get better — style.css
    Global tokens, layout, auth, feed (flat IG/FB style), reels,
@@ -4931,4 +4931,57 @@ body[data-route="feed"] #themeToggle { display: none; }
 @keyframes obConfetti{ 0% { transform: translateY(-6px) rotate(0); opacity: 0; } 20% { opacity: 1; } 100% { transform: translateY(60px) rotate(240deg); opacity: 0; } }
 @keyframes obDraw    { to { stroke-dashoffset: 0; } }
 @media (prefers-reduced-motion: reduce) { .ob-slide .ob-art * { animation: none !important; } }
+
+/* ================= Cartoon loader (friends playing) ================= */
+.gb-loader { display: flex; flex-direction: column; align-items: center; gap: 6px; color: var(--text-dim); }
+.gb-loader .gbl { width: 200px; height: auto; overflow: visible; }
+.gb-loader.sm .gbl { width: 120px; }
+.gb-loader-t { font-size: 13px; font-weight: 700; letter-spacing: .3px; background: linear-gradient(90deg, #7c3aed, #ec4899); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+.gb-loader.sm { padding: 10px 0; }
+.empty .gb-loader { margin: 0 auto; }
+.gbl .ob-pos, .gbl .ob-char, .gbl .ob-eyes, .gbl .ob-shadow, .gbl .ob-float, .gbl .ob-twinkle { transform-box: fill-box; transform-origin: center; }
+.gbl .ob-char  { transform-origin: 50% 100%; animation: gblJump 1.3s var(--d, 0s) ease-in-out infinite; }
+.gbl .ob-eyes  { animation: obBlink 3.6s calc(var(--d, 0s) + .8s) infinite; }
+.gbl .ob-float { animation: obFloat 2.6s var(--d, 0s) ease-in-out infinite; }
+.gbl .ob-twinkle { animation: obTwinkle 1.6s var(--d, 0s) ease-in-out infinite; }
+.gbl-ball-x { animation: gblBallX 1.3s ease-in-out infinite alternate; }
+.gbl-ball-y { animation: gblBallY .65s ease-out infinite alternate; transform-box: fill-box; }
+@keyframes gblJump {
+  0%, 62%, 100% { transform: translateY(0) scale(1, 1); }
+  10% { transform: translateY(0) scale(1.1, .86); }
+  38% { transform: translateY(-24px) scale(.94, 1.08); }
+  70% { transform: translateY(0) scale(1.08, .9); }
+  82% { transform: translateY(0) scale(1, 1); }
+}
+@keyframes gblBallX { from { transform: translateX(0); } to { transform: translateX(136px); } }
+@keyframes gblBallY { from { transform: translateY(38px); } to { transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .gbl * { animation: none !important; } }
+.boot .gb-loader .gbl { width: 220px; }
+
+/* ================= Text post with cover image (Substack-style) ================= */
+.gb-cover {
+  position: relative; display: flex; flex-direction: column; justify-content: flex-end;
+  aspect-ratio: 4 / 5; border-radius: 16px; overflow: hidden; background: #111; margin: 6px 0 4px;
+  max-width: 440px; isolation: isolate;
+}
+.gb-cover-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: -2; }
+.gb-cover-text {
+  position: relative; isolation: isolate; color: #fff;
+  padding: 40% 16px 16px; font-size: 18px; line-height: 1.42; font-weight: 650; letter-spacing: -.01em;
+  text-shadow: 0 1px 10px rgba(0, 0, 0, .35); overflow-wrap: anywhere; white-space: pre-wrap;
+}
+.gb-cover-text::before {
+  content: ""; position: absolute; inset: 0; z-index: -1;
+  backdrop-filter: blur(16px) saturate(1.25); -webkit-backdrop-filter: blur(16px) saturate(1.25);
+  background: linear-gradient(to top, rgba(8, 8, 20, .78), rgba(8, 8, 20, .5) 60%, rgba(8, 8, 20, 0));
+  -webkit-mask-image: linear-gradient(to top, #000 62%, transparent);
+  mask-image: linear-gradient(to top, #000 62%, transparent);
+}
+.gb-cover-text a { color: #fff; text-decoration: underline; text-underline-offset: 3px; }
+.gb-post.detail .gb-cover { max-width: 560px; }
+
+/* composer: attached image chip */
+.gb-attach { display: flex; align-items: center; gap: 10px; padding: 8px 12px; font-size: 12px; color: var(--text-mute); }
+.gb-attach img { width: 44px; height: 44px; border-radius: 10px; object-fit: cover; }
+.gb-attach span { flex: 1; min-width: 0; }
 

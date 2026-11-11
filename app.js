@@ -1,4 +1,4 @@
-// BUILD 2026-11-10 21:08 — onboarding cartoon + CSS logo + voice-only pages
+// BUILD 2026-11-11 07:30 — onboarding cartoon + CSS logo + voice-only pages
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
@@ -1139,6 +1139,38 @@ const toggleTheme = () => {
 // =========================================================================
 // GET BETTER LOADER — branded spinner shown during async auth operations
 // =========================================================================
+// Cartoon "friends playing" loader (styles in style.css → .gb-loader)
+const GB_LOADER_SVG = `<svg class="gbl" viewBox="0 0 240 140" aria-hidden="true"><ellipse cx="120" cy="124" rx="100" ry="8" fill="#1e1b4b" opacity=".08"/><g transform="translate(52 86) scale(0.765)" class="ob-pos gbl-c"><g class="ob-char" style="--d:0.0s">
+<ellipse cx="0" cy="28" rx="20.8" ry="6" fill="#1e1b4b" opacity=".12" class="ob-shadow"/>
+<ellipse cx="-12" cy="24" rx="9" ry="6" fill="#1e1b4b"/><ellipse cx="12" cy="24" rx="9" ry="6" fill="#1e1b4b"/>
+
+<circle r="26" fill="#8b5cf6" stroke="#1e1b4b" stroke-width="3.5"/>
+<path d="M-22 -16 Q-14 -28 -2 -27" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" opacity=".55"/>
+<g class="ob-eyes" style="--d:0.0s"><ellipse cx="-12" cy="-6" rx="7" ry="9" fill="#fff" stroke="#1e1b4b" stroke-width="2.5"/><ellipse cx="12" cy="-6" rx="7" ry="9" fill="#fff" stroke="#1e1b4b" stroke-width="2.5"/>
+<circle cx="-10" cy="-4" r="3.6" fill="#1e1b4b"/><circle cx="14" cy="-4" r="3.6" fill="#1e1b4b"/></g>
+<ellipse cx="-22" cy="8" rx="5" ry="3.5" fill="#fb7185" opacity=".55"/><ellipse cx="22" cy="8" rx="5" ry="3.5" fill="#fb7185" opacity=".55"/>
+<path d="M-11 6 Q0 22 11 6 Z" fill="#fff" stroke="#1e1b4b" stroke-width="3" stroke-linejoin="round"/></g></g><g transform="translate(120 86) scale(0.765)" class="ob-pos gbl-c"><g class="ob-char" style="--d:0.4s">
+<ellipse cx="0" cy="28" rx="20.8" ry="6" fill="#1e1b4b" opacity=".12" class="ob-shadow"/>
+<ellipse cx="-12" cy="24" rx="9" ry="6" fill="#1e1b4b"/><ellipse cx="12" cy="24" rx="9" ry="6" fill="#1e1b4b"/>
+
+<circle r="26" fill="#f472b6" stroke="#1e1b4b" stroke-width="3.5"/>
+<path d="M-22 -16 Q-14 -28 -2 -27" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" opacity=".55"/>
+<g class="ob-eyes" style="--d:0.4s"><ellipse cx="-12" cy="-6" rx="7" ry="9" fill="#fff" stroke="#1e1b4b" stroke-width="2.5"/><ellipse cx="12" cy="-6" rx="7" ry="9" fill="#fff" stroke="#1e1b4b" stroke-width="2.5"/>
+<circle cx="-10" cy="-4" r="3.6" fill="#1e1b4b"/><circle cx="14" cy="-4" r="3.6" fill="#1e1b4b"/></g>
+<ellipse cx="-22" cy="8" rx="5" ry="3.5" fill="#fb7185" opacity=".55"/><ellipse cx="22" cy="8" rx="5" ry="3.5" fill="#fb7185" opacity=".55"/>
+<path d="M-9 8 Q0 18 9 8" fill="none" stroke="#1e1b4b" stroke-width="3" stroke-linecap="round"/></g></g><g transform="translate(188 86) scale(0.765)" class="ob-pos gbl-c"><g class="ob-char" style="--d:0.8s">
+<ellipse cx="0" cy="28" rx="20.8" ry="6" fill="#1e1b4b" opacity=".12" class="ob-shadow"/>
+<ellipse cx="-12" cy="24" rx="9" ry="6" fill="#1e1b4b"/><ellipse cx="12" cy="24" rx="9" ry="6" fill="#1e1b4b"/>
+
+<circle r="26" fill="#2dd4bf" stroke="#1e1b4b" stroke-width="3.5"/>
+<path d="M-22 -16 Q-14 -28 -2 -27" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" opacity=".55"/>
+<g class="ob-eyes" style="--d:0.8s"><ellipse cx="-12" cy="-6" rx="7" ry="9" fill="#fff" stroke="#1e1b4b" stroke-width="2.5"/><ellipse cx="12" cy="-6" rx="7" ry="9" fill="#fff" stroke="#1e1b4b" stroke-width="2.5"/>
+<circle cx="-10" cy="-4" r="3.6" fill="#1e1b4b"/><circle cx="14" cy="-4" r="3.6" fill="#1e1b4b"/></g>
+<ellipse cx="-22" cy="8" rx="5" ry="3.5" fill="#fb7185" opacity=".55"/><ellipse cx="22" cy="8" rx="5" ry="3.5" fill="#fb7185" opacity=".55"/>
+<path d="M-11 6 Q0 22 11 6 Z" fill="#fff" stroke="#1e1b4b" stroke-width="3" stroke-linejoin="round"/></g></g><g class="gbl-ball-x"><g class="gbl-ball-y"><circle cx="52" cy="22" r="9" fill="#fde047" stroke="#1e1b4b" stroke-width="3"/><path d="M46 20 q6 -5 12 0" fill="none" stroke="#1e1b4b" stroke-width="2" stroke-linecap="round" opacity=".5"/></g></g><g transform="translate(22 24) scale(0.8)"><path class="ob-twinkle" style="--d:0.2s" d="M0 -10 L3 -3 L10 -3 L4.5 2 L6.5 9 L0 5 L-6.5 9 L-4.5 2 L-10 -3 L-3 -3Z" fill="#67e8f9" stroke="#1e1b4b" stroke-width="2" stroke-linejoin="round"/></g><g transform="translate(222 30) scale(0.8)"><path class="ob-twinkle" style="--d:0.9s" d="M0 -10 L3 -3 L10 -3 L4.5 2 L6.5 9 L0 5 L-6.5 9 L-4.5 2 L-10 -3 L-3 -3Z" fill="#fde047" stroke="#1e1b4b" stroke-width="2" stroke-linejoin="round"/></g><g transform="translate(120 22) scale(0.8)"><path class="ob-float" style="--d:0.5s" d="M0 6 C-12 -4 -8 -14 0 -8 C8 -14 12 -4 0 6Z" fill="#fb7185" stroke="#1e1b4b" stroke-width="2.5" stroke-linejoin="round"/></g></svg>`;
+const gbLoader = (label = "", small = false) =>
+  el("div", { class: `gb-loader${small ? " sm" : ""}`, html: GB_LOADER_SVG + (label ? `<div class="gb-loader-t">${label}</div>` : "") });
+
 const _injectOrbitLoaderStyles = (() => {
   let done = false;
   return () => {
@@ -1189,8 +1221,7 @@ const showOrbitLoader = (label = "Signing in…") => {
   _injectOrbitLoaderStyles();
   if (_orbitLoaderEl) return;
   _orbitLoaderEl = el("div", { class: "orbit-loader-overlay" },
-    el("div", { class: "orbit-loader-ring" }),
-    el("div", { class: "orbit-loader-text" }, label),
+    gbLoader(label),
   );
   document.body.appendChild(_orbitLoaderEl);
 };
@@ -1792,8 +1823,7 @@ const computeMutuals = async (dayOnly = false) => {
 const renderMutuals = async (container, dayOnly = true) => {
   container.innerHTML = "";
   container.appendChild(el("div", { class: "empty" },
-    el("i", { class: "ri-loader-4-line", style: "animation:spin 1s linear infinite;" }),
-    el("div", { class: "t" }, "Finding your mutuals…"),
+    gbLoader("Finding your mutuals…", true),
   ));
 
   const mutuals = await computeMutuals(dayOnly);
@@ -3999,8 +4029,7 @@ const renderProfile = async (root, uid) => {
 
     body.innerHTML = "";
     body.appendChild(el("div", { class: "empty" },
-      el("i", { class: "ri-loader-4-line", style: "animation:spin 1s linear infinite;" }),
-      el("div", { class: "t" }, "Loading…")));
+      gbLoader("Loading…", true)));
 
     if (which === "posts") {
       // Live listener — any post created or deleted by this user reflects
@@ -6220,6 +6249,7 @@ function _gbInit() {
   const MAX_COMMENT_SEC = 60;
   const MAX_NEST = 4; // visual nesting depth in the thread view; deeper replies stay in the same column
 
+  const optImg = (url, w = 900) => (url || "").replace("/image/upload/", `/image/upload/f_auto,q_auto,w_${w}/`);
   const fmtDur = (s) => {
     s = Math.max(0, Math.round(s || 0));
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
@@ -6379,16 +6409,20 @@ function _gbInit() {
   // -------------------------------------------------------------------------
   // COMPOSER (text + voice only)
   // -------------------------------------------------------------------------
-  const buildComposer = ({ placeholder, maxSec, onSend }) => {
+  const buildComposer = ({ placeholder, maxSec, onSend, allowImage = false }) => {
     const input = el("input", { type: "text", placeholder, maxlength: "500", autocomplete: "off" });
     const mic = el("button", { class: "gb-icon-btn gb-mic", type: "button", title: "Record a voice note" }, el("i", { class: "ri-mic-fill" }));
     const send = el("button", { class: "gb-send hidden", type: "button", title: "Send" }, el("i", { class: "ri-send-plane-fill" }));
-    const bar = el("div", { class: "gb-input-bar" }, input, mic, send);
+    const imgBtn = allowImage ? el("button", { class: "gb-icon-btn", type: "button", title: "Add a cover image" }, el("i", { class: "ri-image-add-line" })) : null;
+    const fileIn = allowImage ? el("input", { type: "file", accept: "image/*", class: "hidden" }) : null;
+    const attach = el("div", { class: "gb-attach hidden" });
+    let image = null, imageUrl = null;
+    const bar = el("div", { class: "gb-input-bar" }, input, ...(imgBtn ? [imgBtn, fileIn] : []), mic, send);
     const rec = el("div", { class: "gb-rec hidden" });
     const bannerText = el("span", {});
     const bannerClose = el("button", { class: "gb-icon-btn sm", type: "button" }, el("i", { class: "ri-close-line" }));
     const banner = el("div", { class: "gb-reply-banner hidden" }, el("i", { class: "ri-corner-down-right-line" }), bannerText, bannerClose);
-    const root = el("div", { class: "gb-composer" }, banner, bar, rec);
+    const root = el("div", { class: "gb-composer" }, banner, attach, bar, rec);
 
     let session = null, timer = null, onClear = null;
     const setBusy = (b) => root.classList.toggle("busy", b);
@@ -6399,11 +6433,30 @@ function _gbInit() {
     };
     input.addEventListener("input", syncButtons);
 
+    const clearImage = () => {
+      image = null; if (imageUrl) URL.revokeObjectURL(imageUrl); imageUrl = null;
+      attach.classList.add("hidden"); attach.innerHTML = ""; if (fileIn) fileIn.value = "";
+    };
+    if (imgBtn) {
+      imgBtn.addEventListener("click", () => fileIn.click());
+      fileIn.addEventListener("change", () => {
+        const f = fileIn.files?.[0];
+        if (!f) return;
+        if (!f.type.startsWith("image/")) { toast("Please choose an image"); return; }
+        if (f.size > 10 * 1024 * 1024) { toast("Image is too large (max 10 MB)"); return; }
+        clearImage(); image = f; imageUrl = URL.createObjectURL(f);
+        const x = el("button", { class: "gb-icon-btn sm", type: "button", title: "Remove image", onclick: clearImage }, el("i", { class: "ri-close-line" }));
+        attach.append(el("img", { src: imageUrl, alt: "" }), el("span", {}, "Cover image · write something to go over it"), x);
+        attach.classList.remove("hidden");
+        input.focus();
+      });
+    }
+
     const sendText = async () => {
       const text = input.value.trim();
       if (!text || root.classList.contains("busy")) return;
       setBusy(true);
-      try { await onSend({ text, voice: null }); input.value = ""; syncButtons(); }
+      try { await onSend({ text, voice: null, image }); input.value = ""; clearImage(); syncButtons(); }
       catch (err) { toast("Couldn't send: " + (err.message || "try again")); }
       finally { setBusy(false); }
     };
@@ -6459,7 +6512,7 @@ function _gbInit() {
       input.focus();
     };
     root.focusInput = () => input.focus();
-    root.dispose = () => { clearInterval(timer); session?.cancel(); session = null; };
+    root.dispose = () => { clearImage(); clearInterval(timer); session?.cancel(); session = null; };
     return root;
   };
 
@@ -6494,9 +6547,13 @@ function _gbInit() {
   // -------------------------------------------------------------------------
   // POST CREATION / COMMENT CREATION
   // -------------------------------------------------------------------------
-  const createPost = async ({ text, voice }) => {
+  const createPost = async ({ text, voice, image }) => {
     const data = { authorUid: state.uid, kind: "voice", text: text || "", hashtags: extractHashtags(text || "") };
     if (voice) data.audio = await uploadVoice(voice);
+    if (image && text) {
+      const up = await uploadToCloudinary(image, "image");
+      data.cover = { url: up.url, ...(up.width ? { width: up.width } : {}), ...(up.height ? { height: up.height } : {}) };
+    }
     Object.assign(data, { orbits: [], orbitCount: 0, commentCount: 0, createdAt: serverTimestamp() });
     const ref = await addDoc(collection(db, "posts"), data);
     sfxPost();
@@ -6611,7 +6668,11 @@ function _gbInit() {
 
     const main = el("div", { class: "gb-main" },
       el("div", { class: "gb-headrow" }, nameLine(author, p.createdAt, detail), tools),
-      p.text ? el("div", { class: "gb-text allow-select", html: linkify(p.text) }) : null,
+      p.cover?.url && p.text
+        ? el("div", { class: "gb-cover" },
+            el("img", { class: "gb-cover-img", src: optImg(p.cover.url), alt: "", loading: "lazy" }),
+            el("div", { class: "gb-cover-text allow-select", html: linkify(p.text) }))
+        : (p.text ? el("div", { class: "gb-text allow-select", html: linkify(p.text) }) : null),
       p.audio?.url ? buildVoicePlayer(p.audio) : null,
       actions,
     );
@@ -6667,7 +6728,7 @@ function _gbInit() {
     const list = el("div", { class: "gb-list" });
     [1, 2, 3, 4].forEach(() => list.appendChild(skeletonRow()));
     const sentinel = el("div", { class: "gb-sentinel" });
-    const composer = buildComposer({ placeholder: "Share a thought, or tap the mic…", maxSec: MAX_POST_SEC, onSend: createPost });
+    const composer = buildComposer({ placeholder: "Share a thought, or tap the mic…", maxSec: MAX_POST_SEC, onSend: createPost, allowImage: true });
     col.append(head, list, composer);
     shell.append(buildRail(), col);
     root.appendChild(shell);
@@ -6698,7 +6759,7 @@ function _gbInit() {
     const loadMore = async () => {
       if (loading || allLoaded || !lastDoc) return;
       loading = true;
-      sentinel.innerHTML = '<i class="ri-loader-4-line gb-spin"></i>';
+      sentinel.innerHTML = ""; sentinel.appendChild(gbLoader("", true));
       try {
         const snap = await getDocs(query(collection(db, "posts"), orderBy("createdAt", "desc"), startAfter(lastDoc), limit(PAGE_SIZE)));
         if (snap.docs.length < PAGE_SIZE) allLoaded = true;
