@@ -1,7 +1,8 @@
 {
-  "name": "Orbit— Your Space to Learn, Connect, and Create.",
-  "short_name": "Orbit",
-  "description": "Your Space to Learn, Connect, and Create..",
+  "id": "/",
+  "name": "Get better — The place to belong",
+  "short_name": "Get better",
+  "description": "Say it, hear it, grow together. Voice notes, groups and real people in a place to belong.",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait",
@@ -9,43 +10,16 @@
   "theme_color": "#0b0b10",
   "scope": "/",
   "icons": [
-    {
-      "src": "/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "/icon-192-maskable.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "maskable"
-    },
-    {
-      "src": "/icon-512-maskable.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "maskable"
-    }
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
   ],
   "categories": ["social", "lifestyle"],
   "screenshots": [],
   "shortcuts": [
-    {
-      "name": "Feed",
-      "url": "/#feed",
-      "description": "Go to your feed"
-    },
-    {
-      "name": "Chats",
-      "url": "/#chats",
-      "description": "Open your chats"
-    }
+    { "name": "Feed", "url": "/#feed", "description": "Go to your feed" },
+    { "name": "Chats", "url": "/#chats", "description": "Open your chats" },
+    { "name": "My character", "url": "/#character", "description": "Customise your character" }
   ]
 }

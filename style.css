@@ -1,4 +1,4 @@
-/* BUILD 2026-11-11 15:20 */
+/* BUILD 2026-11-11 16:00 */
 /* =================================================================
    Get better — style.css
    Global tokens, layout, auth, feed (flat IG/FB style), reels,
@@ -5159,3 +5159,6 @@ body.gb-studio-open .gb-composer { z-index: 1; }
 @keyframes gbuFall { 0% { opacity: 1; transform: translate(0, 0) rotate(0); } 100% { opacity: 1; transform: translate(var(--dx), 110vh) rotate(var(--rot)); } }
 @media (prefers-reduced-motion: reduce) { .gbu *, .gbu { animation-duration: .01s !important; animation-delay: 0s !important; } }
 
+
+/* Header: notifications + avatar sit at the far right on every screen size */
+.topbar-right { grid-column: -2; justify-self: end; margin-left: auto; }
