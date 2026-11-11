@@ -1,4 +1,4 @@
-// BUILD 2026-11-11 08:25 — onboarding cartoon + CSS logo + voice-only pages
+// BUILD 2026-11-11 07:30 — onboarding cartoon + CSS logo + voice-only pages
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
@@ -6521,9 +6521,13 @@ function _gbInit() {
   // -------------------------------------------------------------------------
   const buildRail = () => {
     const groupsBox = el("div", { class: "gb-rail-groups" });
+    const home = el("button", {
+      class: "gb-srv gb-home active", type: "button", title: "Voice feed",
+      onclick: () => { if (location.hash !== "#feed") location.hash = "#feed"; document.getElementById("content")?.scrollTo({ top: 0, behavior: "smooth" }); },
+    }, el("img", { src: "/icon.svg", alt: "Get better" }));
     const add = el("button", { class: "gb-srv gb-add", type: "button", title: "Find or create groups", onclick: () => { location.hash = "#groups"; } },
       el("i", { class: "ri-add-line" }));
-    const rail = el("nav", { class: "gb-rail", "aria-label": "Your groups" }, groupsBox, add);
+    const rail = el("nav", { class: "gb-rail", "aria-label": "Your groups" }, home, el("div", { class: "gb-rail-sep" }), groupsBox, add);
 
     getDocs(query(collection(db, "groups"), where("members", "array-contains", state.uid), limit(40)))
       .then((snap) => {
@@ -6605,47 +6609,6 @@ function _gbInit() {
     el("span", { class: "gb-sub" }, when(ts)),
   );
 
-  const openLightbox = (url) => {
-    const img = el("img", { src: optImg(url, 1800), alt: "" });
-    const close = () => { ov.remove(); document.removeEventListener("keydown", onKey); };
-    const onKey = (e) => { if (e.key === "Escape") close(); };
-    const x = el("button", { class: "gb-lb-x", type: "button", title: "Close", onclick: close }, el("i", { class: "ri-close-line" }));
-    const ov = el("div", { class: "gb-lightbox", onclick: close }, img, x);
-    document.addEventListener("keydown", onKey);
-    document.body.appendChild(ov);
-  };
-
-  // Text post with an image. Feed: text overlays a blurred lower half (clamped, "See more" moves the
-  // full text below the image). Detail page: image and text are separate. Tap image = original photo.
-  const buildCover = (p, detail) => {
-    const open = (e) => { if (e.target.closest("a,button")) return; e.stopPropagation(); openLightbox(p.cover.url); };
-    if (detail) {
-      return el("div", { class: "gb-cover-plain" },
-        el("img", { src: optImg(p.cover.url, 1200), alt: "", loading: "lazy", onclick: open }),
-        el("div", { class: "gb-text allow-select", html: linkify(p.text) }));
-    }
-    const clamp = el("div", { class: "gb-cover-clamp", html: linkify(p.text) });
-    const more = el("button", { class: "gb-cover-more hidden", type: "button" }, "See more");
-    const less = el("button", { class: "gb-cover-more", type: "button" }, "See less");
-    const full = el("div", { class: "gb-cover-full hidden" },
-      el("div", { class: "gb-text allow-select", html: linkify(p.text) }), less);
-    const card = el("div", { class: "gb-cover", onclick: open },
-      el("img", { class: "gb-cover-img", src: optImg(p.cover.url), alt: "", loading: "lazy" }),
-      el("div", { class: "gb-cover-text" }, clamp, more));
-    const wrap = el("div", { class: "gb-cover-wrap" }, card, full);
-    const toggle = (openIt) => (e) => {
-      e.stopPropagation();
-      wrap.classList.toggle("open", openIt);
-      full.classList.toggle("hidden", !openIt);
-      if (!openIt) measure();
-    };
-    const measure = () => { if (!wrap.classList.contains("open")) more.classList.toggle("hidden", !(clamp.scrollHeight > clamp.clientHeight + 1)); };
-    more.addEventListener("click", toggle(true));
-    less.addEventListener("click", toggle(false));
-    if (window.ResizeObserver) new ResizeObserver(measure).observe(clamp); else more.classList.remove("hidden");
-    return wrap;
-  };
-
   const renderVoicePost = (p, author, { detail = false } = {}) => {
     const mine = p.authorUid === state.uid;
     let liked = (p.orbits || []).includes(state.uid);
@@ -6705,7 +6668,11 @@ function _gbInit() {
 
     const main = el("div", { class: "gb-main" },
       el("div", { class: "gb-headrow" }, nameLine(author, p.createdAt, detail), tools),
-      p.cover?.url && p.text ? buildCover(p, detail) : (p.text ? el("div", { class: "gb-text allow-select", html: linkify(p.text) }) : null),
+      p.cover?.url && p.text
+        ? el("div", { class: "gb-cover" },
+            el("img", { class: "gb-cover-img", src: optImg(p.cover.url), alt: "", loading: "lazy" }),
+            el("div", { class: "gb-cover-text allow-select", html: linkify(p.text) }))
+        : (p.text ? el("div", { class: "gb-text allow-select", html: linkify(p.text) }) : null),
       p.audio?.url ? buildVoicePlayer(p.audio) : null,
       actions,
     );
@@ -6755,11 +6722,14 @@ function _gbInit() {
   const renderVoiceFeed = (root) => {
     const shell = el("div", { class: "gb-shell" });
     const col = el("div", { class: "gb-col" });
+    const head = el("div", { class: "gb-head" },
+      el("i", { class: "ri-mic-fill gb-head-ic" }),
+      el("div", { class: "gb-head-t" }, el("strong", {}, "voice-feed")));
     const list = el("div", { class: "gb-list" });
     [1, 2, 3, 4].forEach(() => list.appendChild(skeletonRow()));
     const sentinel = el("div", { class: "gb-sentinel" });
     const composer = buildComposer({ placeholder: "Share a thought, or tap the mic…", maxSec: MAX_POST_SEC, onSend: createPost, allowImage: true });
-    col.append(list, composer);
+    col.append(head, list, composer);
     shell.append(buildRail(), col);
     root.appendChild(shell);
 
