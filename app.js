@@ -1,4 +1,4 @@
-// BUILD 2026-11-11 12:25 — onboarding cartoon + CSS logo + voice-only pages
+// BUILD 2026-11-11 14:05 — onboarding cartoon + CSS logo + voice-only pages
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
@@ -916,8 +916,126 @@ export const toast = (msg, ms = 2200) => {
   toast._t = setTimeout(() => t.classList.add("hidden"), ms);
 };
 
+// =========================================================================
+// CHARACTERS — customisable cartoon avatars (stored on the user doc as `character`)
+// =========================================================================
+const CHAR = {
+  ink: "#1e1b4b",
+  colors: ["#8b5cf6", "#f472b6", "#fb923c", "#2dd4bf", "#fde047", "#60a5fa", "#34d399", "#f87171", "#a78bfa", "#94a3b8"],
+  bgs: ["#ede9fe", "#fce7f3", "#ffedd5", "#ccfbf1", "#fef9c3", "#dbeafe", "#dcfce7", "#e2e8f0"],
+  eyes: { round: "Round", dots: "Dots", happy: "Happy", sleepy: "Sleepy", wink: "Wink" },
+  mouth: { smile: "Smile", grin: "Grin", open: "Open", cat: "Cat", meh: "Calm" },
+  acc: { none: "None", glasses: "Glasses", cap: "Cap", headphones: "Headphones", crown: "Crown", bow: "Bow", sprout: "Sprout" },
+};
+function defaultCharacter(seed = "x") {
+  let h = 0; for (const c of String(seed)) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return { color: CHAR.colors[h % CHAR.colors.length], bg: CHAR.bgs[(h >> 3) % CHAR.bgs.length], eyes: "round", mouth: "smile", acc: "none" };
+}
+function characterSVG(c = {}, size = 100) {
+  const k = CHAR.ink, col = c.color || CHAR.colors[0], bg = c.bg || CHAR.bgs[0];
+  const eyeL = { cx: 38, cy: 50 }, eyeR = { cx: 62, cy: 50 };
+  const ball = (e, dx = 1) => `<ellipse cx="${e.cx}" cy="${e.cy}" rx="5.6" ry="7" fill="#fff" stroke="${k}" stroke-width="2.2"/><circle cx="${e.cx + dx}" cy="${e.cy + 1}" r="3" fill="${k}"/>`;
+  const arc = (e) => `<path d="M${e.cx - 6} ${e.cy + 3} Q${e.cx} ${e.cy - 6} ${e.cx + 6} ${e.cy + 3}" fill="none" stroke="${k}" stroke-width="3" stroke-linecap="round"/>`;
+  const eyes = {
+    round: ball(eyeL) + ball(eyeR),
+    dots: `<circle cx="38" cy="51" r="3.6" fill="${k}"/><circle cx="62" cy="51" r="3.6" fill="${k}"/>`,
+    happy: arc(eyeL) + arc(eyeR),
+    sleepy: `<path d="M32 51 Q38 57 44 51" fill="none" stroke="${k}" stroke-width="3" stroke-linecap="round"/><path d="M56 51 Q62 57 68 51" fill="none" stroke="${k}" stroke-width="3" stroke-linecap="round"/>`,
+    wink: ball(eyeL) + `<path d="M56 52 Q62 46 68 52" fill="none" stroke="${k}" stroke-width="3" stroke-linecap="round"/>`,
+  }[c.eyes] || "";
+  const mouth = {
+    smile: `<path d="M42 64 Q50 72 58 64" fill="none" stroke="${k}" stroke-width="3" stroke-linecap="round"/>`,
+    grin: `<path d="M41 63 Q50 77 59 63 Z" fill="#fff" stroke="${k}" stroke-width="2.6" stroke-linejoin="round"/>`,
+    open: `<path d="M44 63 Q50 78 56 63 Z" fill="${k}"/><ellipse cx="50" cy="71" rx="3" ry="2" fill="#fb7185"/>`,
+    cat: `<path d="M42 65 Q46 70 50 65 Q54 70 58 65" fill="none" stroke="${k}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`,
+    meh: `<path d="M44 67 H56" fill="none" stroke="${k}" stroke-width="3" stroke-linecap="round"/>`,
+  }[c.mouth] || "";
+  const acc = {
+    glasses: `<circle cx="38" cy="50" r="9" fill="#fff" fill-opacity=".3" stroke="${k}" stroke-width="2.6"/><circle cx="62" cy="50" r="9" fill="#fff" fill-opacity=".3" stroke="${k}" stroke-width="2.6"/><path d="M47 50 H53" stroke="${k}" stroke-width="2.6"/>`,
+    cap: `<path d="M20 42 Q50 6 80 42 Z" fill="#ef4444" stroke="${k}" stroke-width="3" stroke-linejoin="round"/><path d="M58 40 Q82 36 88 46 L58 46 Z" fill="#dc2626" stroke="${k}" stroke-width="3" stroke-linejoin="round"/>`,
+    headphones: `<path d="M19 54 Q19 14 50 14 Q81 14 81 54" fill="none" stroke="${k}" stroke-width="4.5" stroke-linecap="round"/><rect x="13" y="47" width="10" height="20" rx="5" fill="#f472b6" stroke="${k}" stroke-width="3"/><rect x="77" y="47" width="10" height="20" rx="5" fill="#f472b6" stroke="${k}" stroke-width="3"/>`,
+    crown: `<path d="M32 28 L35 11 L44 22 L50 8 L56 22 L65 11 L68 28 Z" fill="#fde047" stroke="${k}" stroke-width="2.8" stroke-linejoin="round"/>`,
+    bow: `<path d="M64 22 L78 13 L78 31 Z M64 22 L50 13 L50 31 Z" fill="#f472b6" stroke="${k}" stroke-width="2.6" stroke-linejoin="round"/><circle cx="64" cy="22" r="4.5" fill="#ec4899" stroke="${k}" stroke-width="2.4"/>`,
+    sprout: `<path d="M50 22 V10" stroke="${k}" stroke-width="3.4" stroke-linecap="round"/><path d="M50 14 Q38 6 33 14 Q42 20 50 14 Z M50 12 Q62 2 68 10 Q58 17 50 12 Z" fill="#34d399" stroke="${k}" stroke-width="2.4" stroke-linejoin="round"/>`,
+  }[c.acc] || "";
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="${size}" height="${size}">` +
+    `<rect width="100" height="100" fill="${bg}"/>` +
+    `<ellipse cx="38" cy="90" rx="9" ry="5" fill="${k}"/><ellipse cx="62" cy="90" rx="9" ry="5" fill="${k}"/>` +
+    `<circle cx="50" cy="56" r="34" fill="${col}" stroke="${k}" stroke-width="3.5"/>` +
+    `<path d="M26 40 Q32 28 44 26" fill="none" stroke="#fff" stroke-width="3.6" stroke-linecap="round" opacity=".5"/>` +
+    `<ellipse cx="29" cy="64" rx="4.4" ry="3.2" fill="#fb7185" opacity=".55"/><ellipse cx="71" cy="64" rx="4.4" ry="3.2" fill="#fb7185" opacity=".55"/>` +
+    eyes + mouth + acc + `</svg>`;
+}
+const characterDataUri = (c) => `data:image/svg+xml;utf8,${encodeURIComponent(characterSVG(c, 128))}`;
+
+// ---------------- Character studio page (#character)
+function renderCharacterPage(root) {
+  const me = state.me || {};
+  let ch = { ...defaultCharacter(state.uid), ...(me.character || {}) };
+  let use = me.useCharacter ?? true;
+  const preview = el("div", { class: "gbc-preview" });
+  const draw = () => { preview.innerHTML = characterSVG(ch, 180); };
+  const rows = el("div", { class: "gbc-rows" });
+  const swatchRow = (label, list, key) => {
+    const row = el("div", { class: "gbc-swatches" });
+    list.forEach((c) => {
+      const b = el("button", { class: `gbc-sw${ch[key] === c ? " on" : ""}`, type: "button", style: `background:${c}`, "aria-label": c, onclick: () => {
+        ch[key] = c; [...row.children].forEach((x) => x.classList.toggle("on", x === b)); draw(); refreshOpts();
+      } });
+      row.appendChild(b);
+    });
+    return el("div", { class: "gbc-sec" }, el("div", { class: "gb-st-label" }, label), row);
+  };
+  const optRows = [];
+  const optRow = (label, map, key) => {
+    const row = el("div", { class: "gbc-opts" });
+    const refresh = () => {
+      row.innerHTML = "";
+      Object.entries(map).forEach(([k, name]) => {
+        const b = el("button", { class: `gbc-opt${ch[key] === k ? " on" : ""}`, type: "button", title: name, onclick: () => { ch[key] = k; draw(); optRows.forEach((r) => r()); } });
+        b.innerHTML = characterSVG({ ...ch, [key]: k }, 56);
+        row.appendChild(b);
+      });
+    };
+    optRows.push(refresh); refresh();
+    return el("div", { class: "gbc-sec" }, el("div", { class: "gb-st-label" }, label), row);
+  };
+  const refreshOpts = () => optRows.forEach((r) => r());
+  rows.append(
+    swatchRow("Colour", CHAR.colors, "color"), swatchRow("Background", CHAR.bgs, "bg"),
+    optRow("Eyes", CHAR.eyes, "eyes"), optRow("Mouth", CHAR.mouth, "mouth"), optRow("Extras", CHAR.acc, "acc"));
+  const pick = (o) => Object.keys(o)[Math.floor(Math.random() * Object.keys(o).length)];
+  const dice = el("button", { class: "gb-chip", type: "button", onclick: () => {
+    ch = { color: CHAR.colors[Math.floor(Math.random() * CHAR.colors.length)], bg: CHAR.bgs[Math.floor(Math.random() * CHAR.bgs.length)], eyes: pick(CHAR.eyes), mouth: pick(CHAR.mouth), acc: pick(CHAR.acc) };
+    draw(); rows.replaceWith(rows); rows.innerHTML = ""; rows.append(...buildRows());
+  } }, el("i", { class: "ri-dice-line" }), " Surprise me");
+  const buildRows = () => { optRows.length = 0; return [swatchRow("Colour", CHAR.colors, "color"), swatchRow("Background", CHAR.bgs, "bg"), optRow("Eyes", CHAR.eyes, "eyes"), optRow("Mouth", CHAR.mouth, "mouth"), optRow("Extras", CHAR.acc, "acc")]; };
+  rows.innerHTML = ""; rows.append(...buildRows());
+  const useBox = el("input", { type: "checkbox" }); useBox.checked = !!use;
+  useBox.addEventListener("change", () => { use = useBox.checked; });
+  const save = el("button", { class: "gb-st-done", type: "button", onclick: async () => {
+    save.disabled = true;
+    try {
+      await updateDoc(doc(db, "users", state.uid), { character: ch, useCharacter: use });
+      state.me = { ...state.me, character: ch, useCharacter: use };
+      state.cache.users.set(state.uid, { ...(state.cache.users.get(state.uid) || {}), uid: state.uid, ...state.me });
+      const mine = document.querySelector("#meAvatar"); if (mine) mine.src = avatarFor(state.me);
+      toast("Character saved");
+      history.length > 1 ? history.back() : (location.hash = "#feed");
+    } catch (e) { toast("Couldn't save: " + (e.message || "try again")); save.disabled = false; }
+  } }, "Save");
+  draw();
+  const col = el("div", { class: "gb-col gb-page" },
+    el("div", { class: "gb-head" },
+      el("button", { class: "gb-icon-btn", type: "button", onclick: () => history.back() }, el("i", { class: "ri-arrow-left-line" })),
+      el("div", { class: "gb-head-t" }, el("strong", {}, "Your character")), save),
+    el("div", { class: "gbc-wrap" }, preview, el("div", { class: "gbc-center" }, dice), rows,
+      el("label", { class: "gbc-use" }, useBox, el("span", {}, "Use my character as my profile picture"))));
+  root.appendChild(col);
+}
+
 export const avatarFor = (u) =>
-  u?.photoURL || `https://api.dicebear.com/7.x/shapes/svg?seed=${encodeURIComponent(u?.uid || u?.username || "x")}`;
+  (u?.useCharacter && u?.character ? characterDataUri(u.character) : null) || u?.photoURL || `https://api.dicebear.com/7.x/shapes/svg?seed=${encodeURIComponent(u?.uid || u?.username || "x")}`;
 
 const profileCoverFor = (u) =>
   u?.coverURL || u?.coverUrl || u?.bannerURL || u?.bannerUrl || "";
@@ -1606,7 +1724,7 @@ $("#notifBtn").addEventListener("click", () => { location.hash = "#notifications
 // 7. ROUTER
 // =========================================================================
 // "reels" removed — videos live in the feed as regular posts
-const routes = ["feed", "chats", "ai-chat", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn"];
+const routes = ["feed", "chats", "ai-chat", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn", "character", "prompt"];
 
 // Feed DOM caching — lets us restore the feed instantly when navigating
 // back from a post without re-rendering or re-shuffling.
@@ -1691,6 +1809,8 @@ const router = () => {
     case "ai-chat":    renderAIChat(content); break;
     case "groups":     renderGroups(content); break;
     case "explore":    renderExplore(content, rest[0] === "tag" ? rest[1] : null); break;
+    case "character":  renderCharacterPage(content); break;
+    case "prompt":     content._unsub = gb().renderPromptPage(content, rest[0]); break;
     case "saved":      renderSaved(content); break;
     case "settings":   renderSettings(content); break;
     case "profile":    renderProfile(content, rest[0] || state.uid); break;
@@ -6420,7 +6540,7 @@ function _gbInit() {
     const vidBtn = allowVideo ? el("button", { class: "gb-icon-btn", type: "button", title: "Add a video note" }, el("i", { class: "ri-video-add-line" })) : null;
     const vidIn = allowVideo ? el("input", { type: "file", accept: "video/*", class: "hidden" }) : null;
     const attach = el("div", { class: "gb-attach hidden" });
-    let image = null, imageUrl = null, imageEdit = null, video = null, videoEdit = null, videoUrl = null;
+    let image = null, imageUrl = null, imageEdit = null, video = null, videoEdit = null, videoUrl = null, promptCtx = null;
     const extras = [];
     if (imgBtn) extras.push(imgBtn, fileIn);
     if (vidBtn) extras.push(vidBtn, vidIn);
@@ -6496,7 +6616,7 @@ function _gbInit() {
       const label = attach.querySelector(".gb-attach-t");
       const progress = (f) => { if (label) label.textContent = `Uploading ${Math.round(f * 100)}%…`; };
       try {
-        await onSend({ text, voice: null, image, imageEdit, video, videoEdit, progress });
+        await onSend({ text, voice: null, image, imageEdit, video, videoEdit, progress, prompt: promptCtx }); root.setPrompt(null);
         input.value = ""; grow(); image = null; imageEdit = null; if (imageUrl) URL.revokeObjectURL(imageUrl); imageUrl = null;
         clearVideo(); attach.classList.add("hidden"); attach.innerHTML = ""; syncButtons();
       }
@@ -6541,7 +6661,7 @@ function _gbInit() {
         if (!ok) return;
         setBusy(true);
         try {
-          await onSend({ text: input.value.trim(), voice: result });
+          await onSend({ text: input.value.trim(), voice: result, prompt: promptCtx }); root.setPrompt(null);
           input.value = ""; syncButtons();
         } catch (err) { toast("Couldn't send: " + (err.message || "try again")); }
         finally { setBusy(false); }
@@ -6555,6 +6675,15 @@ function _gbInit() {
       bannerText.textContent = `Replying to ${label}`;
       banner.classList.remove("hidden");
       input.placeholder = `Reply to ${label}…`;
+      input.focus();
+    };
+    root.setPrompt = (ctx) => {
+      promptCtx = ctx || null;
+      if (!ctx) { banner.classList.add("hidden"); input.placeholder = placeholder; return; }
+      onClear = () => { promptCtx = null; };
+      bannerText.textContent = `Today's question: ${ctx.q}`;
+      banner.classList.remove("hidden");
+      input.placeholder = "Your answer…";
       input.focus();
     };
     root.focusInput = () => input.focus();
@@ -6589,13 +6718,14 @@ function _gbInit() {
   // -------------------------------------------------------------------------
   // POST CREATION / COMMENT CREATION
   // -------------------------------------------------------------------------
-  const createPost = async ({ text, voice, image, imageEdit, video, videoEdit, progress }) => {
+  const createPost = async ({ text, voice, image, imageEdit, video, videoEdit, progress, prompt }) => {
     const data = { authorUid: state.uid, kind: "voice", text: text || "", hashtags: extractHashtags(text || "") };
     if (voice) data.audio = await uploadVoice(voice);
     if (image && text) {
       const up = await uploadXHR(image, "image", progress);
       data.cover = { url: up.url, fit: imageEdit?.fit || "4:5", fx: imageEdit?.fx || "none", ...(up.width ? { width: up.width } : {}), ...(up.height ? { height: up.height } : {}) };
     }
+    if (prompt?.day) data.prompt = { day: prompt.day, q: prompt.q };
     if (video) {
       const up = await uploadXHR(video, "video", progress);
       const e = videoEdit || {};
@@ -6911,6 +7041,150 @@ function _gbInit() {
     return box;
   };
 
+
+  // -------------------------------------------------------------------------
+  // DAILY PROMPT — one question a day for everyone (same on every device)
+  // -------------------------------------------------------------------------
+  const PROMPTS = [
+    "What made you smile today?", "What's one thing you're proud of this week?", "Tell us about someone who changed your life.",
+    "What song is stuck in your head right now?", "What's a small win you had today?", "What did you want to be when you were a kid?",
+    "What's the best advice you've ever received?", "Describe your perfect Sunday.", "What's something you're learning right now?",
+    "What's a food that tastes like home to you?", "Who do you want to say thank you to today?", "What's a fear you've overcome?",
+    "If you could talk to your younger self, what would you say?", "What's the kindest thing a stranger has done for you?",
+    "What's one habit you're building?", "Tell us your funniest school memory.", "What's a place that feels like peace to you?",
+    "What are you looking forward to this month?", "What's something you believe that not everyone does?", "What's the best thing you ate this week?",
+    "What's a skill you wish you had?", "Tell us about your day in 30 seconds.", "What's a movie or show you can watch again and again?",
+    "What does 'belonging' feel like to you?", "What's a dream you haven't told anyone?", "Who inspires you, and why?",
+    "What's the hardest thing you've done that you're glad you did?", "What's a tradition from your family or culture you love?",
+    "What would you do with a free day and no phone?", "What's something that always cheers you up?", "What's a mistake that taught you something?",
+    "What's one thing you're grateful for right now?", "Describe your hometown to someone who's never been.", "What's a book, video or voice that changed how you think?",
+    "What's a goal you're chasing this year?", "What's your favourite sound in the world?", "What's the best compliment you've ever received?",
+    "What's something you're building or making?", "If today had a theme song, what would it be?", "What do you wish more people knew about you?",
+  ];
+  const dayKey = (d = new Date()) => d.toISOString().slice(0, 10);
+  const promptFor = (day = dayKey()) => {
+    const n = Math.floor(Date.parse(day + "T00:00:00Z") / 86400000);
+    return { day, q: PROMPTS[((n % PROMPTS.length) + PROMPTS.length) % PROMPTS.length] };
+  };
+
+  const buildPromptCard = (composer) => {
+    const pr = promptFor();
+    const me = { ...defaultCharacter(state.uid), ...(state.me?.character || {}) };
+    const art = el("div", { class: "gb-pc-art", html: characterSVG(me, 56), onclick: () => { location.hash = "#character"; }, title: "Customise your character" });
+    const count = el("button", { class: "gb-pc-link", type: "button", onclick: () => { location.hash = `#prompt/${pr.day}`; } }, "See answers");
+    const ans = el("button", { class: "gb-pc-go", type: "button", onclick: () => composer.setPrompt(pr) }, el("i", { class: "ri-mic-fill" }), " Answer");
+    const card = el("div", { class: "gb-pc" }, art,
+      el("div", { class: "gb-pc-body" },
+        el("div", { class: "gb-pc-k" }, "Today's question"),
+        el("div", { class: "gb-pc-q" }, pr.q),
+        el("div", { class: "gb-pc-row" }, ans, count)));
+    getDocs(query(collection(db, "posts"), where("prompt.day", "==", pr.day), limit(100))).then((snap) => {
+      const n = snap.size, mine = snap.docs.some((d) => d.data().authorUid === state.uid);
+      count.textContent = n ? `${n}${n >= 100 ? "+" : ""} answer${n === 1 ? "" : "s"}` : "Be the first";
+      if (mine) { ans.innerHTML = '<i class="ri-check-line"></i> Answered'; ans.classList.add("done"); }
+    }).catch(() => {});
+    return card;
+  };
+
+  const renderPromptPage = (root, day) => {
+    const pr = promptFor(day || dayKey());
+    const list = el("div", { class: "gb-list" });
+    const col = el("div", { class: "gb-col gb-page" },
+      el("div", { class: "gb-head" },
+        el("button", { class: "gb-icon-btn", type: "button", onclick: () => history.back() }, el("i", { class: "ri-arrow-left-line" })),
+        el("div", { class: "gb-head-t" }, el("strong", {}, "Daily question"))),
+      el("div", { class: "gb-pc solo" }, el("div", { class: "gb-pc-body" }, el("div", { class: "gb-pc-k" }, pr.day), el("div", { class: "gb-pc-q big" }, pr.q))),
+      list);
+    root.appendChild(col);
+    list.append(skeletonRow(), skeletonRow());
+    const unsub = onSnapshot(query(collection(db, "posts"), where("prompt.day", "==", pr.day), limit(100)), async (snap) => {
+      const posts = snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      const users = await Promise.all([...new Set(posts.map((p) => p.authorUid))].map(fetchUser));
+      const map = Object.fromEntries(users.filter(Boolean).map((u) => [u.uid, u]));
+      list.innerHTML = "";
+      if (!posts.length) { list.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-mic-line" }), el("div", { class: "t" }, "No answers yet. Go to the feed and be the first!"))); return; }
+      posts.forEach((p) => list.appendChild(renderVoicePost(p, map[p.authorUid])));
+    }, () => { list.innerHTML = ""; });
+    return () => { unsub(); stopAllAudio(); };
+  };
+
+  // -------------------------------------------------------------------------
+  // VOICE REACTIONS — a 5-second voice clip as a reaction (one per person per post)
+  // -------------------------------------------------------------------------
+  const REACT_MAX_SEC = 5;
+  const playReact = (url, chip) => {
+    stopAllAudio();
+    const a = new Audio(url);
+    chip.classList.add("playing");
+    const off = () => chip.classList.remove("playing");
+    a.addEventListener("ended", off); a.addEventListener("pause", off);
+    _playing = a; a.play().catch(off);
+  };
+  const reactChip = (r, u) => {
+    const b = el("button", { class: "gb-vr-chip", type: "button", title: `${u?.name || "Someone"}'s voice reaction` },
+      el("img", { src: avatarFor(u), alt: "" }), el("i", { class: "ri-play-fill" }));
+    b.addEventListener("click", (e) => { e.stopPropagation(); playReact(r.audio.url, b); });
+    return b;
+  };
+  const buildReactions = (p, author, detail) => {
+    const row = el("div", { class: "gb-vr hidden" });
+    const rec = el("div", { class: "gb-vr-rec hidden" });
+    const addChip = (r, u) => { row.classList.remove("hidden"); row.prepend(reactChip(r, u)); };
+    const load = async () => {
+      const snap = await getDocs(query(collection(db, "posts", p.id, "vreacts"), orderBy("createdAt", "desc"), limit(10)));
+      const items = snap.docs.map((d) => d.data()).filter((r) => r.audio?.url);
+      const users = await Promise.all(items.map((r) => fetchUser(r.uid)));
+      row.innerHTML = "";
+      items.forEach((r, i) => row.appendChild(reactChip(r, users[i])));
+      row.classList.toggle("hidden", !items.length);
+    };
+    if (detail || p.vreactCount > 0) load().catch(() => {});
+
+    const btn = el("button", { class: "gb-act", type: "button", title: "React with your voice" }, el("i", { class: "ri-mic-line" }), el("span", {}, "React"));
+    let session = null, timer = null;
+    const close = () => { clearInterval(timer); session?.cancel?.(); session = null; rec.classList.add("hidden"); rec.innerHTML = ""; btn.classList.remove("on"); };
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!rec.classList.contains("hidden")) { close(); return; }
+      if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) { toast("Voice recording isn't supported on this browser"); return; }
+      stopAllAudio();
+      try { session = await startRecorder(); } catch { toast("Microphone access denied"); return; }
+      btn.classList.add("on");
+      const t = el("span", { class: "gb-rec-time" }, `0:00 / 0:0${REACT_MAX_SEC}`);
+      const x = el("button", { class: "gb-icon-btn sm", type: "button", title: "Cancel", onclick: (ev) => { ev.stopPropagation(); close(); } }, el("i", { class: "ri-close-line" }));
+      const go = el("button", { class: "gb-send sm", type: "button", title: "Send reaction" }, el("i", { class: "ri-send-plane-fill" }));
+      const finish = async () => {
+        if (!session) return;
+        const s = session; session = null; clearInterval(timer); s.stop();
+        const result = await s.done;
+        rec.classList.add("busy");
+        if (result.duration < 0.5) { rec.classList.remove("busy"); close(); toast("Too short. Try again."); return; }
+        try {
+          const audio = await uploadVoice(result);
+          const ref = doc(db, "posts", p.id, "vreacts", state.uid);
+          const had = (await getDoc(ref)).exists();
+          await setDoc(ref, { uid: state.uid, audio, createdAt: serverTimestamp() });
+          if (!had) updateDoc(doc(db, "posts", p.id), { vreactCount: increment(1) }).catch(() => {});
+          row.querySelectorAll(".gb-vr-chip").forEach((c) => { if (c.title.startsWith((state.me?.name || "") + "'s")) c.remove(); });
+          addChip({ audio }, state.me);
+          sfxComment(); toast("Reaction sent");
+          if (author?.uid && author.uid !== state.uid && !had) writeNotif(author.uid, "comment", { postId: p.id, text: `${state.me?.name || "Someone"} reacted to your post with a voice note` }).catch(() => {});
+        } catch (err) { toast("Couldn't send: " + (err.message || "try again")); }
+        rec.classList.remove("busy"); close();
+      };
+      go.addEventListener("click", (ev) => { ev.stopPropagation(); finish(); });
+      rec.innerHTML = ""; rec.append(el("span", { class: "gb-rec-dot" }), t, el("span", { class: "gb-vr-hint" }, "Say it in 5 seconds"), x, go);
+      rec.classList.remove("hidden");
+      const t0 = Date.now();
+      timer = setInterval(() => {
+        const sec = Math.min(REACT_MAX_SEC, (Date.now() - t0) / 1000);
+        t.textContent = `0:0${Math.floor(sec)} / 0:0${REACT_MAX_SEC}`;
+        if (sec >= REACT_MAX_SEC) finish();
+      }, 150);
+    });
+    return { btn, row, rec };
+  };
+
   const openLightbox = (url) => {
     const img = el("img", { src: url, alt: "" });
     const close = () => { ov.remove(); document.removeEventListener("keydown", onKey); };
@@ -7015,14 +7289,16 @@ function _gbInit() {
     });
     const replyBtn = el("button", { class: "gb-act", type: "button", title: "Replies", onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; } },
       el("i", { class: "ri-chat-1-line" }), el("span", {}, p.commentCount ? String(p.commentCount) : ""));
-    const actions = el("div", { class: "gb-actions" }, likeBtn, replyBtn);
+    const vr = buildReactions(p, author, detail);
+    const actions = el("div", { class: "gb-actions" }, likeBtn, replyBtn, vr.btn);
 
     const main = el("div", { class: "gb-main" },
       el("div", { class: "gb-headrow" }, nameLine(author, p.createdAt, detail), tools),
+      p.prompt?.q ? el("a", { class: "gb-ptag", href: `#prompt/${p.prompt.day}`, onclick: (e) => e.stopPropagation() }, el("i", { class: "ri-chat-quote-line" }), ` ${p.prompt.q}`) : null,
       p.cover?.url && p.text ? buildCover(p, detail) : (p.text ? longText(p, detail) : null),
       p.audio?.url ? buildVoicePlayer(p.audio) : null,
       p.video?.url ? buildVideoNote(p.video) : null,
-      actions,
+      actions, vr.rec, vr.row,
     );
     post.append(avcol, main);
     if (!detail) main.addEventListener("click", (e) => { if (!e.target.closest("button,a,.gb-voice,.gb-vid,.gb-cover")) location.hash = `#post/${p.id}`; });
@@ -7074,7 +7350,7 @@ function _gbInit() {
     [1, 2, 3, 4].forEach(() => list.appendChild(skeletonRow()));
     const sentinel = el("div", { class: "gb-sentinel" });
     const composer = buildComposer({ placeholder: "Share a thought, or tap the mic…", maxSec: MAX_POST_SEC, onSend: createPost, allowImage: true, allowVideo: true, maxChars: 2500 });
-    col.append(list, composer);
+    col.append(buildPromptCard(composer), list, composer);
     shell.append(buildRail(), col);
     root.appendChild(shell);
 
@@ -7298,7 +7574,7 @@ function _gbInit() {
 
     return dispose;
   };
-  return { renderVoiceFeed, renderVoiceDetail, renderVoicePost, stopAllAudio };
+  return { renderVoiceFeed, renderVoiceDetail, renderVoicePost, renderPromptPage, stopAllAudio };
 }
 
 // =========================================================================
