@@ -1,4 +1,4 @@
-// BUILD 2026-11-11 16:00 — onboarding cartoon + CSS logo + voice-only pages
+// BUILD 2026-11-12 00:15 — onboarding cartoon + CSS logo + voice-only pages
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
@@ -1852,7 +1852,7 @@ $("#notifBtn").addEventListener("click", () => { location.hash = "#notifications
 // 7. ROUTER
 // =========================================================================
 // "reels" removed — videos live in the feed as regular posts
-const routes = ["feed", "chats", "ai-chat", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn", "character", "prompt"];
+const routes = ["feed", "chats", "ai-chat", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn", "character", "prompt", "games"];
 
 // Feed DOM caching — lets us restore the feed instantly when navigating
 // back from a post without re-rendering or re-shuffling.
@@ -1938,6 +1938,7 @@ const router = () => {
     case "groups":     renderGroups(content); break;
     case "explore":    renderExplore(content, rest[0] === "tag" ? rest[1] : null); break;
     case "character":  renderCharacterPage(content); break;
+    case "games":      content._unsub = renderGames(content, rest[0]); break;
     case "prompt":     content._unsub = gb().renderPromptPage(content, rest[0]); break;
     case "saved":      renderSaved(content); break;
     case "settings":   renderSettings(content); break;
@@ -7723,4 +7724,394 @@ function _gbInit() {
   vv?.addEventListener("scroll", sync);
   window.addEventListener("orientationchange", () => setTimeout(sync, 250));
 })();
+
+// =========================================================================
+// 17. GAMES — dedicated games page (#games). Add new games to GAMES below.
+//     Each game: { id, name, tagline, art(): html, mount(root, { exit }) -> dispose }
+// =========================================================================
+const GAMES = [
+  {
+    id: "bubble", name: "Bubble Pop", tagline: "Aim, shoot and pop the bubbles. 24 levels.",
+    art: () => '<svg viewBox="0 0 120 90"><defs><radialGradient id="gbp1" cx="35%" cy="30%"><stop offset="0" stop-color="#fff" stop-opacity=".9"/><stop offset=".25" stop-color="#fff" stop-opacity=".1"/></radialGradient></defs>' +
+      [[20,18,"#ef4444"],[44,18,"#facc15"],[68,18,"#22c55e"],[92,18,"#3b82f6"],[32,40,"#3b82f6"],[56,40,"#ef4444"],[80,40,"#a855f7"],[44,62,"#22c55e"],[68,62,"#facc15"]]
+        .map(([x, y, c]) => `<circle cx="${x}" cy="${y}" r="12" fill="${c}" stroke="#1e1b4b" stroke-width="2.4"/><circle cx="${x}" cy="${y}" r="12" fill="url(#gbp1)"/>`).join("") +
+      '<circle cx="60" cy="84" r="6" fill="#fb923c" stroke="#1e1b4b" stroke-width="2.4"/></svg>',
+    mount: (root, ctx) => mountBubblePop(root, ctx),
+  },
+];
+
+function gamesProgress(id) {
+  const key = `gb_game_${id}_${state.uid || "guest"}`;
+  const read = () => { try { return JSON.parse(localStorage.getItem(key)) || {}; } catch { return {}; } };
+  return { read, write: (p) => { try { localStorage.setItem(key, JSON.stringify(p)); } catch {} } };
+}
+
+function renderGames(root, gameId) {
+  const game = GAMES.find((g) => g.id === gameId);
+  if (game) return game.mount(root, { exit: () => { location.hash = "#games"; } });
+  const cards = GAMES.map((g) => {
+    const p = gamesProgress(g.id).read(), stars = Object.values(p.stars || {}).reduce((a, b) => a + b, 0);
+    const c = el("button", { class: "gm-card", type: "button", onclick: () => { location.hash = `#games/${g.id}`; } });
+    c.innerHTML = `<span class="gm-card-art">${g.art()}</span><span class="gm-card-b"><strong>${g.name}</strong><small>${g.tagline}</small>` +
+      `<em>${p.unlocked ? `Level ${p.unlocked} · ` : ""}${stars} <i class="ri-star-fill"></i></em></span>`;
+    return c;
+  });
+  cards.push(el("div", { class: "gm-card soon" }, el("i", { class: "ri-gamepad-line" }), el("strong", {}, "More games coming soon")));
+  root.appendChild(el("div", { class: "gm-hub" },
+    el("div", { class: "gm-hub-h" }, el("h2", {}, "Games"), el("p", {}, "Take a break, play, and come back to the conversation.")),
+    el("div", { class: "gm-grid" }, ...cards)));
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// BUBBLE POP — hex-grid bubble shooter
+// ---------------------------------------------------------------------------
+const BP_LEVELS = [
+  { rows: 4, colors: 3, shape: "full" }, { rows: 5, colors: 3, shape: "full" }, { rows: 5, colors: 3, shape: "stripes" },
+  { rows: 6, colors: 4, shape: "full" }, { rows: 6, colors: 4, shape: "triangle" }, { rows: 6, colors: 4, shape: "diamond" },
+  { rows: 7, colors: 4, shape: "checker" }, { rows: 7, colors: 4, shape: "zigzag", stone: .05 }, { rows: 7, colors: 5, shape: "full", stone: .06 },
+  { rows: 8, colors: 5, shape: "heart" }, { rows: 8, colors: 5, shape: "pillars", stone: .08 }, { rows: 8, colors: 5, shape: "triangle", bombs: 2 },
+  { rows: 8, colors: 5, shape: "diamond", stone: .08, bombs: 2 }, { rows: 9, colors: 5, shape: "stripes", stone: .1, bombs: 2 }, { rows: 9, colors: 6, shape: "full", bombs: 3 },
+  { rows: 9, colors: 6, shape: "heart", stone: .1, bombs: 3 }, { rows: 9, colors: 6, shape: "checker", stone: .12, bombs: 3 }, { rows: 10, colors: 6, shape: "zigzag", stone: .12, bombs: 4 },
+  { rows: 10, colors: 6, shape: "pillars", stone: .14, bombs: 4 }, { rows: 10, colors: 6, shape: "diamond", stone: .14, bombs: 4 }, { rows: 10, colors: 6, shape: "full", stone: .16, bombs: 5 },
+  { rows: 10, colors: 6, shape: "heart", stone: .16, bombs: 5 }, { rows: 10, colors: 6, shape: "triangle", stone: .18, bombs: 5 }, { rows: 11, colors: 6, shape: "stripes", stone: .18, bombs: 6 },
+];
+const BP_COLORS = ["#ef4444", "#facc15", "#22c55e", "#3b82f6", "#a855f7", "#fb923c"];
+const BP = { W: 360, H: 600, R: 18, COLS: 10, TOP: 6 };
+BP.ROWH = BP.R * Math.sqrt(3);
+BP.CX = BP.W / 2; BP.CY = BP.H - 48; BP.DEAD = BP.H - 112;
+BP.MAXROW = Math.floor((BP.DEAD - BP.TOP - BP.R) / BP.ROWH);
+
+function bpRng(seed) { let a = seed >>> 0; return () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+const bpCols = (r) => (r % 2 ? BP.COLS - 1 : BP.COLS);
+const bpPos = (r, c) => ({ x: BP.R + c * 2 * BP.R + (r % 2 ? BP.R : 0), y: BP.TOP + BP.R + r * BP.ROWH });
+const bpNeighbors = (r, c) => {
+  const out = [[r, c - 1], [r, c + 1]];
+  const cs = r % 2 ? [c, c + 1] : [c - 1, c];
+  [r - 1, r + 1].forEach((rr) => cs.forEach((cc) => out.push([rr, cc])));
+  return out.filter(([rr, cc]) => rr >= 0 && rr < BP.MAXROW + 2 && cc >= 0 && cc < bpCols(rr));
+};
+function bpShape(shape, r, c, rows) {
+  const mid = (BP.COLS - 1) / 2, x = c + (r % 2 ? .5 : 0);
+  switch (shape) {
+    case "triangle": return Math.abs(x - mid) <= (rows - 1 - r) * 0.55 + 1.2;
+    case "diamond": { const h = (rows - 1) / 2; return Math.abs(x - mid) <= (h - Math.abs(r - h)) * 0.9 + 1.4; }
+    case "stripes": return r % 3 !== 2;
+    case "checker": return (r + c) % 2 === 0 || r < 2;
+    case "zigzag": return ((c + (r % 4 < 2 ? 0 : 2)) % 5) !== 4;
+    case "pillars": return c % 3 !== 1 || r < 2;
+    case "heart": { const dx = (x - mid) / 4.6, dy = (r - rows * 0.45) / (rows * 0.55); return Math.pow(dx * dx + dy * dy - 0.55, 3) - dx * dx * Math.pow(dy, 3) * 1.6 <= 0.02; }
+    default: return true;
+  }
+}
+function bpBuildLevel(n) {
+  const L = BP_LEVELS[n], rnd = bpRng(7919 * (n + 3));
+  const grid = Array.from({ length: BP.MAXROW + 3 }, (_, r) => Array(bpCols(r)).fill(null));
+  const seeds = Array.from({ length: L.colors + 2 }, (_, i) => ({ r: rnd() * L.rows, c: rnd() * BP.COLS, k: i % L.colors }));
+  const cells = [];
+  for (let r = 0; r < L.rows; r++) for (let c = 0; c < bpCols(r); c++) {
+    if (!bpShape(L.shape, r, c, L.rows)) continue;
+    const x = c + (r % 2 ? .5 : 0);
+    let best = 1e9, k = 0;
+    seeds.forEach((s) => { const d = Math.hypot((s.r - r) * 1.4, s.c - x); if (d < best) { best = d; k = s.k; } });
+    if (rnd() < 0.12) k = Math.floor(rnd() * L.colors);
+    grid[r][c] = { t: "c", k }; cells.push([r, c]);
+  }
+  // keep row 0 anchored so the shape hangs from the ceiling
+  for (let c = 0; c < BP.COLS; c++) if (!grid[0][c] && cells.length) grid[0][c] = { t: "c", k: Math.floor(rnd() * L.colors) };
+  const pickable = () => cells.filter(([r, c]) => r > 0 && grid[r][c] && grid[r][c].t === "c");
+  if (L.stone) pickable().forEach(([r, c]) => { if (rnd() < L.stone) grid[r][c] = { t: "stone" }; });
+  for (let i = 0; i < (L.bombs || 0); i++) { const p = pickable(); if (!p.length) break; const [r, c] = p[Math.floor(rnd() * p.length)]; grid[r][c] = { t: "bomb" }; }
+  let count = 0; grid.forEach((row) => row.forEach((b) => { if (b && b.t !== "stone") count++; }));
+  const shots = Math.ceil(count * (0.64 - n * 0.0045)) + 6;
+  return { grid, shots, colors: L.colors };
+}
+
+function mountBubblePop(root, { exit }) {
+  const prog = gamesProgress("bubble");
+  let P = prog.read(); P.unlocked = P.unlocked || 1; P.stars = P.stars || {}; P.best = P.best || {};
+  const wrap = el("div", { class: "gm-wrap" });
+  root.appendChild(wrap);
+  let stopLoop = null;
+  const dispose = () => { stopLoop?.(); wrap.remove(); };
+
+  // ------------ audio (tiny synth, created on first tap)
+  let ac = null;
+  const beep = (f, d = .08, type = "sine", g = .06, slide = 0) => {
+    try {
+      ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+      const o = ac.createOscillator(), v = ac.createGain();
+      o.type = type; o.frequency.value = f; if (slide) o.frequency.linearRampToValueAtTime(f + slide, ac.currentTime + d);
+      v.gain.value = g; v.gain.exponentialRampToValueAtTime(.0001, ac.currentTime + d);
+      o.connect(v).connect(ac.destination); o.start(); o.stop(ac.currentTime + d);
+    } catch {}
+  };
+
+  // ------------ level select
+  const showLevels = () => {
+    stopLoop?.(); stopLoop = null; wrap.innerHTML = "";
+    const total = Object.values(P.stars).reduce((a, b) => a + b, 0);
+    const grid = el("div", { class: "gm-levels" });
+    BP_LEVELS.forEach((_, i) => {
+      const n = i + 1, open = n <= P.unlocked, st = P.stars[n] || 0;
+      const b = el("button", { class: `gm-lv${open ? "" : " locked"}${st ? " done" : ""}`, type: "button", onclick: () => { if (open) play(i); else toast("Finish the previous level first"); } });
+      b.innerHTML = open ? `<b>${n}</b><span>${[1, 2, 3].map((k) => `<i class="ri-star-${k <= st ? "fill" : "line"}"></i>`).join("")}</span>` : '<i class="ri-lock-2-fill"></i>';
+      grid.appendChild(b);
+    });
+    wrap.append(
+      el("div", { class: "gm-top" },
+        el("button", { class: "gb-icon-btn", type: "button", onclick: exit }, el("i", { class: "ri-arrow-left-line" })),
+        el("strong", {}, "Bubble Pop"), el("span", { class: "gm-stars" }, el("i", { class: "ri-star-fill" }), ` ${total}`)),
+      el("div", { class: "gm-lv-wrap" }, el("p", { class: "gm-sub" }, `Choose a level · ${BP_LEVELS.length} levels`), grid));
+  };
+
+  // ------------ play
+  const play = (idx) => {
+    stopLoop?.(); wrap.innerHTML = "";
+    const L = bpBuildLevel(idx);
+    let grid = L.grid, shots = L.shots, score = 0, state_ = "aim";
+    const startShots = L.shots;
+    const canvas = el("canvas", { class: "gm-canvas" });
+    const ctx = canvas.getContext("2d");
+    const scoreEl = el("span", { class: "gm-score" }, "0"), shotsEl = el("span", { class: "gm-shots" }, String(shots));
+    const top = el("div", { class: "gm-top" },
+      el("button", { class: "gb-icon-btn", type: "button", title: "Levels", onclick: showLevels }, el("i", { class: "ri-arrow-left-line" })),
+      el("strong", {}, `Level ${idx + 1}`), scoreEl,
+      el("span", { class: "gm-pill", title: "Shots left" }, el("i", { class: "ri-record-circle-fill" }), shotsEl),
+      el("button", { class: "gb-icon-btn", type: "button", title: "Restart", onclick: () => play(idx) }, el("i", { class: "ri-restart-line" })));
+    const stage = el("div", { class: "gm-stage" }, canvas);
+    wrap.append(top, stage);
+
+    // sizing
+    let scale = 1, dpr = Math.min(2, window.devicePixelRatio || 1);
+    const fit = () => {
+      const aw = stage.clientWidth || 360, ah = stage.clientHeight || 560;
+      const cssW = Math.max(240, Math.min(aw, ah * BP.W / BP.H));
+      canvas.style.width = cssW + "px"; canvas.style.height = cssW * BP.H / BP.W + "px";
+      canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssW * BP.H / BP.W * dpr);
+      scale = canvas.width / BP.W; sprites.clear();
+    };
+
+    // sprites (cached per type/colour)
+    const sprites = new Map();
+    const sprite = (key, draw) => {
+      if (sprites.has(key)) return sprites.get(key);
+      const s = Math.ceil(BP.R * 2 * scale) + 4, c = document.createElement("canvas"); c.width = c.height = s;
+      const g = c.getContext("2d"); g.translate(s / 2, s / 2); g.scale(scale, scale); draw(g); sprites.set(key, c); return c;
+    };
+    const R = BP.R;
+    const drawBall = (g, col) => {
+      const gr = g.createRadialGradient(-R * .35, -R * .4, R * .1, 0, 0, R);
+      gr.addColorStop(0, "#ffffff"); gr.addColorStop(.18, col); gr.addColorStop(1, shade(col, -.35));
+      g.beginPath(); g.arc(0, 0, R - 1, 0, 7); g.fillStyle = gr; g.fill(); g.lineWidth = 2; g.strokeStyle = "#1e1b4b"; g.stroke();
+      g.beginPath(); g.ellipse(-R * .35, -R * .42, R * .28, R * .16, -.6, 0, 7); g.fillStyle = "rgba(255,255,255,.65)"; g.fill();
+    };
+    function shade(hex, amt) { const n = parseInt(hex.slice(1), 16); const f = (v) => Math.max(0, Math.min(255, Math.round(v * (1 + amt)))); return `rgb(${f(n >> 16)},${f((n >> 8) & 255)},${f(n & 255)})`; }
+    const ballSprite = (b) => b.t === "c" ? sprite("c" + b.k, (g) => drawBall(g, BP_COLORS[b.k]))
+      : b.t === "stone" ? sprite("stone", (g) => { drawBall(g, "#94a3b8"); g.strokeStyle = "#475569"; g.lineWidth = 2; g.beginPath(); g.moveTo(-6, -8); g.lineTo(0, -1); g.lineTo(-3, 7); g.moveTo(0, -1); g.lineTo(8, 3); g.stroke(); })
+      : sprite("bomb", (g) => { drawBall(g, "#334155"); g.fillStyle = "#ef4444"; g.beginPath(); g.arc(0, 1, 6, 0, 7); g.fill(); g.strokeStyle = "#fde047"; g.lineWidth = 2.4; g.beginPath(); g.moveTo(4, -9); g.quadraticCurveTo(10, -14, 12, -9); g.stroke(); g.fillStyle = "#fde047"; g.beginPath(); g.arc(12, -9, 2.6, 0, 7); g.fill(); });
+
+    // character at the cannon
+    const me = { ...defaultCharacter(state.uid), ...(state.me?.character || {}) };
+    const face = new Image(); face.src = characterDataUri(me);
+
+    // state
+    let cur = null, next = null, shot = null, angle = Math.PI / 2, aiming = false;
+    const parts = [], falls = [], floats = [];
+    const present = () => { const s = new Set(); grid.forEach((row) => row.forEach((b) => { if (b && b.t === "c") s.add(b.k); })); return [...s]; };
+    const randColor = () => { const p = present(); return { t: "c", k: p.length ? p[Math.floor(Math.random() * p.length)] : 0 }; };
+    cur = randColor(); next = randColor();
+    const countLeft = () => { let n = 0; grid.forEach((row) => row.forEach((b) => { if (b && b.t !== "stone") n++; })); return n; };
+
+    // aiming guide (bounces off walls)
+    const guide = () => {
+      const pts = []; let x = BP.CX, y = BP.CY - 30, vx = Math.cos(angle), vy = -Math.sin(angle), len = 0;
+      while (len < 560 && y > BP.TOP + R) {
+        x += vx * 8; y += vy * 8; len += 8;
+        if (x < R) { x = R; vx = -vx; } else if (x > BP.W - R) { x = BP.W - R; vx = -vx; }
+        if (hits(x, y)) break;
+        if (len % 24 === 0) pts.push([x, y]);
+      }
+      return pts;
+    };
+    const hits = (x, y) => {
+      if (y <= BP.TOP + R) return true;
+      const r0 = Math.max(0, Math.floor((y - BP.TOP - R) / BP.ROWH) - 1), r1 = Math.min(grid.length - 1, r0 + 3);
+      for (let r = r0; r <= r1; r++) for (let c = 0; c < grid[r].length; c++) {
+        if (!grid[r][c]) continue; const p = bpPos(r, c);
+        if ((p.x - x) ** 2 + (p.y - y) ** 2 < (R * 1.82) ** 2) return true;
+      }
+      return false;
+    };
+    const snap = (x, y) => {
+      let best = null, bd = 1e9;
+      const r0 = Math.max(0, Math.round((y - BP.TOP - R) / BP.ROWH) - 2), r1 = Math.min(BP.MAXROW + 1, r0 + 4);
+      for (let r = r0; r <= r1; r++) for (let c = 0; c < bpCols(r); c++) {
+        if (grid[r][c]) continue;
+        const anchored = r === 0 || bpNeighbors(r, c).some(([rr, cc]) => grid[rr]?.[cc]);
+        if (!anchored) continue;
+        const p = bpPos(r, c), d = (p.x - x) ** 2 + (p.y - y) ** 2;
+        if (d < bd) { bd = d; best = [r, c]; }
+      }
+      return best;
+    };
+
+    // effects
+    const burst = (x, y, col, n = 7) => { for (let i = 0; i < n; i++) { const a = Math.random() * 6.28, s = 60 + Math.random() * 140; parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 40, life: .5 + Math.random() * .3, col, r: 2 + Math.random() * 3 }); } };
+    const floatText = (x, y, t) => floats.push({ x, y, t, life: 1 });
+
+    // resolve a landed bubble
+    const land = (r, c, ball) => {
+      grid[r][c] = ball;
+      let pop = new Set(), blast = new Set();
+      const key = (a, b) => a * 100 + b;
+      const bombsAround = (cells) => { const out = []; cells.forEach(([rr, cc]) => bpNeighbors(rr, cc).forEach(([a, b]) => { if (grid[a]?.[b]?.t === "bomb") out.push([a, b]); })); return out; };
+      const explode = (br, bc) => {
+        const bp = bpPos(br, bc);
+        grid.forEach((row, rr) => row.forEach((b, cc) => { if (b && b.t !== "stone") { const p = bpPos(rr, cc); if ((p.x - bp.x) ** 2 + (p.y - bp.y) ** 2 <= (R * 3.6) ** 2) blast.add(key(rr, cc)); } }));
+        beep(120, .35, "sawtooth", .08, -60);
+      };
+      // matching group
+      const group = []; const seen = new Set([key(r, c)]); const q = [[r, c]];
+      while (q.length) { const [a, b] = q.pop(); group.push([a, b]); bpNeighbors(a, b).forEach(([x, y]) => { const n = grid[x]?.[y]; if (n && n.t === "c" && n.k === ball.k && !seen.has(key(x, y))) { seen.add(key(x, y)); q.push([x, y]); } }); }
+      const touching = bombsAround([[r, c]]);
+      if (group.length >= 3 || touching.length) {
+        if (group.length >= 3) group.forEach(([a, b]) => pop.add(key(a, b)));
+        const bombs = bombsAround(group.length >= 3 ? group : [[r, c]]);
+        bombs.forEach(([a, b]) => { explode(a, b); blast.add(key(a, b)); });
+        if (touching.length && group.length < 3) blast.add(key(r, c));
+      }
+      const gone = new Set([...pop, ...blast]);
+      let popped = 0;
+      gone.forEach((k) => { const a = Math.floor(k / 100), b = k % 100, n = grid[a]?.[b]; if (!n) return; const p = bpPos(a, b); burst(p.x, p.y, n.t === "c" ? BP_COLORS[n.k] : n.t === "bomb" ? "#fb923c" : "#94a3b8", n.t === "bomb" ? 14 : 7); grid[a][b] = null; popped++; });
+      // floating bubbles fall
+      const hang = new Set(); const q2 = [];
+      for (let cc = 0; cc < bpCols(0); cc++) if (grid[0][cc]) { hang.add(key(0, cc)); q2.push([0, cc]); }
+      while (q2.length) { const [a, b] = q2.pop(); bpNeighbors(a, b).forEach(([x, y]) => { if (grid[x]?.[y] && !hang.has(key(x, y))) { hang.add(key(x, y)); q2.push([x, y]); } }); }
+      let fell = 0;
+      grid.forEach((row, rr) => row.forEach((n, cc) => { if (n && !hang.has(key(rr, cc))) { const p = bpPos(rr, cc); falls.push({ x: p.x, y: p.y, vy: -60 - Math.random() * 60, vx: (Math.random() - .5) * 60, n, a: 1 }); grid[rr][cc] = null; fell++; } }));
+      if (popped) { beep(520 + Math.min(popped, 10) * 40, .12, "triangle", .07, 200); }
+      else beep(220, .06, "sine", .05);
+      const gain = popped * 10 + fell * 25 * (fell > 3 ? 2 : 1);
+      if (gain) { score += gain; scoreEl.textContent = score; const p = bpPos(r, c); floatText(p.x, p.y, "+" + gain); }
+      return popped + fell;
+    };
+
+    const finish = (won) => {
+      state_ = won ? "won" : "lost";
+      const ratio = shots / startShots, st = won ? (ratio >= .35 ? 3 : ratio >= .15 ? 2 : 1) : 0;
+      if (won) {
+        score += shots * 20; scoreEl.textContent = score;
+        P.stars[idx + 1] = Math.max(P.stars[idx + 1] || 0, st);
+        P.best[idx + 1] = Math.max(P.best[idx + 1] || 0, score);
+        P.unlocked = Math.max(P.unlocked, Math.min(BP_LEVELS.length, idx + 2));
+        prog.write(P); beep(660, .5, "triangle", .08, 400);
+      } else beep(160, .5, "sawtooth", .07, -90);
+      const m = el("div", { class: "gm-modal" }, el("div", { class: "gm-modal-c" },
+        el("h3", {}, won ? "Level complete!" : "Out of shots"),
+        won ? el("div", { class: "gm-modal-stars" }, ...[1, 2, 3].map((k) => el("i", { class: `ri-star-${k <= st ? "fill" : "line"}`, style: `animation-delay:${k * .18}s` }))) : el("p", {}, "So close. Try a different angle!"),
+        el("p", { class: "gm-modal-s" }, `Score ${score}`),
+        el("div", { class: "gm-modal-b" },
+          won && idx + 1 < BP_LEVELS.length ? el("button", { class: "gbu-btn primary", type: "button", onclick: () => play(idx + 1) }, "Next level") : null,
+          el("button", { class: "gbu-btn", type: "button", onclick: () => play(idx) }, won ? "Replay" : "Try again"),
+          el("button", { class: "gbu-btn", type: "button", onclick: showLevels }, "Levels"))));
+      setTimeout(() => stage.appendChild(m), won ? 700 : 400);
+    };
+
+    const shoot = () => {
+      if (state_ !== "aim" || shots <= 0) return;
+      const s = 640;
+      shot = { x: BP.CX, y: BP.CY - 30, vx: Math.cos(angle) * s, vy: -Math.sin(angle) * s, b: cur };
+      shots--; shotsEl.textContent = shots; state_ = "fly"; beep(300, .07, "square", .04, 120);
+    };
+    const swap = () => { const t = cur; cur = next; next = t; beep(420, .05); };
+
+    // input
+    const toLocal = (e) => { const r = canvas.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * BP.W, y: (e.clientY - r.top) / r.height * BP.H }; };
+    const aimAt = (p) => { const dx = p.x - BP.CX, dy = BP.CY - p.y; if (dy < 10) return false; angle = Math.max(.14, Math.min(Math.PI - .14, Math.atan2(dy, dx))); return true; };
+    let downOnNext = false, valid = false;
+    canvas.addEventListener("pointerdown", (e) => {
+      canvas.setPointerCapture?.(e.pointerId); const p = toLocal(e);
+      downOnNext = Math.hypot(p.x - (BP.CX - 74), p.y - (BP.CY + 12)) < 26;
+      if (downOnNext) { swap(); return; }
+      aiming = true; valid = aimAt(p);
+    });
+    canvas.addEventListener("pointermove", (e) => { if (aiming) valid = aimAt(toLocal(e)); else if (e.pointerType === "mouse") aimAt(toLocal(e)); });
+    const release = () => { if (aiming && valid) shoot(); aiming = false; downOnNext = false; };
+    canvas.addEventListener("pointerup", release);
+    canvas.addEventListener("pointercancel", () => { aiming = false; });
+
+    // loop
+    let last = performance.now(), raf = 0, settle = 0;
+    const step = (now) => {
+      const dt = Math.min(.033, (now - last) / 1000); last = now;
+      if (state_ === "fly" && shot) {
+        const dist = Math.hypot(shot.vx, shot.vy) * dt, n = Math.max(1, Math.ceil(dist / 6));
+        for (let i = 0; i < n && shot; i++) {
+          shot.x += shot.vx * dt / n; shot.y += shot.vy * dt / n;
+          if (shot.x < R) { shot.x = R; shot.vx = -shot.vx; beep(260, .03, "sine", .03); } else if (shot.x > BP.W - R) { shot.x = BP.W - R; shot.vx = -shot.vx; beep(260, .03, "sine", .03); }
+          if (hits(shot.x, shot.y)) {
+            const cell = snap(shot.x, shot.y), b = shot.b; shot = null;
+            if (!cell || cell[0] > BP.MAXROW) { finish(false); break; }
+            land(cell[0], cell[1], b);
+            state_ = "settle"; settle = .45;
+          }
+        }
+      } else if (state_ === "settle") {
+        settle -= dt;
+        if (settle <= 0 && !falls.length) {
+          if (countLeft() === 0) finish(true);
+          else if (shots <= 0) finish(false);
+          else {
+            let low = 0; grid.forEach((row, r) => row.forEach((b) => { if (b) low = Math.max(low, r); }));
+            if (low > BP.MAXROW) finish(false);
+            else { cur = next; if (!present().includes(cur.k) && cur.t === "c") cur = randColor(); next = randColor(); state_ = "aim"; }
+          }
+        }
+      }
+      parts.forEach((p) => { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 420 * dt; p.life -= dt; });
+      for (let i = parts.length - 1; i >= 0; i--) if (parts[i].life <= 0) parts.splice(i, 1);
+      falls.forEach((f) => { f.vy += 900 * dt; f.y += f.vy * dt; f.x += f.vx * dt; f.a = Math.max(0, f.a - dt * .4); });
+      for (let i = falls.length - 1; i >= 0; i--) if (falls[i].y > BP.H + 40) falls.splice(i, 1);
+      floats.forEach((f) => { f.y -= 28 * dt; f.life -= dt; });
+      for (let i = floats.length - 1; i >= 0; i--) if (floats[i].life <= 0) floats.splice(i, 1);
+      draw(now); raf = requestAnimationFrame(step);
+    };
+    const draw = (now) => {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      const bg = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      bg.addColorStop(0, "#1e1b4b"); bg.addColorStop(.55, "#312e81"); bg.addColorStop(1, "#1d4ed8");
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.setTransform(scale, 0, 0, scale, 0, 0);
+      // danger line
+      ctx.setLineDash([6, 8]); ctx.strokeStyle = "rgba(248,113,113,.55)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, BP.DEAD); ctx.lineTo(BP.W, BP.DEAD); ctx.stroke(); ctx.setLineDash([]);
+      const put = (b, x, y, a = 1) => { const s = ballSprite(b), w = s.width / scale; ctx.globalAlpha = a; ctx.drawImage(s, x - w / 2, y - w / 2, w, w); ctx.globalAlpha = 1; };
+      grid.forEach((row, r) => row.forEach((b, c) => { if (b) { const p = bpPos(r, c); put(b, p.x, p.y); } }));
+      falls.forEach((f) => put(f.n, f.x, f.y, f.a));
+      // guide
+      if ((state_ === "aim") && (aiming || true)) { guide().forEach(([x, y], i) => { ctx.fillStyle = `rgba(255,255,255,${Math.max(.15, .8 - i * .03)})`; ctx.beginPath(); ctx.arc(x, y, 2.6, 0, 7); ctx.fill(); }); }
+      // cannon
+      ctx.save(); ctx.translate(BP.CX, BP.CY); ctx.rotate(Math.PI / 2 - angle);
+      const bar = ctx.createLinearGradient(-12, 0, 12, 0); bar.addColorStop(0, "#6d28d9"); bar.addColorStop(.5, "#a78bfa"); bar.addColorStop(1, "#6d28d9");
+      ctx.fillStyle = bar; ctx.strokeStyle = "#1e1b4b"; ctx.lineWidth = 3; ctx.beginPath(); ctx.roundRect(-12, -52, 24, 52, 8); ctx.fill(); ctx.stroke();
+      ctx.restore();
+      ctx.fillStyle = "#4c1d95"; ctx.strokeStyle = "#1e1b4b"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(BP.CX, BP.CY, 28, 0, 7); ctx.fill(); ctx.stroke();
+      if (face.complete && face.naturalWidth) { ctx.save(); ctx.beginPath(); ctx.arc(BP.CX, BP.CY, 24, 0, 7); ctx.clip(); ctx.drawImage(face, BP.CX - 24, BP.CY - 24, 48, 48); ctx.restore(); }
+      if (cur && state_ === "aim") put(cur, BP.CX + Math.cos(angle) * 34, BP.CY - Math.sin(angle) * 34);
+      if (shot) put(shot.b, shot.x, shot.y);
+      // next bubble
+      ctx.fillStyle = "rgba(255,255,255,.75)"; ctx.font = "bold 10px system-ui"; ctx.textAlign = "center"; ctx.fillText("NEXT · tap", BP.CX - 74, BP.CY - 14);
+      if (next) { ctx.save(); ctx.translate(BP.CX - 74, BP.CY + 12); ctx.scale(.8, .8); put(next, 0, 0); ctx.restore(); }
+      // particles + text
+      parts.forEach((p) => { ctx.globalAlpha = Math.max(0, p.life * 2); ctx.fillStyle = p.col; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill(); }); ctx.globalAlpha = 1;
+      ctx.font = "bold 16px system-ui"; floats.forEach((f) => { ctx.globalAlpha = Math.min(1, f.life * 1.5); ctx.fillStyle = "#fde047"; ctx.strokeStyle = "#1e1b4b"; ctx.lineWidth = 3; ctx.strokeText(f.t, f.x, f.y); ctx.fillText(f.t, f.x, f.y); }); ctx.globalAlpha = 1;
+    };
+    const ro = window.ResizeObserver ? new ResizeObserver(fit) : null; ro?.observe(stage);
+    fit(); raf = requestAnimationFrame(step);
+    stopLoop = () => { cancelAnimationFrame(raf); ro?.disconnect(); };
+  };
+
+  showLevels();
+  return dispose;
+}
 
