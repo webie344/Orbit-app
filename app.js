@@ -1,4 +1,4 @@
-// BUILD 2026-11-11 07:30 — onboarding cartoon + CSS logo + voice-only pages
+// BUILD 2026-11-11 10:10 — onboarding cartoon + CSS logo + voice-only pages
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
@@ -2265,7 +2265,7 @@ const openPostMenu = (p, author, isMine) => {
 // Text + voice-note posts only (Get better). Media posts render nothing.
 function renderPost(p, author, opts = {}) {
   const hasMedia = Array.isArray(p.media) ? p.media.length > 0 : !!p.media;
-  if (hasMedia || (!p.audio?.url && !p.text)) return el("div", { style: "display:none" });
+  if (hasMedia || (!p.audio?.url && !p.text && !p.video?.url)) return el("div", { style: "display:none" });
   return gb().renderVoicePost(p, author, { detail: !!opts.detailView });
 }
 const _renderMediaPost = (p, author, opts = {}) => {
@@ -3486,7 +3486,7 @@ const renderExplore = (root, hashtagFilter = null) => {
   let docs = [];
   const draw = async () => {
     const posts = docs.map((d) => ({ id: d.id, ...d.data() }))
-      .filter((p) => !(Array.isArray(p.media) ? p.media.length : p.media) && (p.audio?.url || p.text))
+      .filter((p) => !(Array.isArray(p.media) ? p.media.length : p.media) && (p.audio?.url || p.text || p.video?.url))
       .filter((p) => !(state.me?.hiddenPosts || []).includes(p.id));
     posts.sort(sort === "top"
       ? (a, b) => (b.orbitCount || 0) - (a.orbitCount || 0)
@@ -6409,15 +6409,20 @@ function _gbInit() {
   // -------------------------------------------------------------------------
   // COMPOSER (text + voice only)
   // -------------------------------------------------------------------------
-  const buildComposer = ({ placeholder, maxSec, onSend, allowImage = false }) => {
+  const buildComposer = ({ placeholder, maxSec, onSend, allowImage = false, allowVideo = false }) => {
     const input = el("input", { type: "text", placeholder, maxlength: "500", autocomplete: "off" });
     const mic = el("button", { class: "gb-icon-btn gb-mic", type: "button", title: "Record a voice note" }, el("i", { class: "ri-mic-fill" }));
     const send = el("button", { class: "gb-send hidden", type: "button", title: "Send" }, el("i", { class: "ri-send-plane-fill" }));
     const imgBtn = allowImage ? el("button", { class: "gb-icon-btn", type: "button", title: "Add a cover image" }, el("i", { class: "ri-image-add-line" })) : null;
     const fileIn = allowImage ? el("input", { type: "file", accept: "image/*", class: "hidden" }) : null;
+    const vidBtn = allowVideo ? el("button", { class: "gb-icon-btn", type: "button", title: "Add a video note" }, el("i", { class: "ri-video-add-line" })) : null;
+    const vidIn = allowVideo ? el("input", { type: "file", accept: "video/*", class: "hidden" }) : null;
     const attach = el("div", { class: "gb-attach hidden" });
-    let image = null, imageUrl = null;
-    const bar = el("div", { class: "gb-input-bar" }, input, ...(imgBtn ? [imgBtn, fileIn] : []), mic, send);
+    let image = null, imageUrl = null, imageEdit = null, video = null, videoEdit = null, videoUrl = null;
+    const extras = [];
+    if (imgBtn) extras.push(imgBtn, fileIn);
+    if (vidBtn) extras.push(vidBtn, vidIn);
+    const bar = el("div", { class: "gb-input-bar" }, input, ...extras, mic, send);
     const rec = el("div", { class: "gb-rec hidden" });
     const bannerText = el("span", {});
     const bannerClose = el("button", { class: "gb-icon-btn sm", type: "button" }, el("i", { class: "ri-close-line" }));
@@ -6427,37 +6432,73 @@ function _gbInit() {
     let session = null, timer = null, onClear = null;
     const setBusy = (b) => root.classList.toggle("busy", b);
     const syncButtons = () => {
-      const has = input.value.trim().length > 0;
+      const has = input.value.trim().length > 0 || !!video;
       send.classList.toggle("hidden", !has);
       mic.classList.toggle("hidden", has);
     };
     input.addEventListener("input", syncButtons);
 
     const clearImage = () => {
-      image = null; if (imageUrl) URL.revokeObjectURL(imageUrl); imageUrl = null;
+      image = null; imageEdit = null; if (imageUrl) URL.revokeObjectURL(imageUrl); imageUrl = null;
+      if (video) return;
       attach.classList.add("hidden"); attach.innerHTML = ""; if (fileIn) fileIn.value = "";
     };
-    if (imgBtn) {
-      imgBtn.addEventListener("click", () => fileIn.click());
-      fileIn.addEventListener("change", () => {
-        const f = fileIn.files?.[0];
-        if (!f) return;
+    const clearVideo = () => {
+      video = null; videoEdit = null; if (videoUrl) URL.revokeObjectURL(videoUrl); videoUrl = null;
+      attach.classList.add("hidden"); attach.innerHTML = ""; if (vidIn) vidIn.value = ""; syncButtons();
+    };
+    const showAttach = (kind) => {
+      attach.innerHTML = "";
+      const thumb = kind === "video"
+        ? el("video", { src: videoUrl + "#t=" + ((videoEdit?.poster ?? videoEdit?.start ?? 0) + 0.1), muted: "", playsinline: "", preload: "metadata" })
+        : el("img", { src: imageUrl, alt: "", style: FX[imageEdit?.fx]?.css ? `filter:${FX[imageEdit.fx].css}` : "" });
+      const label = kind === "video"
+        ? `Video note · ${fmtDur((videoEdit.end || 0) - (videoEdit.start || 0))}${videoEdit.muted ? " · muted" : ""}`
+        : "Cover image · write something to go over it";
+      const editBtn = el("button", { class: "gb-icon-btn sm", type: "button", title: "Edit" , onclick: async () => {
+        const e = await openStudio({ kind, file: kind === "video" ? video : image, edit: kind === "video" ? videoEdit : imageEdit });
+        if (!e) return;
+        if (kind === "video") videoEdit = e; else imageEdit = e;
+        showAttach(kind);
+      } }, el("i", { class: "ri-scissors-2-line" }));
+      const x = el("button", { class: "gb-icon-btn sm", type: "button", title: "Remove", onclick: kind === "video" ? clearVideo : () => { clearImage(); attach.classList.add("hidden"); attach.innerHTML = ""; if (fileIn) fileIn.value = ""; } }, el("i", { class: "ri-close-line" }));
+      attach.append(thumb, el("span", { class: "gb-attach-t" }, label), editBtn, x);
+      attach.classList.remove("hidden");
+    };
+    const pick = (inp, kind) => async () => {
+      const f = inp.files?.[0]; inp.value = "";
+      if (!f) return;
+      if (kind === "image") {
         if (!f.type.startsWith("image/")) { toast("Please choose an image"); return; }
         if (f.size > 10 * 1024 * 1024) { toast("Image is too large (max 10 MB)"); return; }
-        clearImage(); image = f; imageUrl = URL.createObjectURL(f);
-        const x = el("button", { class: "gb-icon-btn sm", type: "button", title: "Remove image", onclick: clearImage }, el("i", { class: "ri-close-line" }));
-        attach.append(el("img", { src: imageUrl, alt: "" }), el("span", {}, "Cover image · write something to go over it"), x);
-        attach.classList.remove("hidden");
-        input.focus();
-      });
-    }
+      } else {
+        if (!f.type.startsWith("video/")) { toast("Please choose a video"); return; }
+        if (f.size > 100 * 1024 * 1024) { toast("Video is too large (max 100 MB)"); return; }
+      }
+      const e = await openStudio({ kind, file: f });
+      if (!e) return;
+      if (kind === "image") {
+        clearVideo(); image = f; imageEdit = e; if (imageUrl) URL.revokeObjectURL(imageUrl); imageUrl = URL.createObjectURL(f);
+      } else {
+        clearImage(); video = f; videoEdit = e; if (videoUrl) URL.revokeObjectURL(videoUrl); videoUrl = URL.createObjectURL(f);
+      }
+      showAttach(kind); syncButtons(); input.focus();
+    };
+    if (imgBtn) { imgBtn.addEventListener("click", () => fileIn.click()); fileIn.addEventListener("change", pick(fileIn, "image")); }
+    if (vidBtn) { vidBtn.addEventListener("click", () => vidIn.click()); vidIn.addEventListener("change", pick(vidIn, "video")); }
 
     const sendText = async () => {
       const text = input.value.trim();
-      if (!text || root.classList.contains("busy")) return;
+      if ((!text && !video) || root.classList.contains("busy")) return;
       setBusy(true);
-      try { await onSend({ text, voice: null, image }); input.value = ""; clearImage(); syncButtons(); }
-      catch (err) { toast("Couldn't send: " + (err.message || "try again")); }
+      const label = attach.querySelector(".gb-attach-t");
+      const progress = (f) => { if (label) label.textContent = `Uploading ${Math.round(f * 100)}%…`; };
+      try {
+        await onSend({ text, voice: null, image, imageEdit, video, videoEdit, progress });
+        input.value = ""; image = null; imageEdit = null; if (imageUrl) URL.revokeObjectURL(imageUrl); imageUrl = null;
+        clearVideo(); attach.classList.add("hidden"); attach.innerHTML = ""; syncButtons();
+      }
+      catch (err) { toast("Couldn't send: " + (err.message || "try again")); if (video) showAttach("video"); }
       finally { setBusy(false); }
     };
     send.addEventListener("click", sendText);
@@ -6491,8 +6532,11 @@ function _gbInit() {
         const s = session; session = null;
         s.stop();
         const result = await s.done;
+        clearInterval(timer);
+        if (result.duration < 0.8) { endRec(); toast("That was too short — try again"); return; }
+        const ok = await reviewVoice(result, rec);
         endRec();
-        if (result.duration < 0.8) { toast("That was too short — try again"); return; }
+        if (!ok) return;
         setBusy(true);
         try {
           await onSend({ text: input.value.trim(), voice: result });
@@ -6512,7 +6556,7 @@ function _gbInit() {
       input.focus();
     };
     root.focusInput = () => input.focus();
-    root.dispose = () => { clearImage(); clearInterval(timer); session?.cancel(); session = null; };
+    root.dispose = () => { clearImage(); if (videoUrl) URL.revokeObjectURL(videoUrl); clearInterval(timer); session?.cancel(); session = null; };
     return root;
   };
 
@@ -6521,13 +6565,9 @@ function _gbInit() {
   // -------------------------------------------------------------------------
   const buildRail = () => {
     const groupsBox = el("div", { class: "gb-rail-groups" });
-    const home = el("button", {
-      class: "gb-srv gb-home active", type: "button", title: "Voice feed",
-      onclick: () => { if (location.hash !== "#feed") location.hash = "#feed"; document.getElementById("content")?.scrollTo({ top: 0, behavior: "smooth" }); },
-    }, el("img", { src: "/icon.svg", alt: "Get better" }));
     const add = el("button", { class: "gb-srv gb-add", type: "button", title: "Find or create groups", onclick: () => { location.hash = "#groups"; } },
       el("i", { class: "ri-add-line" }));
-    const rail = el("nav", { class: "gb-rail", "aria-label": "Your groups" }, home, el("div", { class: "gb-rail-sep" }), groupsBox, add);
+    const rail = el("nav", { class: "gb-rail", "aria-label": "Your groups" }, groupsBox, add);
 
     getDocs(query(collection(db, "groups"), where("members", "array-contains", state.uid), limit(40)))
       .then((snap) => {
@@ -6547,12 +6587,20 @@ function _gbInit() {
   // -------------------------------------------------------------------------
   // POST CREATION / COMMENT CREATION
   // -------------------------------------------------------------------------
-  const createPost = async ({ text, voice, image }) => {
+  const createPost = async ({ text, voice, image, imageEdit, video, videoEdit, progress }) => {
     const data = { authorUid: state.uid, kind: "voice", text: text || "", hashtags: extractHashtags(text || "") };
     if (voice) data.audio = await uploadVoice(voice);
     if (image && text) {
-      const up = await uploadToCloudinary(image, "image");
-      data.cover = { url: up.url, ...(up.width ? { width: up.width } : {}), ...(up.height ? { height: up.height } : {}) };
+      const up = await uploadXHR(image, "image", progress);
+      data.cover = { url: up.url, fit: imageEdit?.fit || "4:5", fx: imageEdit?.fx || "none", ...(up.width ? { width: up.width } : {}), ...(up.height ? { height: up.height } : {}) };
+    }
+    if (video) {
+      const up = await uploadXHR(video, "video", progress);
+      const e = videoEdit || {};
+      const dur = up.duration || e.duration || 0;
+      data.video = { url: up.url, publicId: up.publicId, duration: Math.round(dur * 10) / 10,
+        start: e.start || 0, end: Math.min(e.end || dur, dur) || dur, muted: !!e.muted, fit: e.fit || "4:5",
+        poster: e.poster ?? e.start ?? 0, width: up.width || e.width || 0, height: up.height || e.height || 0 };
     }
     Object.assign(data, { orbits: [], orbitCount: 0, commentCount: 0, createdAt: serverTimestamp() });
     const ref = await addDoc(collection(db, "posts"), data);
@@ -6562,7 +6610,7 @@ function _gbInit() {
       const followers = (state.me?.followers || []).slice(0, 100);
       if (!followers.length) return;
       const preview = (text || "").slice(0, 60);
-      const msg = preview ? `posted: "${preview}"` : "posted a voice note";
+      const msg = preview ? `posted: "${preview}"` : (video ? "posted a video note" : "posted a voice note");
       const { notifyUser } = await import("./notifications.js");
       followers.forEach((uid) => {
         writeNotif(uid, "newPost", { postId: ref.id, text: `${state.me?.name || "Someone"} ${msg}` }).catch(() => {});
@@ -6608,6 +6656,299 @@ function _gbInit() {
     full ? el("span", { class: "gb-dot" }, "·") : null,
     el("span", { class: "gb-sub" }, when(ts)),
   );
+
+  // -------------------------------------------------------------------------
+  // MEDIA HELPERS — edits are stored as parameters and applied through Cloudinary delivery URLs
+  // -------------------------------------------------------------------------
+  const FX = {
+    none:  { label: "Original", css: "none",                                          cl: "" },
+    vivid: { label: "Vivid",    css: "saturate(1.45) contrast(1.05)",                  cl: "e_vibrance:50" },
+    warm:  { label: "Warm",     css: "sepia(.28) saturate(1.2) hue-rotate(-8deg)",     cl: "e_sepia:25" },
+    mono:  { label: "Mono",     css: "grayscale(1) contrast(1.05)",                    cl: "e_grayscale" },
+    fade:  { label: "Fade",     css: "contrast(.88) brightness(1.08) saturate(.8)",    cl: "e_contrast:-20/e_brightness:10/e_saturation:-20" },
+  };
+  const FITS = [["4:5", "Portrait"], ["1:1", "Square"], ["orig", "Original"]];
+  const arOf = (fit, w, h) => fit === "1:1" ? 1 : fit === "orig" && w && h ? Math.min(1.78, Math.max(0.56, w / h)) : 0.8;
+  const cropStep = (fit, w) => fit === "orig" ? `c_limit,w_${w}` : `c_fill,ar_${fit === "1:1" ? "1:1" : "4:5"},g_auto,w_${w}`;
+
+  // image: cover = { url, width, height, fit, fx }
+  const coverUrl = (c, w = 900, { crop = true } = {}) => {
+    if (!c?.url || !c.url.includes("/image/upload/")) return c?.url || "";
+    const fx = FX[c.fx]?.cl;
+    const chain = [crop ? cropStep(c.fit || "4:5", w) : `c_limit,w_${w}`, fx, "f_auto,q_auto"].filter(Boolean).join("/");
+    return c.url.replace("/image/upload/", `/image/upload/${chain}/`);
+  };
+  // video: v = { url, duration, start, end, muted, fit, poster, width, height }
+  const vidSrc = (v) => {
+    if (!v?.url.includes("/video/upload/")) return v?.url || "";
+    const tx = [`so_${(v.start || 0).toFixed(1)}`, v.end ? `eo_${v.end.toFixed(1)}` : null, cropStep(v.fit || "4:5", 720), v.muted ? "ac_none" : null, "vc_h264", "q_auto"].filter(Boolean).join(",");
+    return v.url.replace("/video/upload/", `/video/upload/${tx}/`).replace(/\.\w+$/, ".mp4");
+  };
+  const vidPoster = (v) => {
+    if (!v?.url.includes("/video/upload/")) return "";
+    const tx = [`so_${(v.poster ?? v.start ?? 0).toFixed(1)}`, cropStep(v.fit || "4:5", 720), "f_jpg", "q_auto"].join(",");
+    return v.url.replace("/video/upload/", `/video/upload/${tx}/`).replace(/\.\w+$/, ".jpg");
+  };
+
+  const uploadXHR = (file, kind, onProgress) => new Promise((resolve, reject) => {
+    if (cloudinaryConfig.cloudName.startsWith("YOUR_")) { toast("Cloudinary not configured"); return reject(new Error("Cloudinary not configured")); }
+    const x = new XMLHttpRequest();
+    x.open("POST", `https://api.cloudinary.com/v1_1/${cloudinaryConfig.cloudName}/${kind === "video" ? "video" : "image"}/upload`);
+    x.upload.onprogress = (e) => { if (e.lengthComputable) onProgress?.(e.loaded / e.total); };
+    x.onerror = () => reject(new Error("Network error"));
+    x.onload = () => {
+      let j = {}; try { j = JSON.parse(x.responseText); } catch {}
+      if (x.status >= 200 && x.status < 300 && j.secure_url) {
+        const out = { url: j.secure_url, publicId: j.public_id };
+        if (j.width) out.width = j.width; if (j.height) out.height = j.height; if (j.duration) out.duration = j.duration;
+        resolve(out);
+      } else reject(new Error(j.error?.message || "Upload failed"));
+    };
+    const fd = new FormData(); fd.append("file", file); fd.append("upload_preset", cloudinaryConfig.uploadPreset);
+    x.send(fd);
+  });
+
+  // -------------------------------------------------------------------------
+  // STUDIO — edit before posting. Video: trim, cover frame, sound, framing. Image: framing + filter.
+  // Resolves with the edit parameters, or null if cancelled.
+  // -------------------------------------------------------------------------
+  const MAX_VIDEO_SEC = 60;
+  const openStudio = ({ kind, file, edit }) => new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    let ov;
+    const finish = (val) => { try { vid?.pause(); } catch {} ov.remove(); URL.revokeObjectURL(url); document.body.classList.remove("gb-studio-open"); resolve(val); };
+    const isVid = kind === "video";
+    const st = { fit: edit?.fit || "4:5", fx: edit?.fx || "none", start: edit?.start || 0, end: edit?.end || 0,
+                 muted: !!edit?.muted, poster: edit?.poster ?? null, dur: 0, w: 0, h: 0 };
+
+    const frame = el("div", { class: "gb-st-frame" });
+    const setFrame = () => {
+      frame.style.aspectRatio = String(arOf(st.fit, st.w, st.h));
+      frame.classList.toggle("contain", false);
+    };
+    let vid = null, img = null;
+    if (isVid) {
+      vid = el("video", { src: url, playsinline: "", loop: "", preload: "auto" });
+      vid.muted = st.muted;
+      frame.append(vid);
+    } else {
+      img = el("img", { src: url, alt: "" });
+      frame.append(img);
+      img.addEventListener("load", () => { st.w = img.naturalWidth; st.h = img.naturalHeight; setFrame(); });
+    }
+    setFrame();
+    const applyFx = () => { if (img) img.style.filter = FX[st.fx].css; };
+
+    // ---- video controls
+    let trimBox = null, tInfo = null;
+    const fmt = (n) => fmtDur(n);
+    const refreshTrim = () => {
+      if (!trimBox) return;
+      const p = (n) => (st.dur ? (n / st.dur) * 100 : 0);
+      sel.style.left = p(st.start) + "%"; sel.style.width = Math.max(0, p(st.end) - p(st.start)) + "%";
+      a.value = st.start; b.value = st.end;
+      tInfo.textContent = `${fmt(st.start)} – ${fmt(st.end)} · ${fmt(st.end - st.start)} selected`;
+    };
+    let a, b, sel, playBtn, soundBtn;
+    if (isVid) {
+      const track = el("div", { class: "gb-trim-track" });
+      sel = el("div", { class: "gb-trim-sel" });
+      a = el("input", { type: "range", min: "0", max: "1", step: "0.1", value: "0" });
+      b = el("input", { type: "range", min: "0", max: "1", step: "0.1", value: "1" });
+      track.append(sel, a, b);
+      tInfo = el("div", { class: "gb-trim-info" }, "Loading…");
+      trimBox = el("div", { class: "gb-trim" }, el("div", { class: "gb-st-label" }, "Trim"), track, tInfo);
+      a.addEventListener("input", () => {
+        st.start = Math.min(parseFloat(a.value), st.end - 0.5);
+        if (st.end - st.start > MAX_VIDEO_SEC) st.end = st.start + MAX_VIDEO_SEC;
+        vid.currentTime = st.start; refreshTrim();
+      });
+      b.addEventListener("input", () => {
+        st.end = Math.max(parseFloat(b.value), st.start + 0.5);
+        if (st.end - st.start > MAX_VIDEO_SEC) st.start = st.end - MAX_VIDEO_SEC;
+        vid.currentTime = Math.max(st.start, st.end - 0.3); refreshTrim();
+      });
+      vid.addEventListener("loadedmetadata", () => {
+        st.dur = Number.isFinite(vid.duration) ? vid.duration : 0;
+        st.w = vid.videoWidth; st.h = vid.videoHeight;
+        if (!st.end || st.end > st.dur) st.end = Math.min(st.dur, st.start + MAX_VIDEO_SEC);
+        a.max = b.max = String(st.dur); setFrame(); refreshTrim();
+        if (st.dur > MAX_VIDEO_SEC) toast(`Videos are up to ${MAX_VIDEO_SEC}s. Trim the part you want.`);
+        vid.currentTime = st.start;
+      });
+      vid.addEventListener("timeupdate", () => {
+        if (vid.currentTime >= st.end || vid.currentTime < st.start - 0.3) vid.currentTime = st.start;
+      });
+      playBtn = el("button", { class: "gb-st-play", type: "button", title: "Play / pause" }, el("i", { class: "ri-play-fill" }));
+      const syncPlay = () => { playBtn.firstChild.className = vid.paused ? "ri-play-fill" : "ri-pause-fill"; frame.classList.toggle("playing", !vid.paused); };
+      const toggle = () => { vid.paused ? vid.play().catch(() => {}) : vid.pause(); };
+      playBtn.addEventListener("click", toggle); frame.addEventListener("click", toggle);
+      vid.addEventListener("play", syncPlay); vid.addEventListener("pause", syncPlay);
+      frame.append(playBtn);
+    } else applyFx();
+
+    // ---- framing chips (both)
+    const fitRow = el("div", { class: "gb-chips" });
+    FITS.forEach(([k, label]) => {
+      const c = el("button", { class: `gb-chip${st.fit === k ? " on" : ""}`, type: "button", onclick: () => {
+        st.fit = k; [...fitRow.children].forEach((x) => x.classList.toggle("on", x === c)); setFrame();
+      } }, label);
+      fitRow.appendChild(c);
+    });
+    const tools = el("div", { class: "gb-st-tools" }, el("div", { class: "gb-st-label" }, "Framing"), fitRow);
+
+    if (isVid) {
+      soundBtn = el("button", { class: `gb-chip${st.muted ? " on" : ""}`, type: "button", onclick: () => {
+        st.muted = !st.muted; vid.muted = st.muted; soundBtn.classList.toggle("on", st.muted);
+        soundBtn.innerHTML = st.muted ? '<i class="ri-volume-mute-fill"></i> Muted' : '<i class="ri-volume-up-fill"></i> Sound on';
+      } });
+      soundBtn.innerHTML = st.muted ? '<i class="ri-volume-mute-fill"></i> Muted' : '<i class="ri-volume-up-fill"></i> Sound on';
+      const coverBtn = el("button", { class: "gb-chip", type: "button", onclick: () => {
+        st.poster = Math.min(st.end, Math.max(st.start, vid.currentTime)); toast(`Cover set at ${fmt(st.poster)}`);
+      } }, el("i", { class: "ri-image-line" }), " Use this frame as cover");
+      tools.append(el("div", { class: "gb-st-label" }, "Options"), el("div", { class: "gb-chips" }, soundBtn, coverBtn));
+    } else {
+      const fxRow = el("div", { class: "gb-chips" });
+      Object.entries(FX).forEach(([k, f]) => {
+        const c = el("button", { class: `gb-chip${st.fx === k ? " on" : ""}`, type: "button", onclick: () => {
+          st.fx = k; [...fxRow.children].forEach((x) => x.classList.toggle("on", x === c)); applyFx();
+        } }, f.label);
+        fxRow.appendChild(c);
+      });
+      tools.append(el("div", { class: "gb-st-label" }, "Filter"), fxRow);
+    }
+
+    const done = el("button", { class: "gb-st-done", type: "button", onclick: () => {
+      if (isVid) {
+        if (!st.dur) { toast("Video is still loading"); return; }
+        finish({ kind: "video", fit: st.fit, start: +st.start.toFixed(1), end: +st.end.toFixed(1), muted: st.muted, poster: st.poster, width: st.w, height: st.h, duration: st.dur });
+      } else finish({ kind: "image", fit: st.fit, fx: st.fx, width: st.w, height: st.h });
+    } }, "Done");
+    const top = el("div", { class: "gb-st-top" },
+      el("button", { class: "gb-icon-btn", type: "button", title: "Cancel", onclick: () => finish(null) }, el("i", { class: "ri-close-line" })),
+      el("strong", {}, isVid ? "Video studio" : "Photo studio"), done);
+    ov = el("div", { class: "gb-studio" }, top, el("div", { class: "gb-st-body" }, frame, isVid ? trimBox : null, tools));
+    document.body.classList.add("gb-studio-open");
+    document.body.appendChild(ov);
+    if (isVid) vid.play().catch(() => {});
+  });
+
+  // -------------------------------------------------------------------------
+  // VOICE REVIEW — listen back before sending (fills the recording bar)
+  // -------------------------------------------------------------------------
+  const reviewVoice = (result, rec) => new Promise((resolve) => {
+    const url = URL.createObjectURL(result.blob);
+    const au = new Audio(url);
+    const play = el("button", { class: "gb-send", type: "button", title: "Play" }, el("i", { class: "ri-play-fill" }));
+    const time = el("span", { class: "gb-rec-time" }, fmtDur(result.duration));
+    const bars = el("div", { class: "gb-rec-live review" }, ...shapeWave(result.waveform || [], 28).map((h) => el("i", { style: `height:${Math.max(12, h)}%;animation:none` })));
+    const bin = el("button", { class: "gb-icon-btn", type: "button", title: "Discard" }, el("i", { class: "ri-delete-bin-line" }));
+    const go = el("button", { class: "gb-send", type: "button", title: "Send voice note" }, el("i", { class: "ri-send-plane-fill" }));
+    const end = (v) => { au.pause(); URL.revokeObjectURL(url); resolve(v); };
+    play.addEventListener("click", () => { if (au.paused) { stopAllAudio(); au.play().catch(() => {}); } else au.pause(); });
+    au.addEventListener("play", () => { play.firstChild.className = "ri-pause-fill"; });
+    au.addEventListener("pause", () => { play.firstChild.className = "ri-play-fill"; });
+    au.addEventListener("ended", () => { play.firstChild.className = "ri-play-fill"; });
+    bin.addEventListener("click", () => end(false)); go.addEventListener("click", () => end(true));
+    rec.innerHTML = ""; rec.classList.remove("hidden");
+    rec.append(play, bars, time, bin, go);
+  });
+
+  // -------------------------------------------------------------------------
+  // VIDEO NOTE — rounded frame, muted autoplay in view, tap to pause, sound toggle, seek bar
+  // -------------------------------------------------------------------------
+  let _soundVid = null;
+  const buildVideoNote = (v) => {
+    const ar = arOf(v.fit || "4:5", v.width, v.height);
+    const vid = el("video", { playsinline: "", loop: "", preload: "metadata", poster: vidPoster(v) });
+    vid.muted = true; vid.src = vidSrc(v);
+    let fallback = false;
+    vid.addEventListener("error", () => {
+      if (fallback) return; fallback = true;
+      vid.src = `${v.url}#t=${v.start || 0},${v.end || ""}`;
+      vid.addEventListener("timeupdate", () => { if (v.end && vid.currentTime >= v.end) vid.currentTime = v.start || 0; });
+    });
+    const len = (v.end || v.duration || 0) - (v.start || 0);
+    const chip = el("span", { class: "gb-vid-dur" }, fmtDur(len));
+    const prog = el("div", { class: "gb-vid-prog" }, el("i", {}));
+    const sound = v.muted ? null : el("button", { class: "gb-vid-snd", type: "button", title: "Sound" }, el("i", { class: "ri-volume-mute-fill" }));
+    const badge = el("div", { class: "gb-vid-play" }, el("i", { class: "ri-play-fill" }));
+    const box = el("div", { class: "gb-vid", style: `aspect-ratio:${ar}` }, vid, badge, chip, sound, prog);
+    vid.addEventListener("timeupdate", () => {
+      const s = v.start || 0, e = v.end || vid.duration || 1, f = Math.min(1, Math.max(0, (vid.currentTime - s) / (e - s || 1)));
+      prog.firstChild.style.width = f * 100 + "%";
+    });
+    vid.addEventListener("play", () => box.classList.remove("paused"));
+    vid.addEventListener("pause", () => box.classList.add("paused"));
+    box.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (e.target.closest(".gb-vid-snd")) return;
+      if (e.target.closest(".gb-vid-prog")) {
+        const r = prog.getBoundingClientRect(), f = (e.clientX - r.left) / r.width, s = v.start || 0, en = v.end || vid.duration || 1;
+        vid.currentTime = s + f * (en - s); return;
+      }
+      if (vid.paused) { vid._manual = false; vid.play().catch(() => {}); } else { vid._manual = true; vid.pause(); }
+    });
+    sound?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      vid.muted = !vid.muted;
+      sound.firstChild.className = vid.muted ? "ri-volume-mute-fill" : "ri-volume-up-fill";
+      if (!vid.muted) {
+        stopAllAudio();
+        if (_soundVid && _soundVid !== vid) { _soundVid.muted = true; _soundVid._btn && (_soundVid._btn.firstChild.className = "ri-volume-mute-fill"); }
+        _soundVid = vid; vid._btn = sound;
+        if (vid.paused) vid.play().catch(() => {});
+      }
+    });
+    if (window.IntersectionObserver) {
+      new IntersectionObserver((ents) => ents.forEach((en) => {
+        if (en.isIntersecting && en.intersectionRatio >= 0.6) { if (!vid._manual) vid.play().catch(() => {}); }
+        else { vid.pause(); if (!vid.muted) { vid.muted = true; sound && (sound.firstChild.className = "ri-volume-mute-fill"); } }
+      }), { threshold: [0, 0.6] }).observe(box);
+    }
+    return box;
+  };
+
+  const openLightbox = (url) => {
+    const img = el("img", { src: url, alt: "" });
+    const close = () => { ov.remove(); document.removeEventListener("keydown", onKey); };
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    const x = el("button", { class: "gb-lb-x", type: "button", title: "Close", onclick: close }, el("i", { class: "ri-close-line" }));
+    const ov = el("div", { class: "gb-lightbox", onclick: close }, img, x);
+    document.addEventListener("keydown", onKey);
+    document.body.appendChild(ov);
+  };
+
+  // Text post with an image. Feed: text overlays a blurred lower half (clamped, "See more" moves the
+  // full text below the image). Detail page: image and text are separate. Tap image = original photo.
+  const buildCover = (p, detail) => {
+    const open = (e) => { if (e.target.closest("a,button")) return; e.stopPropagation(); openLightbox(coverUrl(p.cover, 1800, { crop: false })); };
+    if (detail) {
+      return el("div", { class: "gb-cover-plain" },
+        el("img", { src: coverUrl(p.cover, 1200), alt: "", loading: "lazy", onclick: open }),
+        el("div", { class: "gb-text allow-select", html: linkify(p.text) }));
+    }
+    const clamp = el("div", { class: "gb-cover-clamp", html: linkify(p.text) });
+    const more = el("button", { class: "gb-cover-more hidden", type: "button" }, "See more");
+    const less = el("button", { class: "gb-cover-more", type: "button" }, "See less");
+    const full = el("div", { class: "gb-cover-full hidden" },
+      el("div", { class: "gb-text allow-select", html: linkify(p.text) }), less);
+    const card = el("div", { class: "gb-cover", style: `aspect-ratio:${arOf(p.cover.fit || "4:5", p.cover.width, p.cover.height)}`, onclick: open },
+      el("img", { class: "gb-cover-img", src: coverUrl(p.cover), alt: "", loading: "lazy" }),
+      el("div", { class: "gb-cover-text" }, clamp, more));
+    const wrap = el("div", { class: "gb-cover-wrap" }, card, full);
+    const toggle = (openIt) => (e) => {
+      e.stopPropagation();
+      wrap.classList.toggle("open", openIt);
+      full.classList.toggle("hidden", !openIt);
+      if (!openIt) measure();
+    };
+    const measure = () => { if (!wrap.classList.contains("open")) more.classList.toggle("hidden", !(clamp.scrollHeight > clamp.clientHeight + 1)); };
+    more.addEventListener("click", toggle(true));
+    less.addEventListener("click", toggle(false));
+    if (window.ResizeObserver) new ResizeObserver(measure).observe(clamp); else more.classList.remove("hidden");
+    return wrap;
+  };
 
   const renderVoicePost = (p, author, { detail = false } = {}) => {
     const mine = p.authorUid === state.uid;
@@ -6668,16 +7009,13 @@ function _gbInit() {
 
     const main = el("div", { class: "gb-main" },
       el("div", { class: "gb-headrow" }, nameLine(author, p.createdAt, detail), tools),
-      p.cover?.url && p.text
-        ? el("div", { class: "gb-cover" },
-            el("img", { class: "gb-cover-img", src: optImg(p.cover.url), alt: "", loading: "lazy" }),
-            el("div", { class: "gb-cover-text allow-select", html: linkify(p.text) }))
-        : (p.text ? el("div", { class: "gb-text allow-select", html: linkify(p.text) }) : null),
+      p.cover?.url && p.text ? buildCover(p, detail) : (p.text ? el("div", { class: "gb-text allow-select", html: linkify(p.text) }) : null),
       p.audio?.url ? buildVoicePlayer(p.audio) : null,
+      p.video?.url ? buildVideoNote(p.video) : null,
       actions,
     );
     post.append(avcol, main);
-    if (!detail) main.addEventListener("click", (e) => { if (!e.target.closest("button,a,.gb-voice")) location.hash = `#post/${p.id}`; });
+    if (!detail) main.addEventListener("click", (e) => { if (!e.target.closest("button,a,.gb-voice,.gb-vid,.gb-cover")) location.hash = `#post/${p.id}`; });
 
     // thread preview (last 3 replies) with connector lines
     if (hasThread) {
@@ -6722,14 +7060,11 @@ function _gbInit() {
   const renderVoiceFeed = (root) => {
     const shell = el("div", { class: "gb-shell" });
     const col = el("div", { class: "gb-col" });
-    const head = el("div", { class: "gb-head" },
-      el("i", { class: "ri-mic-fill gb-head-ic" }),
-      el("div", { class: "gb-head-t" }, el("strong", {}, "voice-feed")));
     const list = el("div", { class: "gb-list" });
     [1, 2, 3, 4].forEach(() => list.appendChild(skeletonRow()));
     const sentinel = el("div", { class: "gb-sentinel" });
-    const composer = buildComposer({ placeholder: "Share a thought, or tap the mic…", maxSec: MAX_POST_SEC, onSend: createPost, allowImage: true });
-    col.append(head, list, composer);
+    const composer = buildComposer({ placeholder: "Share a thought, or tap the mic…", maxSec: MAX_POST_SEC, onSend: createPost, allowImage: true, allowVideo: true });
+    col.append(list, composer);
     shell.append(buildRail(), col);
     root.appendChild(shell);
 
@@ -6955,3 +7290,20 @@ function _gbInit() {
   };
   return { renderVoiceFeed, renderVoiceDetail, renderVoicePost, stopAllAudio };
 }
+
+// =========================================================================
+// 16. KEYBOARD / VIEWPORT FIT — keep the app exactly the size of the visible screen so the
+//     on-screen keyboard never pans the page or pushes the top bar out of view.
+// =========================================================================
+(() => {
+  const vv = window.visualViewport, root = document.documentElement;
+  const sync = () => {
+    root.style.setProperty("--app-h", `${Math.round(vv ? vv.height : window.innerHeight)}px`);
+    if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+  };
+  sync();
+  (vv || window).addEventListener("resize", sync);
+  vv?.addEventListener("scroll", sync);
+  window.addEventListener("orientationchange", () => setTimeout(sync, 250));
+})();
+
