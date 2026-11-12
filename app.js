@@ -1,4 +1,4 @@
-// BUILD 2026-11-12 00:15 — onboarding cartoon + CSS logo + voice-only pages
+// BUILD 2026-11-12 06:53 — onboarding cartoon + CSS logo + voice-only pages
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
@@ -15,7 +15,7 @@ import {
   signInWithPopup, updateProfile, sendPasswordResetEmail,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
 import {
-  getFirestore, doc, setDoc, getDoc, updateDoc, addDoc, deleteDoc,
+  getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, getDoc, updateDoc, addDoc, deleteDoc,
   collection, query, where, orderBy, limit, startAfter, onSnapshot, getDocs,
   serverTimestamp, increment, arrayUnion, arrayRemove, writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
@@ -82,7 +82,11 @@ const orbitTranslate = (code) => {
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+// Offline-first: Firestore keeps a local copy of what you've seen, so feeds open without data.
+export const db = (() => {
+  try { return initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }); }
+  catch { return getFirestore(app); }
+})();
 
 // Globals shared with chat.js
 export const state = {
@@ -8115,3 +8119,61 @@ function mountBubblePop(root, { exit }) {
   return dispose;
 }
 
+
+
+// =========================================================================
+// 18. OFFLINE — service worker + network banner (Refresh / dismiss)
+// =========================================================================
+(function offlineSupport() {
+  if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+    window.addEventListener("load", async () => {
+      try {
+        const ready = await navigator.serviceWorker.ready;   // index.html registers /sw.js
+        const urls = performance.getEntriesByType("resource").map((r) => r.name).filter((u) => /^https?:/.test(u));
+        ready.active?.postMessage({ type: "cache-urls", urls });
+      } catch (e) { console.warn("SW", e); }
+    });
+  }
+
+  let bar = null, hideT = null, dismissed = false;
+  const make = () => {
+    bar = document.createElement("div");
+    bar.className = "gb-net"; bar.setAttribute("role", "status"); bar.setAttribute("aria-live", "polite");
+    bar.innerHTML = '<i class="ri-wifi-off-line gb-net-i"></i><span class="gb-net-t"></span>' +
+      '<button type="button" class="gb-net-b" data-a="refresh"><i class="ri-refresh-line"></i> Refresh</button>' +
+      '<button type="button" class="gb-net-x" data-a="close" aria-label="Dismiss"><i class="ri-close-line"></i></button>';
+    bar.addEventListener("click", async (e) => {
+      const a = e.target.closest("[data-a]")?.dataset.a; if (!a) return;
+      if (a === "close") { dismissed = true; hide(); return; }
+      const b = bar.querySelector(".gb-net-b"); b.classList.add("spin");
+      const ok = await ping(); b.classList.remove("spin");
+      if (ok) location.reload();
+      else { bar.classList.add("shake"); setTimeout(() => bar.classList.remove("shake"), 500); bar.querySelector(".gb-net-t").textContent = "Still offline. Saved content is available."; }
+    });
+    document.body.appendChild(bar);
+  };
+  const show = (offline) => {
+    if (!bar) make(); clearTimeout(hideT);
+    bar.classList.toggle("on-line", !offline);
+    bar.querySelector(".gb-net-i").className = (offline ? "ri-wifi-off-line" : "ri-wifi-line") + " gb-net-i";
+    bar.querySelector(".gb-net-t").textContent = offline ? "You're offline. Showing saved content." : "Back online";
+    bar.querySelector(".gb-net-b").hidden = !offline; bar.querySelector(".gb-net-x").hidden = !offline;
+    requestAnimationFrame(() => bar.classList.add("show"));
+    document.body.classList.add("gb-net-on");
+    if (!offline) hideT = setTimeout(hide, 2200);
+  };
+  const hide = () => { bar?.classList.remove("show"); document.body.classList.remove("gb-net-on"); };
+  const ping = async () => {
+    if (!navigator.onLine) return false;
+    try { const c = new AbortController(); const t = setTimeout(() => c.abort(), 4000);
+      const r = await fetch("/manifest.json?_=" + Date.now(), { cache: "no-store", signal: c.signal }); clearTimeout(t); return r.ok; }
+    catch { return false; }
+  };
+  window.addEventListener("offline", () => { dismissed = false; show(true); });
+  window.addEventListener("online", async () => { if (await ping()) show(false); });
+  document.addEventListener("visibilitychange", async () => {
+    if (document.visibilityState !== "visible") return;
+    if (!(await ping())) { if (!dismissed) show(true); } else if (bar?.classList.contains("show") && !bar.classList.contains("on-line")) show(false);
+  });
+  if (!navigator.onLine) window.addEventListener("DOMContentLoaded", () => show(true));
+})();

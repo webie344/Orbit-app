@@ -1,162 +1,148 @@
 // =========================================================================
-// Orbit — sw.js  (Service Worker)
-// Caches the app shell for offline use + fast repeat loads.
+// Get better — sw.js  (Service Worker)
+// Offline support + fast repeat loads + push notifications + update banner.
 // Place this file at the ROOT of your site (same level as index.html).
 // =========================================================================
 
-// ⚠️  Bump this string every time you deploy — it's what triggers the
+// ⚠️  Bump this string every time you deploy — it triggers the
 //     "New version available" update banner in the app.
-const CACHE_NAME = "orbit-v15";
+const CACHE_NAME = "getbetter-v16";
+const IMG_CACHE  = "getbetter-img";   // photos only (kept across versions, capped)
 
-// Files that make up the app shell — always available offline
+// App shell — saved on install so the app opens with no data.
+// Missing files are skipped (one 404 will not break the install).
 const SHELL_FILES = [
-  "/",
-  "/index.html",
-  "/style.css",
-  "/chat.css",
-  "/app.js",
-  "/chat.js",
-  "/additional.js",
-  "/notifications.js",
-  "/icon-192.png",
-  "/icon-512.png",
-  "/apple-touch-icon.png",
+  "/", "/index.html", "/manifest.json",
+  "/style.css", "/chat.css", "/features.css",
+  "/app.js", "/chat.js", "/additional.js", "/notifications.js", "/features.js", "/b.js", "/sounds.js",
+  "/icon.svg", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png",
 ];
 
-// ── Message: allow the page to trigger skipWaiting on demand ─────────────
-//
-//  This is what makes the "Update now" banner work.
-//  index.html calls: worker.postMessage({ type: "SKIP_WAITING" })
-//  which lands here and activates the waiting SW immediately.
-//
-//  ⚠️  Do NOT call self.skipWaiting() inside the install handler —
-//      that bypasses the waiting state and the update banner never shows.
-//
+// Live data / login / uploads / AI: never cached here (Firestore keeps its own offline copy).
+const NEVER_CACHE =
+  /(firestore\.googleapis\.com|identitytoolkit|securetoken|firebaseinstallations|firebaseio|api\.groq\.com|api\.cloudinary\.com|google-analytics|googletagmanager|\/api\/)/;
+
+// ── Message: skip waiting on demand + page can hand us files to save ─────
 self.addEventListener("message", (event) => {
-  if (event.data?.type === "SKIP_WAITING") {
-    self.skipWaiting();
+  const d = event.data || {};
+  if (d.type === "SKIP_WAITING") self.skipWaiting();
+  if (d.type === "cache-urls") {
+    event.waitUntil((async () => {
+      const cache = await caches.open(CACHE_NAME);
+      await Promise.allSettled((d.urls || [])
+        .filter((u) => !NEVER_CACHE.test(u))
+        .map(async (u) => {
+          if (await cache.match(u)) return;
+          const r = await fetch(u);
+          if (r.ok) await cache.put(u, r);
+        }));
+    })());
   }
 });
 
-// ── Push: receive and display notification ────────────────────────────────
+// ── Push: receive and display notification ───────────────────────────────
 self.addEventListener("push", (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch {}
-
-  const title   = data.title || "Orbit";
   const options = {
-    body:    data.body  || "",
-    icon:    data.icon  || "/icon-192.png",
-    badge:              "/icon-192.png",
-    data:    { url: data.url || "/" },
+    body: data.body || "",
+    icon: data.icon || "/icon-192.png",
+    badge: "/icon-192.png",
+    data: { url: data.url || "/" },
     vibrate: [100, 50, 100],
     requireInteraction: false,
   };
-
-  // If the sender attached a media thumbnail (post image, chat photo, etc.)
-  // show it as the large preview image inside the notification body.
-  // Supported on Android Chrome; ignored gracefully elsewhere.
-  if (data.image) {
-    options.image = data.image;
-  }
-
-  event.waitUntil(self.registration.showNotification(title, options));
+  if (data.image) options.image = data.image;
+  event.waitUntil(self.registration.showNotification(data.title || "Get better", options));
 });
 
-// ── Notification click: open the app at the right URL ────────────────────
+// ── Notification click ───────────────────────────────────────────────────
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const url = event.notification.data?.url || "/";
   event.waitUntil(
     clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
       for (const client of list) {
-        if ("focus" in client) {
-          client.focus();
-          client.navigate(url);
-          return;
-        }
+        if ("focus" in client) { client.focus(); client.navigate(url); return; }
       }
       if (clients.openWindow) return clients.openWindow(url);
     })
   );
 });
 
-// ── Install: cache the shell ─────────────────────────────────────────────
-//
-//  No self.skipWaiting() here — the new SW stays in "waiting" state so
-//  the update banner in index.html can prompt the user before taking over.
-//
+// ── Install: save the shell (no skipWaiting — the update banner asks first)
 self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_FILES))
-  );
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    await Promise.allSettled(SHELL_FILES.map((u) => cache.add(new Request(u, { cache: "reload" }))));
+    // Also save every script / stylesheet / font the HTML links to (Firebase SDK, icons, fonts…)
+    try {
+      const html = await (await fetch("/", { cache: "reload" })).text();
+      const urls = [...html.matchAll(/(?:src|href)=["']([^"'#]+)["']/g)].map((m) => m[1])
+        .filter((u) => /\.(js|css|woff2?)(\?|$)/i.test(u) || /fonts\.googleapis|remixicon/i.test(u));
+      await Promise.allSettled(urls.map((u) => cache.add(new Request(new URL(u, self.location.origin).href))));
+    } catch {}
+  })());
 });
 
-// ── Activate: remove old caches then claim all clients ───────────────────
-// FIX: clients.claim() must be inside event.waitUntil() so the browser
-// waits for it before considering the SW fully activated. When it was
-// outside, existing tabs were never reassigned to the new SW, so the
-// "controllerchange" event never fired and the page never reloaded after
-// the user tapped "Update now".
+// ── Activate: remove old caches, then claim all clients ──────────────────
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches
-      .keys()
-      .then((keys) =>
-        Promise.all(
-          keys
-            .filter((key) => key !== CACHE_NAME)
-            .map((key) => caches.delete(key))
-        )
-      )
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_NAME && k !== IMG_CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
 
-// ── Fetch: network-first for API/Firebase, cache-first for shell ─────────
+async function trim(name, max) {
+  const c = await caches.open(name), keys = await c.keys();
+  for (let i = 0; i < keys.length - max; i++) await c.delete(keys[i]);
+}
+
+// ── Fetch ────────────────────────────────────────────────────────────────
 self.addEventListener("fetch", (event) => {
-  const { request } = event;
-  const url = new URL(request.url);
+  const req = event.request, url = new URL(req.url);
 
-  // Always go network-first for Firebase, Cloudinary, fonts, and CDN
-  const networkOnly =
-    url.hostname.includes("firebase") ||
-    url.hostname.includes("firestore") ||
-    url.hostname.includes("googleapis") ||
-    url.hostname.includes("cloudinary") ||
-    url.hostname.includes("gstatic") ||
-    url.hostname.includes("jsdelivr") ||
-    url.hostname.includes("unpkg") ||
-    url.hostname.includes("dicebear");
+  if (url.searchParams.has("_")) return;                       // connectivity pings go straight out
+  if (req.method !== "GET" || !/^https?:$/.test(url.protocol)) return;
+  if (NEVER_CACHE.test(req.url) || req.headers.has("range")) return;
+  if (req.destination === "audio" || req.destination === "video") return;   // too big to store
 
-  if (networkOnly) {
-    event.respondWith(fetch(request));
+  // Photos (avatars, covers): saved copy first, capped at 150
+  if (req.destination === "image") {
+    event.respondWith((async () => {
+      const hit = await caches.match(req); if (hit) return hit;
+      try {
+        const r = await fetch(req);
+        if (r.ok || r.type === "opaque") { (await caches.open(IMG_CACHE)).put(req, r.clone()); trim(IMG_CACHE, 150); }
+        return r;
+      } catch { return Response.error(); }
+    })());
     return;
   }
 
-  // Cache-first for everything else (shell files, icons, local CSS/JS)
-  event.respondWith(
-    caches.match(request).then((cached) => {
-      if (cached) return cached;
+  const sameOrigin = url.origin === self.location.origin;
 
-      return fetch(request)
-        .then((response) => {
-          if (
-            !response ||
-            response.status !== 200 ||
-            response.type === "opaque"
-          ) {
-            return response;
-          }
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
-          return response;
-        })
-        .catch(() => {
-          if (request.mode === "navigate") {
-            return caches.match("/index.html");
-          }
-        });
-    })
-  );
+  // Your own files (pages, JS, CSS): network first so updates always arrive, saved copy when offline
+  if (sameOrigin) {
+    event.respondWith((async () => {
+      try {
+        const r = await fetch(req);
+        if (r.ok) { const c = await caches.open(CACHE_NAME); c.put(req.mode === "navigate" ? "/" : req, r.clone()); }
+        return r;
+      } catch {
+        return (await caches.match(req)) ||
+          (req.mode === "navigate" ? ((await caches.match("/")) || (await caches.match("/index.html"))) : null) ||
+          Response.error();
+      }
+    })());
+    return;
+  }
+
+  // Libraries & fonts from CDNs (Firebase SDK, icon font, highlight.js…): saved copy first, refresh quietly
+  event.respondWith((async () => {
+    const c = await caches.open(CACHE_NAME), hit = await c.match(req);
+    const net = fetch(req).then((r) => { if (r.ok || r.type === "opaque") c.put(req, r.clone()); return r; }).catch(() => null);
+    return hit || (await net) || Response.error();
+  })());
 });

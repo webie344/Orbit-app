@@ -1,4 +1,4 @@
-/* BUILD 2026-11-12 00:15 */
+/* BUILD 2026-11-12 06:39 */
 /* =================================================================
    Get better — style.css
    Global tokens, layout, auth, feed (flat IG/FB style), reels,
@@ -5215,3 +5215,21 @@ body[data-route="games"] .content { padding: 0 !important; }
 .gm-lv b{font-size:20px}
 .gm-modal-b .gbu-btn { color: var(--text); border-color: var(--line); background: var(--bg-elev-2); padding: 10px 18px; }
 .gm-modal-b .gbu-btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+
+/* ================= Offline banner ================= */
+.gb-net { position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 10px); z-index: 99999; display: flex; align-items: center; gap: 10px;
+  width: max-content; max-width: calc(100vw - 24px); padding: 9px 10px 9px 14px; border-radius: 999px; font-size: 13px; font-weight: 600;
+  color: #fff; background: #1f1f2b; border: 1px solid rgba(255,255,255,.12); box-shadow: 0 10px 30px rgba(0,0,0,.4);
+  transform: translate(-50%, -140%); opacity: 0; transition: transform .35s cubic-bezier(.2,1.2,.4,1), opacity .25s; }
+.gb-net.show { transform: translate(-50%, 0); opacity: 1; }
+.gb-net.on-line { background: #16a34a; border-color: transparent; padding-right: 14px; }
+.gb-net-i { font-size: 17px; flex: none; }
+.gb-net-t { min-width: 0; line-height: 1.25; }
+.gb-net-b { display: inline-flex; align-items: center; gap: 5px; flex: none; padding: 6px 12px; border-radius: 999px; border: 0; font: inherit; font-weight: 700; color: #1e1b4b; background: #fde047; cursor: pointer; }
+.gb-net-b.spin i { animation: gbNetSpin .7s linear infinite; }
+.gb-net-x { flex: none; width: 28px; height: 28px; border-radius: 50%; border: 0; background: rgba(255,255,255,.12); color: #fff; cursor: pointer; display: grid; place-items: center; }
+.gb-net [hidden] { display: none !important; }
+.gb-net.shake { animation: gbNetShake .45s; }
+@keyframes gbNetSpin { to { transform: rotate(360deg) } }
+@keyframes gbNetShake { 20%,60% { margin-left: -6px } 40%,80% { margin-left: 6px } }
+@media (max-width: 420px) { .gb-net { font-size: 12px; gap: 8px; } .gb-net-t { max-width: 46vw; } }
