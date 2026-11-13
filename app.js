@@ -1,4 +1,4 @@
-// BUILD 2026-11-13 12:22 — onboarding cartoon + CSS logo + voice-only pages
+// BUILD 2026-11-13 12:37 — onboarding cartoon + CSS logo + voice-only pages
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
@@ -7487,37 +7487,49 @@ function _gbInit() {
     el("div", { class: "gb-main" },
       el("div", { class: "sk-line w40" }), el("div", { class: "sk-line w90" }), el("div", { class: "sk-voice" })));
 
-  // ---- Games strip: "Friends are playing" cards with Tap to beat + chat
-  const buildGameStrip = async ({ onlyFriends = false } = {}) => {
-    const entries = (await gmFriendScores()).filter((e) => gmDef(e.gameId)).slice(0, 8);
-    if (onlyFriends && !entries.length) return null;
+  // ---- Games strips: "Friends are playing" cards with Tap to beat + chat (repeat through the feed)
+  const gameTile = (e, u) => {
+    const def = gmDef(e.gameId), first = (u.name || u.username || "Friend").split(" ")[0];
+    return el("div", { class: "gb-gt" },
+      el("div", { class: "gb-gt-who" },
+        el("button", { class: "gb-gt-av", type: "button", title: "View profile", onclick: () => { location.hash = `#profile/${u.uid}`; } }, gmAvatar(u, 40)),
+        el("div", {}, el("b", {}, u.name || u.username || "Friend"), el("small", {}, `${def.name}${e.at ? " · " + fmtTime(e.at) : ""}`))),
+      el("div", { class: "gb-gt-score" }, el("span", { class: "gb-gt-art", html: def.art() }),
+        el("div", {}, el("small", {}, `${first} scored`), el("strong", {}, gmFmt(e.gameId, e.score)))),
+      el("div", { class: "gb-gt-act" },
+        el("button", { class: "gb-gt-beat", type: "button", onclick: () => gmChallenge(e) }, el("i", { class: "ri-sword-line" }), " Tap to beat"),
+        el("button", { class: "gb-gt-chat", type: "button", title: `Message ${first}`, onclick: () => { location.hash = `#chats/${e.uid}`; } }, el("i", { class: "ri-chat-3-line" }))));
+  };
+  const promoTile = (id) => {
+    const def = gmDef(id);
+    return el("div", { class: "gb-gt promo" },
+      el("span", { class: "gb-gt-art big", html: def.art() }), el("strong", {}, def.name),
+      el("small", {}, def.tagline),
+      el("button", { class: "gb-gt-beat", type: "button", onclick: () => { location.hash = `#games/${id}`; } }, el("i", { class: "ri-play-fill" }), " Play now"));
+  };
+  const gameStrip = (title, tiles) => el("section", { class: "gb-gstrip" },
+    el("div", { class: "gb-gstrip-h" }, el("strong", {}, title), el("a", { href: "#games" }, "All games ›")),
+    el("div", { class: "gb-gstrip-rail" }, ...tiles));
+  const friendTiles = async (limitN) => {
+    const entries = (await gmFriendScores()).filter((e) => gmDef(e.gameId)).slice(0, limitN);
     const users = await Promise.all(entries.map((e) => fetchUser(e.uid).catch(() => null)));
-    const sec = el("section", { class: "gb-gstrip" });
-    const rail = el("div", { class: "gb-gstrip-rail" });
-    let n = 0;
-    entries.forEach((e, i) => {
-      const u = users[i]; if (!u) return; n++;
-      const def = gmDef(e.gameId), first = (u.name || u.username || "Friend").split(" ")[0];
-      rail.appendChild(el("div", { class: "gb-gt" },
-        el("div", { class: "gb-gt-who" }, el("img", { src: avatarFor(u), alt: "" }),
-          el("div", {}, el("b", {}, u.name || u.username || "Friend"), el("small", {}, `${def.name}${e.at ? " · " + fmtTime(e.at) : ""}`))),
-        el("div", { class: "gb-gt-score" }, el("span", { class: "gb-gt-art", html: def.art() }),
-          el("div", {}, el("small", {}, `${first} scored`), el("strong", {}, gmFmt(e.gameId, e.score)))),
-        el("div", { class: "gb-gt-act" },
-          el("button", { class: "gb-gt-beat", type: "button", onclick: () => gmChallenge(e) }, el("i", { class: "ri-sword-line" }), " Tap to beat"),
-          el("button", { class: "gb-gt-chat", type: "button", title: `Message ${first}`, onclick: () => { location.hash = `#chats/${e.uid}`; } }, el("i", { class: "ri-chat-3-line" })))));
-    });
-    if (!n) {
-      ["g2048", "snake", "word"].forEach((id) => {
-        const def = gmDef(id);
-        rail.appendChild(el("div", { class: "gb-gt promo" },
-          el("span", { class: "gb-gt-art big", html: def.art() }), el("strong", {}, def.name),
-          el("small", {}, "Set a score your friends can chase"),
-          el("button", { class: "gb-gt-beat", type: "button", onclick: () => { location.hash = `#games/${id}`; } }, el("i", { class: "ri-play-fill" }), " Play now")));
-      });
-    }
-    sec.append(el("div", { class: "gb-gstrip-h" }, el("strong", {}, n ? "🎮 Friends are playing" : "🎮 Take a game break"), el("a", { href: "#games" }, "All games ›")), rail);
-    return sec;
+    return entries.map((e, i) => (users[i] ? gameTile(e, users[i]) : null)).filter(Boolean);
+  };
+  // For the Games page: one strip, only if friends have played.
+  const buildGameStrip = async () => {
+    const t = await friendTiles(10);
+    return t.length ? gameStrip("🎮 Friends are playing", t) : null;
+  };
+  // For the feed: several strips, spread out. Friend scores first, then game suggestions.
+  const buildGameStrips = async () => {
+    const t = await friendTiles(16), out = [];
+    const titles = ["🎮 Friends are playing", "⚔️ Think you can beat them?", "🔥 Your friends are on a roll", "🏆 Challenge time"];
+    for (let i = 0; i < t.length && out.length < 4; i += 3) out.push(gameStrip(titles[out.length], t.slice(i, i + 3)));
+    const day = Math.floor(Date.now() / 864e5), ids = ["g2048", "snake", "word", "memory", "reaction", "bubble"];
+    const rot = (n) => ids.slice(n).concat(ids.slice(0, n));
+    out.push(gameStrip("🎮 Take a game break", rot(day % 6).slice(0, 3).map(promoTile)));
+    if (out.length < 3) out.push(gameStrip("🕹️ Try something new", rot((day + 3) % 6).slice(0, 3).map(promoTile)));
+    return out;
   };
 
   const renderVoiceFeed = (root) => {
@@ -7533,14 +7545,13 @@ function _gbInit() {
 
     let lastDoc = null, loading = false, allLoaded = false, renderSeq = 0, lastIds = "";
     const rendered = new Set();
-    let strip = null;
-    const placeStrip = () => {
-      if (!strip) return;
+    let strips = [];
+    const placeStrips = () => {
+      if (!strips.length) return;
       const posts = [...list.children].filter((c) => c.classList.contains("gb-post") && !c.classList.contains("gb-skel"));
-      if (!posts.length) return;
-      if (posts[2]) list.insertBefore(strip, posts[2]); else list.insertBefore(strip, sentinel);
+      strips.forEach((st, k) => { const ref = posts[2 + k * 6]; if (ref) list.insertBefore(st, ref); else if (st.parentNode === list) st.remove(); });
     };
-    buildGameStrip().then((n) => { strip = n; placeStrip(); }).catch(() => {});
+    buildGameStrips().then((n) => { strips = n; placeStrips(); }).catch(() => {});
 
     const appendPosts = async (posts) => {
       const fresh = posts.filter((p) => isVoicePost(p) && !postHidden(p) && !rendered.has(p.id));
@@ -7551,6 +7562,7 @@ function _gbInit() {
         const node = renderVoicePost(p, map[p.authorUid]);
         if (sentinel.parentNode === list) list.insertBefore(node, sentinel); else list.appendChild(node);
       });
+      placeStrips();
     };
 
     const showEmptyIfNeeded = () => {
@@ -7611,7 +7623,7 @@ function _gbInit() {
           list.insertBefore(renderVoicePost(p, map[p.authorUid]), sentinel);
         });
         io.disconnect();
-        placeStrip();
+        placeStrips();
         if (!allLoaded) io.observe(sentinel); else showEmptyIfNeeded();
         if (!allLoaded) requestAnimationFrame(() => {
           if (!loading && sentinel.getBoundingClientRect().top < window.innerHeight + 300) loadMore();
@@ -7760,7 +7772,7 @@ function _gbInit() {
 
     return dispose;
   };
-  return { renderVoiceFeed, renderVoiceDetail, renderVoicePost, renderPromptPage, stopAllAudio, buildGameStrip };
+  return { renderVoiceFeed, renderVoiceDetail, renderVoicePost, renderPromptPage, stopAllAudio, buildGameStrip, buildGameStrips };
 }
 
 // =========================================================================
@@ -7786,7 +7798,7 @@ function _gbInit() {
 const _gmSvg = (inner) => `<svg viewBox="0 0 120 90">${inner}</svg>`;
 const GAMES = [
   {
-    id: "bubble", name: "Bubble Pop", tagline: "Aim, shoot and pop the bubbles. 24 levels.", fmt: (s) => `${s}★`,
+    id: "bubble", tips: ["Drag to aim, release to shoot", "Match 3+ bubbles of one colour to pop them", "Tap the NEXT bubble to swap it"], name: "Bubble Pop", tagline: "Aim, shoot and pop the bubbles. 24 levels.", fmt: (s) => `${s}★`,
     art: () => '<svg viewBox="0 0 120 90"><defs><radialGradient id="gbp1" cx="35%" cy="30%"><stop offset="0" stop-color="#fff" stop-opacity=".9"/><stop offset=".25" stop-color="#fff" stop-opacity=".1"/></radialGradient></defs>' +
       [[20,18,"#ef4444"],[44,18,"#facc15"],[68,18,"#22c55e"],[92,18,"#3b82f6"],[32,40,"#3b82f6"],[56,40,"#ef4444"],[80,40,"#a855f7"],[44,62,"#22c55e"],[68,62,"#facc15"]]
         .map(([x, y, c]) => `<circle cx="${x}" cy="${y}" r="12" fill="${c}" stroke="#1e1b4b" stroke-width="2.4"/><circle cx="${x}" cy="${y}" r="12" fill="url(#gbp1)"/>`).join("") +
@@ -7794,28 +7806,28 @@ const GAMES = [
     mount: (root, ctx) => mountBubblePop(root, ctx),
   },
   {
-    id: "g2048", name: "2048", tagline: "Slide and merge tiles. Chase the big one.", fmt: (s) => Number(s).toLocaleString(),
+    id: "g2048", tips: ["Swipe to slide every tile", "Equal numbers merge into one", "Reach 2048 (and beyond!)"], name: "2048", tagline: "Slide and merge tiles. Chase the big one.", fmt: (s) => Number(s).toLocaleString(),
     art: () => _gmSvg([[14, 12, "#eee4da", "2"], [48, 12, "#f2b179", "8"], [82, 12, "#f67c5f", "16"], [14, 46, "#edc850", "32"], [48, 46, "#edc22e", "64"], [82, 46, "#3c3a32", "2048"]]
       .map(([x, y, c, t]) => `<rect x="${x}" y="${y}" width="26" height="26" rx="6" fill="${c}"/><text x="${x + 13}" y="${y + 18}" text-anchor="middle" font-size="${t.length > 3 ? 9 : 12}" font-weight="800" fill="${c === "#eee4da" ? "#776e65" : "#fff"}">${t}</text>`).join("")),
     mount: (root, ctx) => mountG2048(root, ctx),
   },
   {
-    id: "snake", name: "Snake", tagline: "Eat, grow, and don't bite your tail.", fmt: (s) => String(s),
+    id: "snake", tips: ["Swipe or use the pad to steer", "Eat food to grow and score", "Avoid walls and your own tail"], name: "Snake", tagline: "Eat, grow, and don't bite your tail.", fmt: (s) => String(s),
     art: () => _gmSvg('<path d="M20 64 H70 V30 H100" fill="none" stroke="#22c55e" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/><circle cx="100" cy="30" r="9" fill="#86efac"/><circle cx="103" cy="27" r="2.4" fill="#0f172a"/><circle cx="20" cy="26" r="7" fill="#ef4444"/>'),
     mount: (root, ctx) => mountSnake(root, ctx),
   },
   {
-    id: "memory", name: "Memory Match", tagline: "Find all the pairs in the fewest moves.", fmt: (s) => `${s} pts`,
+    id: "memory", tips: ["Flip two cards at a time", "Find all 8 pairs", "Fewer moves and less time = more points"], name: "Memory Match", tagline: "Find all the pairs in the fewest moves.", fmt: (s) => `${s} pts`,
     art: () => _gmSvg([[12, 10], [44, 10], [76, 10], [12, 48], [44, 48], [76, 48]].map(([x, y], i) => `<rect x="${x}" y="${y}" width="30" height="32" rx="7" fill="${i === 1 || i === 4 ? "#fde047" : "#6d4aff"}" stroke="#1e1b4b" stroke-width="2.4"/><text x="${x + 15}" y="${y + 22}" text-anchor="middle" font-size="16" font-weight="800" fill="${i === 1 || i === 4 ? "#1e1b4b" : "#fff"}">${i === 1 || i === 4 ? "★" : "?"}</text>`).join("")),
     mount: (root, ctx) => mountMemory(root, ctx),
   },
   {
-    id: "word", name: "Word Guess", tagline: "A new 5-letter word every day.", fmt: (s) => `${7 - Math.round(s / 100)} ${7 - Math.round(s / 100) === 1 ? "guess" : "guesses"}`,
+    id: "word", tips: ["Guess the 5-letter word in 6 tries", "Green = right spot, yellow = wrong spot, grey = not in word", "A new daily word every day"], name: "Word Guess", tagline: "A new 5-letter word every day.", fmt: (s) => `${7 - Math.round(s / 100)} ${7 - Math.round(s / 100) === 1 ? "guess" : "guesses"}`,
     art: () => _gmSvg(["G:#538d4e", "E:#b59f3b", "T:#3a3a3c", "B:#538d4e", "E:#538d4e"].map((s, i) => { const [l, c] = s.split(":"); return `<rect x="${6 + i * 22}" y="30" width="20" height="24" rx="4" fill="${c}"/><text x="${16 + i * 22}" y="48" text-anchor="middle" font-size="15" font-weight="800" fill="#fff">${l}</text>`; }).join("")),
     mount: (root, ctx) => mountWord(root, ctx),
   },
   {
-    id: "reaction", name: "Reaction Test", tagline: "How fast are your thumbs?", fmt: (s) => `${1000 - s} ms`,
+    id: "reaction", tips: ["Wait for the screen to turn green", "Tap as fast as you can, 5 rounds", "Tapping too early restarts the round"], name: "Reaction Test", tagline: "How fast are your thumbs?", fmt: (s) => `${1000 - s} ms`,
     art: () => _gmSvg('<circle cx="60" cy="45" r="30" fill="#22c55e" stroke="#1e1b4b" stroke-width="3"/><path d="M64 22 L48 48 H60 L56 68 L74 40 H62 Z" fill="#fde047" stroke="#1e1b4b" stroke-width="2" stroke-linejoin="round"/>'),
     mount: (root, ctx) => mountReaction(root, ctx),
   },
@@ -7846,6 +7858,163 @@ function renderGames(root, gameId) {
   gb().buildGameStrip({ onlyFriends: true }).then((n) => { if (n && !dead) strip.appendChild(n); }).catch(() => {});
   return () => { dead = true; };
 }
+
+// ---------------------------------------------------------------------------
+// HOW-TO-PLAY ANIMATIONS — tiny scripted scenes (crisp, themed, work offline)
+// ---------------------------------------------------------------------------
+const gmAvatar = (u, size = 36) => {
+  const name = (u?.name || u?.username || "?").trim();
+  const wrap = el("span", { class: "gm-av", style: `width:${size}px;height:${size}px;font-size:${Math.round(size * .42)}px` }, name[0]?.toUpperCase() || "?");
+  const img = el("img", { src: avatarFor(u), alt: "", loading: "lazy" });
+  img.onerror = () => img.remove();
+  wrap.appendChild(img);
+  return wrap;
+};
+
+function gmDemoPlay(host, spec) {
+  host.innerHTML = "";
+  const stage = el("div", { class: "gm-demo", style: `width:${spec.w}px;height:${spec.h}px` });
+  if (spec.bg) stage.innerHTML = spec.bg;
+  const cap = el("div", { class: "gm-demo-cap" }), nodes = {};
+  for (const [id, it] of Object.entries(spec.items)) {
+    const n = el("div", { class: `gmd ${it.cls || ""}`, style: `width:${it.w || 0}px;height:${it.h || 0}px`, html: it.html || "" });
+    n._x = 0; n._y = 0; n._s = 1; n._r = 0; stage.appendChild(n); nodes[id] = n;
+  }
+  host.append(stage, cap);
+  let timer = 0, k = 0, dead = false;
+  const apply = (st, instant) => {
+    for (const [id, v] of Object.entries(st)) {
+      const n = nodes[id]; if (!n) continue;
+      const o = Array.isArray(v) ? { x: v[0], y: v[1], s: v[2], o: v[3], r: v[4] } : v;
+      if (instant) n.style.transition = "none";
+      n._x = o.x ?? n._x; n._y = o.y ?? n._y; n._s = o.s ?? n._s; n._r = o.r ?? n._r;
+      n.style.transform = `translate(${n._x}px,${n._y}px) scale(${n._s}) rotate(${n._r}deg)`;
+      if (o.o != null) n.style.opacity = o.o;
+      if (o.t != null) n.textContent = o.t;
+      if (o.c != null) n.className = `gmd ${spec.items[id].cls || ""} ${o.c}`;
+      if (instant) { void n.offsetWidth; n.style.transition = ""; }
+    }
+  };
+  const run = () => {
+    if (dead) return;
+    const sc = spec.scenes[k % spec.scenes.length];
+    apply(sc.st || {}, k % spec.scenes.length === 0);
+    if (sc.cap) { cap.textContent = sc.cap; cap.classList.remove("in"); void cap.offsetWidth; cap.classList.add("in"); }
+    k++; timer = setTimeout(run, sc.ms || 900);
+  };
+  run();
+  return () => { dead = true; clearTimeout(timer); };
+}
+
+const _gmHand = { cls: "hand", html: "👆", w: 30, h: 30 };
+const _gmGrid = (cols, rows, cell, pitch, off, bg) => `<div style="position:absolute;inset:0;border-radius:14px;background:${bg}"></div>` +
+  Array.from({ length: cols * rows }, (_, i) => `<i style="position:absolute;left:${off + (i % cols) * pitch}px;top:${off + Math.floor(i / cols) * pitch}px;width:${cell}px;height:${cell}px;border-radius:8px;background:rgba(255,255,255,.18)"></i>`).join("");
+
+const GM_DEMOS = {
+  g2048() {
+    const P = (c, r) => ({ x: 6 + c * 52, y: 6 + r * 52 });
+    return {
+      w: 214, h: 214, bg: _gmGrid(4, 4, 48, 52, 6, "#bbada0"),
+      items: { a: { cls: "tile", w: 48, h: 48 }, b: { cls: "tile", w: 48, h: 48 }, c: { cls: "tile", w: 48, h: 48 }, d: { cls: "tile", w: 48, h: 48 }, hand: _gmHand },
+      scenes: [
+        { ms: 900, cap: "Swipe in any direction", st: { a: { ...P(0, 1), t: 2, c: "", s: 1, o: 1 }, b: { ...P(2, 1), t: 2, c: "", o: 1, s: 1 }, c: { ...P(1, 3), t: 4, c: "v4", o: 1, s: 1 }, d: { ...P(3, 0), t: 2, o: 0, s: .3, c: "" }, hand: { x: 150, y: 120, o: 0, s: 1 } } },
+        { ms: 700, st: { hand: { o: 1, x: 150, y: 100 } } },
+        { ms: 1000, cap: "Every tile slides that way", st: { hand: { x: 50, y: 100 }, b: P(0, 1), c: P(0, 3) } },
+        { ms: 1300, cap: "Equal numbers merge into one!", st: { a: { t: 4, c: "v4", s: 1.15 }, b: { o: 0 }, hand: { o: 0 }, d: { o: 1, s: 1 } } },
+        { ms: 1400, cap: "Keep merging to reach 2048", st: { a: { s: 1 } } },
+      ],
+    };
+  },
+  snake() {
+    const path = [[0, 4], [1, 4], [2, 4], [3, 4], [4, 4], [5, 4], [6, 4], [6, 3], [6, 2], [6, 1]], C = 24, O = 6;
+    const pos = ([c, r]) => ({ x: O + c * C, y: O + r * C });
+    const scenes = [];
+    for (let h = 2; h < path.length; h++) {
+      const st = {}; for (let j = 0; j < 4; j++) { const q = path[h - j]; st["s" + j] = q ? { ...pos(q), o: j === 3 ? (h >= 8 ? 1 : 0) : 1 } : { o: 0 }; }
+      st.food = { o: h >= 8 ? 0 : 1 };
+      if (h === 5) st.hand = { x: 150, y: 150, o: 1 }; if (h === 6) st.hand = { x: 150, y: 90 }; if (h === 7) st.hand = { o: 0 };
+      scenes.push({ ms: h === 2 ? 700 : 480, cap: h === 2 ? "Swipe to steer the snake" : h === 5 ? "Swipe up to turn" : h === 8 ? "Eat the food to grow and score" : null, st });
+    }
+    scenes[0].st.hand = { x: 150, y: 150, o: 0 }; scenes[0].st.food = { ...pos([6, 2]), o: 1 }; scenes.push({ ms: 1200, cap: "Don't hit the walls or yourself!", st: {} });
+    return {
+      w: 214, h: 214, bg: _gmGrid(9, 9, 22, 24, 7, "#0f172a"),
+      items: { s0: { cls: "seg head", w: 22, h: 22 }, s1: { cls: "seg", w: 22, h: 22 }, s2: { cls: "seg", w: 22, h: 22 }, s3: { cls: "seg", w: 22, h: 22 }, food: { cls: "food", w: 20, h: 20 }, hand: _gmHand },
+      scenes,
+    };
+  },
+  memory() {
+    const P = (c, r) => ({ x: 12 + c * 68, y: 8 + r * 80 }), ids = ["c0", "c1", "c2", "c3", "c4", "c5"], pos = [[0, 0], [1, 0], [2, 0], [0, 1], [1, 1], [2, 1]];
+    const reset = {}; ids.forEach((id, i) => { reset[id] = { ...P(...pos[i]), t: "?", c: "", s: 1, o: 1 }; });
+    const H = (i) => ({ x: P(...pos[i]).x + 14, y: P(...pos[i]).y + 30 });
+    return {
+      w: 214, h: 172, bg: "",
+      items: { ...Object.fromEntries(ids.map((id) => [id, { cls: "card", w: 58, h: 70 }])), hand: _gmHand },
+      scenes: [
+        { ms: 800, cap: "Tap a card to flip it", st: { ...reset, hand: { ...H(0), o: 0 } } },
+        { ms: 700, st: { hand: { ...H(0), o: 1 } } },
+        { ms: 900, st: { c0: { t: "🐶", c: "up" } } },
+        { ms: 700, cap: "Flip a second card", st: { hand: H(2) } },
+        { ms: 1100, st: { c2: { t: "🐱", c: "up" } } },
+        { ms: 800, cap: "No match? They flip back", st: { c0: { t: "?", c: "" }, c2: { t: "?", c: "" }, hand: H(0) } },
+        { ms: 700, st: { c0: { t: "🐶", c: "up" } } },
+        { ms: 700, st: { hand: H(4) } },
+        { ms: 900, cap: "Match all the pairs fast!", st: { c4: { t: "🐶", c: "up" } } },
+        { ms: 1200, st: { c0: { c: "up ok" }, c4: { c: "up ok" }, hand: { o: 0 } } },
+      ],
+    };
+  },
+  word() {
+    const X = (i) => 10 + i * 48, L = "CRANE".split(""), col = ["x", "y", "g", "x", "g"];
+    const scenes = [{ ms: 600, cap: "Type a 5-letter word", st: { ...Object.fromEntries(L.map((_, i) => ["t" + i, { x: X(i), y: 18, t: "", c: "", s: 1 }])) } }];
+    L.forEach((l, i) => scenes.push({ ms: 300, st: { ["t" + i]: { t: l, c: "f", s: 1 } } }));
+    scenes.push({ ms: 700, cap: "Press Enter to check it", st: {} });
+    L.forEach((l, i) => scenes.push({ ms: 350, cap: i === 0 ? "Green: right letter, right spot" : i === 1 ? "Yellow: in the word, wrong spot" : i === 3 ? "Grey: not in the word" : null, st: { ["t" + i]: { c: col[i], s: 1.12 } } }));
+    scenes.push({ ms: 1500, cap: "6 tries. Fewer guesses = higher score", st: Object.fromEntries(L.map((_, i) => ["t" + i, { s: 1 }])) });
+    return { w: 254, h: 84, bg: "", items: Object.fromEntries(L.map((_, i) => ["t" + i, { cls: "wtile", w: 44, h: 44 }])), scenes };
+  },
+  reaction() {
+    return {
+      w: 214, h: 172, bg: "",
+      items: { pad: { cls: "rpad", w: 150, h: 150 }, hand: _gmHand },
+      scenes: [
+        { ms: 1500, cap: "Wait for the red screen to turn green", st: { pad: { x: 32, y: 10, t: "Wait…", c: "red", s: 1 }, hand: { x: 100, y: 90, o: 0, s: 1 } } },
+        { ms: 900, cap: "Tap as fast as you can!", st: { pad: { t: "TAP!", c: "green" }, hand: { o: 1, y: 100 } } },
+        { ms: 300, st: { hand: { s: .8, y: 92 } } },
+        { ms: 1600, cap: "Your time is your score", st: { pad: { t: "243 ms", c: "blue" }, hand: { s: 1, o: 0 } } },
+      ],
+    };
+  },
+  bubble() {
+    const B = (x, y, c) => ({ cls: `ball ${c}`, w: 28, h: 28, x, y });
+    const items = { b0: B(8, 8, "r"), b1: B(38, 8, "r"), b2: B(68, 8, "b"), b3: B(98, 8, "y"), b4: B(128, 8, "y"), b5: B(158, 8, "g"), b6: B(53, 38, "b"), b7: B(83, 38, "g"), cannon: { cls: "cannon", w: 40, h: 40 }, aim: { cls: "aim", w: 4, h: 150 }, shot: { cls: "ball r", w: 28, h: 28 }, hand: _gmHand };
+    const base = {}; ["b0", "b1", "b2", "b3", "b4", "b5", "b6", "b7"].forEach((k) => { base[k] = { x: items[k].x, y: items[k].y, s: 1, o: 1 }; });
+    return {
+      w: 196, h: 236, bg: '<div style="position:absolute;inset:0;border-radius:14px;background:linear-gradient(180deg,#25205a,#1d3fbf)"></div>', items,
+      scenes: [
+        { ms: 700, cap: "Aim the cannon", st: { ...base, cannon: { x: 78, y: 188, o: 1, s: 1 }, shot: { x: 84, y: 194, s: 1, o: 1 }, aim: { x: 96, y: 40, r: 0, o: 0 }, hand: { x: 104, y: 205, o: 0, s: 1 } } },
+        { ms: 700, st: { hand: { o: 1 } } },
+        { ms: 1100, cap: "Drag to aim, release to shoot", st: { aim: { o: .7, r: -27 }, hand: { x: 70, y: 188 } } },
+        { ms: 800, cap: "Release to fire!", st: { shot: { x: 23, y: 38 }, aim: { o: 0 }, hand: { o: 0 } } },
+        { ms: 1500, cap: "Match 3 or more of a colour to pop them", st: { b0: { s: 0, o: 0 }, b1: { s: 0, o: 0 }, shot: { s: 0, o: 0 } } },
+      ],
+    };
+  },
+};
+
+function gmHowTo(game, onClose) {
+  const spec = GM_DEMOS[game.id]?.(); if (!spec) { onClose?.(); return; }
+  const host = el("div", { class: "gm-demo-host" });
+  const stop = { f: null };
+  const modal = el("div", { class: "gm-modal fixed" });
+  const close = () => { stop.f?.(); modal.remove(); try { localStorage.setItem(`gb_howto_${game.id}`, "1"); } catch {} onClose?.(); };
+  modal.appendChild(el("div", { class: "gm-modal-c gm-how" },
+    el("h3", {}, `How to play ${game.name}`), host,
+    el("ul", { class: "gm-tips" }, ...(game.tips || []).map((t) => el("li", {}, t))),
+    el("button", { class: "gbu-btn primary", type: "button", onclick: close }, "Got it, let's play")));
+  document.body.appendChild(modal);
+  stop.f = gmDemoPlay(host, spec);
+}
+const gmHowToFirst = (game) => { let seen = false; try { seen = !!localStorage.getItem(`gb_howto_${game.id}`); } catch {} if (!seen) setTimeout(() => gmHowTo(game), 250); };
 
 // ---------------------------------------------------------------------------
 // SHARED GAME HELPERS — scores, leaderboard, friend challenges, game frame
@@ -7933,6 +8102,7 @@ function gmFrame(root, game, exit) {
     el("div", { class: "gm-top" },
       el("button", { class: "gb-icon-btn", type: "button", title: "Games", onclick: back }, el("i", { class: "ri-arrow-left-line" })),
       el("strong", {}, game.name), bestEl,
+      el("button", { class: "gb-icon-btn", type: "button", title: "How to play", onclick: () => gmHowTo(game) }, el("i", { class: "ri-question-line" })),
       el("button", { class: "gb-icon-btn", type: "button", title: "Leaderboard", onclick: () => gmLeaderboard(game.id) }, el("i", { class: "ri-bar-chart-horizontal-fill" }))));
   let target = null;
   try { const t = JSON.parse(sessionStorage.getItem("gb_beat") || "null"); if (t && t.gameId === game.id) target = t; } catch {}
@@ -7941,7 +8111,7 @@ function gmFrame(root, game, exit) {
     wrap.appendChild(bar);
     fetchUser(target.uid).then((u) => { if (u) { bar.innerHTML = ""; bar.append(el("img", { src: avatarFor(u), alt: "" }), el("span", {}, `Beat ${(u.name || "their").split(" ")[0]}'s score: `, el("b", {}, gmFmt(game.id, target.score)))); } }).catch(() => {});
   }
-  wrap.appendChild(stage); root.appendChild(wrap); showBest();
+  wrap.appendChild(stage); root.appendChild(wrap); showBest(); gmHowToFirst(game);
 
   const finish = async (score, again, note) => {
     const r = score > 0 ? await gmSubmit(game.id, score) : { isBest: false, top: gamesProgress(game.id).read().top || 0 };
@@ -8285,6 +8455,7 @@ function mountBubblePop(root, { exit }) {
   };
 
   // ------------ level select
+  gmHowToFirst(gmDef("bubble"));
   const showLevels = () => {
     stopLoop?.(); stopLoop = null; wrap.innerHTML = "";
     const total = Object.values(P.stars).reduce((a, b) => a + b, 0);
@@ -8298,7 +8469,8 @@ function mountBubblePop(root, { exit }) {
     wrap.append(
       el("div", { class: "gm-top" },
         el("button", { class: "gb-icon-btn", type: "button", onclick: exit }, el("i", { class: "ri-arrow-left-line" })),
-        el("strong", {}, "Bubble Pop"), el("span", { class: "gm-stars" }, el("i", { class: "ri-star-fill" }), ` ${total}`)),
+        el("strong", {}, "Bubble Pop"), el("span", { class: "gm-stars" }, el("i", { class: "ri-star-fill" }), ` ${total}`),
+        el("button", { class: "gb-icon-btn", type: "button", title: "How to play", onclick: () => gmHowTo(gmDef("bubble")) }, el("i", { class: "ri-question-line" }))),
       el("div", { class: "gm-lv-wrap" }, el("p", { class: "gm-sub" }, `Choose a level · ${BP_LEVELS.length} levels`), grid));
   };
 
