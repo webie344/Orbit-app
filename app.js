@@ -1,4 +1,4 @@
-// BUILD 2026-11-12 06:53 — onboarding cartoon + CSS logo + voice-only pages
+// BUILD 2026-11-13 12:00 — onboarding cartoon + CSS logo + voice-only pages
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
@@ -15,7 +15,7 @@ import {
   signInWithPopup, updateProfile, sendPasswordResetEmail,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
 import {
-  getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, getDoc, updateDoc, addDoc, deleteDoc,
+  getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, getDoc, getDocFromCache, updateDoc, addDoc, deleteDoc,
   collection, query, where, orderBy, limit, startAfter, onSnapshot, getDocs,
   serverTimestamp, increment, arrayUnion, arrayRemove, writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
@@ -1554,7 +1554,15 @@ const showApp  = () => { hideOrbitLoader(); $("#auth").classList.add("hidden"); 
 
 const ensureUserDoc = async (user, extras = {}) => {
   const ref = doc(db, "users", user.uid);
-  const snap = await getDoc(ref);
+  // Offline-safe: try the server (max 6s), then the saved copy, then a bare profile from the login.
+  let snap = null;
+  try { snap = await Promise.race([getDoc(ref), new Promise((_, rej) => setTimeout(() => rej(new Error("slow")), 6000))]); }
+  catch { try { snap = await getDocFromCache(ref); } catch { snap = null; } }
+  if (!snap) {
+    const uname = (user.email?.split("@")[0] || "me").toLowerCase().replace(/[^a-z0-9_]/g, "");
+    return { uid: user.uid, name: user.displayName || uname, username: uname, email: user.email || null,
+      photoURL: user.photoURL || `https://api.dicebear.com/7.x/shapes/svg?seed=${user.uid}`, followers: [], following: [], _offlineStub: true };
+  }
   if (!snap.exists()) {
     const username = (extras.username || (user.email?.split("@")[0]) || `u${Date.now()}`).toLowerCase().replace(/[^a-z0-9_]/g, "");
     const profile = {
@@ -1594,7 +1602,7 @@ const ensureUserDoc = async (user, extras = {}) => {
     return { ...profile, _isNew: true };
   }
   // mark online + lastSeen
-  await updateDoc(ref, { online: true, lastSeen: serverTimestamp() });
+  updateDoc(ref, { online: true, lastSeen: serverTimestamp() }).catch(() => {});   // never await: offline writes wait for the network
   return { uid: user.uid, ...snap.data(), online: true };
 };
 
