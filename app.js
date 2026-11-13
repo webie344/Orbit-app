@@ -1,4 +1,4 @@
-// BUILD 2026-11-13 12:00 — onboarding cartoon + CSS logo + voice-only pages
+// BUILD 2026-11-13 12:22 — onboarding cartoon + CSS logo + voice-only pages
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
@@ -7487,6 +7487,39 @@ function _gbInit() {
     el("div", { class: "gb-main" },
       el("div", { class: "sk-line w40" }), el("div", { class: "sk-line w90" }), el("div", { class: "sk-voice" })));
 
+  // ---- Games strip: "Friends are playing" cards with Tap to beat + chat
+  const buildGameStrip = async ({ onlyFriends = false } = {}) => {
+    const entries = (await gmFriendScores()).filter((e) => gmDef(e.gameId)).slice(0, 8);
+    if (onlyFriends && !entries.length) return null;
+    const users = await Promise.all(entries.map((e) => fetchUser(e.uid).catch(() => null)));
+    const sec = el("section", { class: "gb-gstrip" });
+    const rail = el("div", { class: "gb-gstrip-rail" });
+    let n = 0;
+    entries.forEach((e, i) => {
+      const u = users[i]; if (!u) return; n++;
+      const def = gmDef(e.gameId), first = (u.name || u.username || "Friend").split(" ")[0];
+      rail.appendChild(el("div", { class: "gb-gt" },
+        el("div", { class: "gb-gt-who" }, el("img", { src: avatarFor(u), alt: "" }),
+          el("div", {}, el("b", {}, u.name || u.username || "Friend"), el("small", {}, `${def.name}${e.at ? " · " + fmtTime(e.at) : ""}`))),
+        el("div", { class: "gb-gt-score" }, el("span", { class: "gb-gt-art", html: def.art() }),
+          el("div", {}, el("small", {}, `${first} scored`), el("strong", {}, gmFmt(e.gameId, e.score)))),
+        el("div", { class: "gb-gt-act" },
+          el("button", { class: "gb-gt-beat", type: "button", onclick: () => gmChallenge(e) }, el("i", { class: "ri-sword-line" }), " Tap to beat"),
+          el("button", { class: "gb-gt-chat", type: "button", title: `Message ${first}`, onclick: () => { location.hash = `#chats/${e.uid}`; } }, el("i", { class: "ri-chat-3-line" })))));
+    });
+    if (!n) {
+      ["g2048", "snake", "word"].forEach((id) => {
+        const def = gmDef(id);
+        rail.appendChild(el("div", { class: "gb-gt promo" },
+          el("span", { class: "gb-gt-art big", html: def.art() }), el("strong", {}, def.name),
+          el("small", {}, "Set a score your friends can chase"),
+          el("button", { class: "gb-gt-beat", type: "button", onclick: () => { location.hash = `#games/${id}`; } }, el("i", { class: "ri-play-fill" }), " Play now")));
+      });
+    }
+    sec.append(el("div", { class: "gb-gstrip-h" }, el("strong", {}, n ? "🎮 Friends are playing" : "🎮 Take a game break"), el("a", { href: "#games" }, "All games ›")), rail);
+    return sec;
+  };
+
   const renderVoiceFeed = (root) => {
     const shell = el("div", { class: "gb-shell" });
     const col = el("div", { class: "gb-col" });
@@ -7500,6 +7533,14 @@ function _gbInit() {
 
     let lastDoc = null, loading = false, allLoaded = false, renderSeq = 0, lastIds = "";
     const rendered = new Set();
+    let strip = null;
+    const placeStrip = () => {
+      if (!strip) return;
+      const posts = [...list.children].filter((c) => c.classList.contains("gb-post") && !c.classList.contains("gb-skel"));
+      if (!posts.length) return;
+      if (posts[2]) list.insertBefore(strip, posts[2]); else list.insertBefore(strip, sentinel);
+    };
+    buildGameStrip().then((n) => { strip = n; placeStrip(); }).catch(() => {});
 
     const appendPosts = async (posts) => {
       const fresh = posts.filter((p) => isVoicePost(p) && !postHidden(p) && !rendered.has(p.id));
@@ -7570,6 +7611,7 @@ function _gbInit() {
           list.insertBefore(renderVoicePost(p, map[p.authorUid]), sentinel);
         });
         io.disconnect();
+        placeStrip();
         if (!allLoaded) io.observe(sentinel); else showEmptyIfNeeded();
         if (!allLoaded) requestAnimationFrame(() => {
           if (!loading && sentinel.getBoundingClientRect().top < window.innerHeight + 300) loadMore();
@@ -7718,7 +7760,7 @@ function _gbInit() {
 
     return dispose;
   };
-  return { renderVoiceFeed, renderVoiceDetail, renderVoicePost, renderPromptPage, stopAllAudio };
+  return { renderVoiceFeed, renderVoiceDetail, renderVoicePost, renderPromptPage, stopAllAudio, buildGameStrip };
 }
 
 // =========================================================================
@@ -7741,14 +7783,41 @@ function _gbInit() {
 // 17. GAMES — dedicated games page (#games). Add new games to GAMES below.
 //     Each game: { id, name, tagline, art(): html, mount(root, { exit }) -> dispose }
 // =========================================================================
+const _gmSvg = (inner) => `<svg viewBox="0 0 120 90">${inner}</svg>`;
 const GAMES = [
   {
-    id: "bubble", name: "Bubble Pop", tagline: "Aim, shoot and pop the bubbles. 24 levels.",
+    id: "bubble", name: "Bubble Pop", tagline: "Aim, shoot and pop the bubbles. 24 levels.", fmt: (s) => `${s}★`,
     art: () => '<svg viewBox="0 0 120 90"><defs><radialGradient id="gbp1" cx="35%" cy="30%"><stop offset="0" stop-color="#fff" stop-opacity=".9"/><stop offset=".25" stop-color="#fff" stop-opacity=".1"/></radialGradient></defs>' +
       [[20,18,"#ef4444"],[44,18,"#facc15"],[68,18,"#22c55e"],[92,18,"#3b82f6"],[32,40,"#3b82f6"],[56,40,"#ef4444"],[80,40,"#a855f7"],[44,62,"#22c55e"],[68,62,"#facc15"]]
         .map(([x, y, c]) => `<circle cx="${x}" cy="${y}" r="12" fill="${c}" stroke="#1e1b4b" stroke-width="2.4"/><circle cx="${x}" cy="${y}" r="12" fill="url(#gbp1)"/>`).join("") +
       '<circle cx="60" cy="84" r="6" fill="#fb923c" stroke="#1e1b4b" stroke-width="2.4"/></svg>',
     mount: (root, ctx) => mountBubblePop(root, ctx),
+  },
+  {
+    id: "g2048", name: "2048", tagline: "Slide and merge tiles. Chase the big one.", fmt: (s) => Number(s).toLocaleString(),
+    art: () => _gmSvg([[14, 12, "#eee4da", "2"], [48, 12, "#f2b179", "8"], [82, 12, "#f67c5f", "16"], [14, 46, "#edc850", "32"], [48, 46, "#edc22e", "64"], [82, 46, "#3c3a32", "2048"]]
+      .map(([x, y, c, t]) => `<rect x="${x}" y="${y}" width="26" height="26" rx="6" fill="${c}"/><text x="${x + 13}" y="${y + 18}" text-anchor="middle" font-size="${t.length > 3 ? 9 : 12}" font-weight="800" fill="${c === "#eee4da" ? "#776e65" : "#fff"}">${t}</text>`).join("")),
+    mount: (root, ctx) => mountG2048(root, ctx),
+  },
+  {
+    id: "snake", name: "Snake", tagline: "Eat, grow, and don't bite your tail.", fmt: (s) => String(s),
+    art: () => _gmSvg('<path d="M20 64 H70 V30 H100" fill="none" stroke="#22c55e" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/><circle cx="100" cy="30" r="9" fill="#86efac"/><circle cx="103" cy="27" r="2.4" fill="#0f172a"/><circle cx="20" cy="26" r="7" fill="#ef4444"/>'),
+    mount: (root, ctx) => mountSnake(root, ctx),
+  },
+  {
+    id: "memory", name: "Memory Match", tagline: "Find all the pairs in the fewest moves.", fmt: (s) => `${s} pts`,
+    art: () => _gmSvg([[12, 10], [44, 10], [76, 10], [12, 48], [44, 48], [76, 48]].map(([x, y], i) => `<rect x="${x}" y="${y}" width="30" height="32" rx="7" fill="${i === 1 || i === 4 ? "#fde047" : "#6d4aff"}" stroke="#1e1b4b" stroke-width="2.4"/><text x="${x + 15}" y="${y + 22}" text-anchor="middle" font-size="16" font-weight="800" fill="${i === 1 || i === 4 ? "#1e1b4b" : "#fff"}">${i === 1 || i === 4 ? "★" : "?"}</text>`).join("")),
+    mount: (root, ctx) => mountMemory(root, ctx),
+  },
+  {
+    id: "word", name: "Word Guess", tagline: "A new 5-letter word every day.", fmt: (s) => `${7 - Math.round(s / 100)} ${7 - Math.round(s / 100) === 1 ? "guess" : "guesses"}`,
+    art: () => _gmSvg(["G:#538d4e", "E:#b59f3b", "T:#3a3a3c", "B:#538d4e", "E:#538d4e"].map((s, i) => { const [l, c] = s.split(":"); return `<rect x="${6 + i * 22}" y="30" width="20" height="24" rx="4" fill="${c}"/><text x="${16 + i * 22}" y="48" text-anchor="middle" font-size="15" font-weight="800" fill="#fff">${l}</text>`; }).join("")),
+    mount: (root, ctx) => mountWord(root, ctx),
+  },
+  {
+    id: "reaction", name: "Reaction Test", tagline: "How fast are your thumbs?", fmt: (s) => `${1000 - s} ms`,
+    art: () => _gmSvg('<circle cx="60" cy="45" r="30" fill="#22c55e" stroke="#1e1b4b" stroke-width="3"/><path d="M64 22 L48 48 H60 L56 68 L74 40 H62 Z" fill="#fde047" stroke="#1e1b4b" stroke-width="2" stroke-linejoin="round"/>'),
+    mount: (root, ctx) => mountReaction(root, ctx),
   },
 ];
 
@@ -7761,18 +7830,374 @@ function gamesProgress(id) {
 function renderGames(root, gameId) {
   const game = GAMES.find((g) => g.id === gameId);
   if (game) return game.mount(root, { exit: () => { location.hash = "#games"; } });
+  let dead = false;
   const cards = GAMES.map((g) => {
-    const p = gamesProgress(g.id).read(), stars = Object.values(p.stars || {}).reduce((a, b) => a + b, 0);
+    const p = gamesProgress(g.id).read();
+    const best = g.id === "bubble" ? `${Object.values(p.stars || {}).reduce((a, b) => a + b, 0)} ★ · Level ${p.unlocked || 1}` : p.top ? `Best ${g.fmt(p.top)}` : "Not played yet";
     const c = el("button", { class: "gm-card", type: "button", onclick: () => { location.hash = `#games/${g.id}`; } });
-    c.innerHTML = `<span class="gm-card-art">${g.art()}</span><span class="gm-card-b"><strong>${g.name}</strong><small>${g.tagline}</small>` +
-      `<em>${p.unlocked ? `Level ${p.unlocked} · ` : ""}${stars} <i class="ri-star-fill"></i></em></span>`;
+    c.innerHTML = `<span class="gm-card-art">${g.art()}</span><span class="gm-card-b"><strong>${g.name}</strong><small>${g.tagline}</small><em>${best}</em></span>`;
     return c;
   });
   cards.push(el("div", { class: "gm-card soon" }, el("i", { class: "ri-gamepad-line" }), el("strong", {}, "More games coming soon")));
+  const strip = el("div", {});
   root.appendChild(el("div", { class: "gm-hub" },
-    el("div", { class: "gm-hub-h" }, el("h2", {}, "Games"), el("p", {}, "Take a break, play, and come back to the conversation.")),
-    el("div", { class: "gm-grid" }, ...cards)));
-  return null;
+    el("div", { class: "gm-hub-h" }, el("h2", {}, "Games"), el("p", {}, "Take a break, play, and challenge your friends.")),
+    strip, el("div", { class: "gm-grid" }, ...cards)));
+  gb().buildGameStrip({ onlyFriends: true }).then((n) => { if (n && !dead) strip.appendChild(n); }).catch(() => {});
+  return () => { dead = true; };
+}
+
+// ---------------------------------------------------------------------------
+// SHARED GAME HELPERS — scores, leaderboard, friend challenges, game frame
+// Firestore: gameScores/{gameId}_{uid} = { gameId, uid, score, at }
+// ---------------------------------------------------------------------------
+const gmDef = (id) => GAMES.find((g) => g.id === id);
+const gmFmt = (id, s) => (gmDef(id)?.fmt || String)(s);
+let _gmCache = null;
+
+async function gmSubmit(id, score) {
+  const p = gamesProgress(id), P = p.read();
+  const isBest = score > (P.top || 0);
+  if (isBest) {
+    P.top = score; p.write(P);
+    if (state.uid) setDoc(doc(db, "gameScores", `${id}_${state.uid}`), { gameId: id, uid: state.uid, score, at: serverTimestamp() }).catch(() => {});
+    _gmCache = null;
+  }
+  return { isBest, top: P.top || 0 };
+}
+
+async function gmFriendScores(force) {
+  if (!force && _gmCache && Date.now() - _gmCache.t < 90000) return _gmCache.v;
+  const ids = [...new Set((state.me?.following || []).filter((u) => u && u !== state.uid))].slice(0, 90);
+  const out = [];
+  for (let i = 0; i < ids.length; i += 30) {
+    try {
+      const s = await getDocs(query(collection(db, "gameScores"), where("uid", "in", ids.slice(i, i + 30))));
+      s.forEach((d) => out.push(d.data()));
+    } catch { /* offline or rules */ }
+  }
+  out.sort((a, b) => (b.at?.toMillis?.() || 0) - (a.at?.toMillis?.() || 0));
+  _gmCache = { t: Date.now(), v: out };
+  return out;
+}
+
+const gmChallenge = (e) => {
+  try { sessionStorage.setItem("gb_beat", JSON.stringify({ gameId: e.gameId, uid: e.uid, score: e.score })); } catch {}
+  location.hash = `#games/${e.gameId}`;
+};
+
+async function gmLeaderboard(gameId) {
+  const def = gmDef(gameId);
+  const modal = el("div", { class: "gm-modal fixed" });
+  const body = el("div", { class: "gm-lb-body" }, gbLoader("", true));
+  let tab = "friends", rows = null;
+  const t1 = el("button", { type: "button", class: "on" }, "Friends"), t2 = el("button", { type: "button" }, "Everyone");
+  const close = () => modal.remove();
+  modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
+  modal.appendChild(el("div", { class: "gm-modal-c gm-lb" },
+    el("div", { class: "gm-lb-h" }, el("strong", {}, `${def?.name || "Game"} leaderboard`), el("button", { type: "button", class: "gb-icon-btn", onclick: close }, el("i", { class: "ri-close-line" }))),
+    el("div", { class: "gm-lb-tabs" }, t1, t2), body));
+  document.body.appendChild(modal);
+  const draw = async () => {
+    if (!rows) return;
+    const fol = new Set([...(state.me?.following || []), state.uid]);
+    const list = (tab === "friends" ? rows.filter((r) => fol.has(r.uid)) : rows).slice(0, 25);
+    body.innerHTML = "";
+    if (!list.length) { body.appendChild(el("p", { class: "gm-lb-empty" }, tab === "friends" ? "None of your friends have played yet. Be the first!" : "No scores yet. Be the first!")); return; }
+    const users = await Promise.all(list.map((r) => fetchUser(r.uid).catch(() => null)));
+    list.forEach((r, i) => {
+      const u = users[i]; if (!u) return;
+      body.appendChild(el("div", { class: `gm-lb-row${r.uid === state.uid ? " me" : ""}` },
+        el("span", { class: "gm-lb-rk" }, i < 3 ? ["🥇", "🥈", "🥉"][i] : String(i + 1)),
+        el("img", { src: avatarFor(u), alt: "" }), el("span", { class: "gm-lb-n" }, r.uid === state.uid ? "You" : (u.name || u.username || "Player")),
+        el("b", {}, gmFmt(gameId, r.score))));
+    });
+  };
+  t1.onclick = () => { tab = "friends"; t1.className = "on"; t2.className = ""; draw(); };
+  t2.onclick = () => { tab = "all"; t2.className = "on"; t1.className = ""; draw(); };
+  try {
+    const s = await getDocs(query(collection(db, "gameScores"), where("gameId", "==", gameId), limit(150)));
+    rows = s.docs.map((d) => d.data()).sort((a, b) => b.score - a.score);
+  } catch { rows = []; }
+  draw();
+}
+
+// Page frame every simple game sits in: top bar, best score, challenge banner, result popup.
+function gmFrame(root, game, exit) {
+  const wrap = el("div", { class: "gm-wrap" });
+  const stage = el("div", { class: "gm-play" });
+  const bestEl = el("span", { class: "gm-pill" });
+  const showBest = () => { const t = gamesProgress(game.id).read().top; bestEl.innerHTML = `<i class="ri-trophy-fill"></i> ${t ? gmFmt(game.id, t) : "–"}`; };
+  const back = () => { try { sessionStorage.removeItem("gb_beat"); } catch {} exit(); };
+  wrap.append(
+    el("div", { class: "gm-top" },
+      el("button", { class: "gb-icon-btn", type: "button", title: "Games", onclick: back }, el("i", { class: "ri-arrow-left-line" })),
+      el("strong", {}, game.name), bestEl,
+      el("button", { class: "gb-icon-btn", type: "button", title: "Leaderboard", onclick: () => gmLeaderboard(game.id) }, el("i", { class: "ri-bar-chart-horizontal-fill" }))));
+  let target = null;
+  try { const t = JSON.parse(sessionStorage.getItem("gb_beat") || "null"); if (t && t.gameId === game.id) target = t; } catch {}
+  if (target) {
+    const bar = el("div", { class: "gm-beat" }, el("i", { class: "ri-sword-line" }), el("span", {}, "Beat the score: ", el("b", {}, gmFmt(game.id, target.score))));
+    wrap.appendChild(bar);
+    fetchUser(target.uid).then((u) => { if (u) { bar.innerHTML = ""; bar.append(el("img", { src: avatarFor(u), alt: "" }), el("span", {}, `Beat ${(u.name || "their").split(" ")[0]}'s score: `, el("b", {}, gmFmt(game.id, target.score)))); } }).catch(() => {});
+  }
+  wrap.appendChild(stage); root.appendChild(wrap); showBest();
+
+  const finish = async (score, again, note) => {
+    const r = score > 0 ? await gmSubmit(game.id, score) : { isBest: false, top: gamesProgress(game.id).read().top || 0 };
+    showBest();
+    const beat = target && score > target.score;
+    let who = "them"; const tu = target ? await fetchUser(target.uid).catch(() => null) : null; if (tu) who = (tu.name || "them").split(" ")[0];
+    if (beat) { try { sessionStorage.removeItem("gb_beat"); } catch {} }
+    const m = el("div", { class: "gm-modal" }, el("div", { class: "gm-modal-c" },
+      el("h3", {}, beat ? `You beat ${who}! 🎉` : r.isBest ? "New best! 🏆" : "Nice run"),
+      el("div", { class: "gm-big" }, gmFmt(game.id, score)),
+      note ? el("p", {}, note) : null,
+      target && !beat ? el("p", {}, `${who}'s score: ${gmFmt(game.id, target.score)}. Go again!`) : el("p", {}, `Your best: ${gmFmt(game.id, r.top)}`),
+      el("div", { class: "gm-modal-b" },
+        el("button", { class: "gbu-btn primary", type: "button", onclick: () => { m.remove(); again(); } }, "Play again"),
+        beat && tu ? el("button", { class: "gbu-btn", type: "button", onclick: () => { location.hash = `#chats/${target.uid}`; } }, "Brag in chat") : null,
+        el("button", { class: "gbu-btn", type: "button", onclick: () => gmLeaderboard(game.id) }, "Leaderboard"),
+        el("button", { class: "gbu-btn", type: "button", onclick: back }, "Games"))));
+    setTimeout(() => wrap.appendChild(m), 450);
+  };
+  return { wrap, stage, finish, dispose: () => wrap.remove() };
+}
+
+// ---------------------------------------------------------------------------
+// 2048
+// ---------------------------------------------------------------------------
+function mountG2048(root, { exit }) {
+  const F = gmFrame(root, gmDef("g2048"), exit), N = 4;
+  let tiles, score, over, won;
+  const scoreEl = el("b", {}, "0");
+  const layer = el("div", { class: "g48-l" });
+  const board = el("div", { class: "g48" }, el("div", { class: "g48-bg" }, ...Array.from({ length: 16 }, () => el("i"))), layer);
+  F.stage.append(el("div", { class: "g48-wrap" },
+    el("div", { class: "g48-h" }, el("span", {}, "Score ", scoreEl), el("button", { class: "gbu-btn g-mini", type: "button", onclick: () => start() }, "New game")), board,
+    el("p", { class: "gm-hint" }, "Swipe or use arrow keys. Merge equal tiles to reach 2048.")));
+  const place = (t) => { t.el.style.transform = `translate(${t.c * 100}%,${t.r * 100}%)`; };
+  const paint = (t, pop) => { t.el.dataset.v = Math.min(t.v, 4096); t.i.textContent = t.v; if (pop) { t.i.classList.remove("pop"); void t.i.offsetWidth; t.i.classList.add("pop"); } };
+  const spawn = () => {
+    const free = []; for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) if (!tiles.some((t) => t.r === r && t.c === c)) free.push([r, c]);
+    if (!free.length) return;
+    const [r, c] = free[Math.floor(Math.random() * free.length)];
+    const t = { v: Math.random() < .9 ? 2 : 4, r, c }; t.i = el("div", { class: "g48-i" }); t.el = el("div", { class: "g48-t" }, t.i);
+    layer.appendChild(t.el); place(t); paint(t, true); tiles.push(t);
+  };
+  const canMove = () => tiles.length < 16 || tiles.some((t) => tiles.some((o) => o.v === t.v && Math.abs(o.r - t.r) + Math.abs(o.c - t.c) === 1));
+  function start() { layer.innerHTML = ""; tiles = []; score = 0; over = false; won = false; scoreEl.textContent = 0; spawn(); spawn(); }
+  const move = (dir) => {
+    if (over) return;
+    const [dr, dc] = { left: [0, -1], right: [0, 1], up: [-1, 0], down: [1, 0] }[dir];
+    const g = Array.from({ length: N }, () => Array(N).fill(null)); tiles.forEach((t) => { g[t.r][t.c] = t; });
+    const ord = [0, 1, 2, 3], rs = dr === 1 ? [...ord].reverse() : ord, cs = dc === 1 ? [...ord].reverse() : ord;
+    const merged = new Set(); let moved = false, gain = 0;
+    for (const r of rs) for (const c of cs) {
+      const t = g[r][c]; if (!t) continue;
+      let nr = r, nc = c, hit = null;
+      for (;;) {
+        const pr = nr + dr, pc = nc + dc;
+        if (pr < 0 || pr > 3 || pc < 0 || pc > 3) break;
+        const o = g[pr][pc];
+        if (!o) { nr = pr; nc = pc; continue; }
+        if (o.v === t.v && !merged.has(o)) hit = o;
+        break;
+      }
+      if (hit) {
+        g[r][c] = null; t.r = hit.r; t.c = hit.c; place(t); t.dead = true; hit.v *= 2; merged.add(hit); gain += hit.v; paint(hit, true); moved = true;
+        setTimeout(() => t.el.remove(), 130);
+      } else if (nr !== r || nc !== c) { g[r][c] = null; g[nr][nc] = t; t.r = nr; t.c = nc; place(t); moved = true; }
+    }
+    if (!moved) return;
+    tiles = tiles.filter((t) => !t.dead); score += gain; scoreEl.textContent = score;
+    setTimeout(() => {
+      spawn();
+      if (!won && tiles.some((t) => t.v >= 2048)) { won = true; toast("2048! Keep going for a higher score"); }
+      if (!canMove()) { over = true; F.finish(score, start); }
+    }, 120);
+  };
+  const keys = (e) => { const d = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" }[e.key]; if (d) { e.preventDefault(); move(d); } };
+  window.addEventListener("keydown", keys);
+  let sx = 0, sy = 0;
+  board.addEventListener("pointerdown", (e) => { sx = e.clientX; sy = e.clientY; });
+  board.addEventListener("pointerup", (e) => {
+    const dx = e.clientX - sx, dy = e.clientY - sy; if (Math.max(Math.abs(dx), Math.abs(dy)) < 22) return;
+    move(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "right" : "left") : (dy > 0 ? "down" : "up"));
+  });
+  start();
+  return () => { window.removeEventListener("keydown", keys); F.dispose(); };
+}
+
+// ---------------------------------------------------------------------------
+// SNAKE
+// ---------------------------------------------------------------------------
+function mountSnake(root, { exit }) {
+  const F = gmFrame(root, gmDef("snake"), exit), G = 20, S = 400;
+  const canvas = el("canvas", { class: "gm-canvas sn", width: S, height: S }), ctx = canvas.getContext("2d");
+  const scoreEl = el("b", {}, "0");
+  const pad = el("div", { class: "sn-pad" }, ...[["up", "ri-arrow-up-s-line"], ["left", "ri-arrow-left-s-line"], ["down", "ri-arrow-down-s-line"], ["right", "ri-arrow-right-s-line"]]
+    .map(([d, ic]) => el("button", { type: "button", class: `sn-${d}`, onpointerdown: (e) => { e.preventDefault(); turn(d); } }, el("i", { class: ic }))));
+  F.stage.append(el("div", { class: "g48-wrap" }, el("div", { class: "g48-h" }, el("span", {}, "Score ", scoreEl)), canvas, el("p", { class: "gm-hint" }, "Swipe, use arrow keys or the pad to start."), pad));
+  let snake, dir, queue, food, score, alive, started, last = 0, raf = 0, dead = false;
+  const V = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+  const rndFood = () => { for (;;) { const f = [Math.floor(Math.random() * G), Math.floor(Math.random() * G)]; if (!snake.some((s) => s[0] === f[0] && s[1] === f[1])) return f; } };
+  function start() { snake = [[10, 10], [9, 10], [8, 10]]; dir = "right"; queue = []; score = 0; alive = true; started = false; scoreEl.textContent = 0; food = rndFood(); draw(); }
+  const turn = (d) => {
+    const cur = queue.length ? queue[queue.length - 1] : dir;
+    if (V[d][0] + V[cur][0] === 0 && V[d][1] + V[cur][1] === 0) return;
+    if (d === cur) { started = true; return; }
+    if (queue.length < 3) queue.push(d);
+    started = true;
+  };
+  const step = () => {
+    if (queue.length) dir = queue.shift();
+    const h = [snake[0][0] + V[dir][0], snake[0][1] + V[dir][1]];
+    const eat = h[0] === food[0] && h[1] === food[1];
+    const body = eat ? snake : snake.slice(0, -1);
+    if (h[0] < 0 || h[1] < 0 || h[0] >= G || h[1] >= G || body.some((s) => s[0] === h[0] && s[1] === h[1])) { alive = false; F.finish(score, start); return; }
+    snake.unshift(h);
+    if (!eat) snake.pop(); else { score += 10; scoreEl.textContent = score; food = rndFood(); }
+  };
+  const draw = () => {
+    const c = S / G; ctx.fillStyle = "#0f172a"; ctx.fillRect(0, 0, S, S);
+    ctx.fillStyle = "rgba(255,255,255,.035)"; for (let x = 0; x < G; x++) for (let y = 0; y < G; y++) if ((x + y) % 2) ctx.fillRect(x * c, y * c, c, c);
+    ctx.fillStyle = "#ef4444"; ctx.beginPath(); ctx.arc(food[0] * c + c / 2, food[1] * c + c / 2, c * .38, 0, 7); ctx.fill();
+    snake.forEach((s, i) => { ctx.fillStyle = i ? "#22c55e" : "#86efac"; ctx.beginPath(); (ctx.roundRect ? ctx.roundRect(s[0] * c + 1, s[1] * c + 1, c - 2, c - 2, i ? 5 : 8) : ctx.rect(s[0] * c + 1, s[1] * c + 1, c - 2, c - 2)); ctx.fill(); });
+    if (!started && alive) { ctx.fillStyle = "rgba(255,255,255,.85)"; ctx.font = "700 22px system-ui"; ctx.textAlign = "center"; ctx.fillText("Swipe to start", S / 2, S / 2 + 60); }
+  };
+  const loop = (t) => {
+    if (dead) return; raf = requestAnimationFrame(loop);
+    const gap = Math.max(70, 140 - score * .5);
+    if (alive && started && t - last > gap) { last = t; step(); }
+    if (alive) draw();
+  };
+  const keys = (e) => { const d = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" }[e.key]; if (d) { e.preventDefault(); turn(d); } };
+  window.addEventListener("keydown", keys);
+  let sx = 0, sy = 0;
+  canvas.addEventListener("pointerdown", (e) => { sx = e.clientX; sy = e.clientY; });
+  canvas.addEventListener("pointerup", (e) => { const dx = e.clientX - sx, dy = e.clientY - sy; if (Math.max(Math.abs(dx), Math.abs(dy)) < 18) return; turn(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "right" : "left") : (dy > 0 ? "down" : "up")); });
+  start(); raf = requestAnimationFrame(loop);
+  return () => { dead = true; cancelAnimationFrame(raf); window.removeEventListener("keydown", keys); F.dispose(); };
+}
+
+// ---------------------------------------------------------------------------
+// MEMORY MATCH
+// ---------------------------------------------------------------------------
+function mountMemory(root, { exit }) {
+  const F = gmFrame(root, gmDef("memory"), exit);
+  const EMO = ["🐶", "🐱", "🦊", "🐼", "🐸", "🦁", "🐙", "🦄"];
+  const movesEl = el("b", {}, "0"), timeEl = el("b", {}, "0s"), grid = el("div", { class: "mm-grid" });
+  F.stage.append(el("div", { class: "g48-wrap" }, el("div", { class: "g48-h" }, el("span", {}, "Moves ", movesEl), el("span", {}, "Time ", timeEl)), grid, el("p", { class: "gm-hint" }, "Flip two cards at a time and find all the pairs.")));
+  let first = null, lock = false, moves = 0, matched = 0, t0 = 0, timer = 0;
+  function start() {
+    clearInterval(timer); first = null; lock = false; moves = 0; matched = 0; t0 = 0; movesEl.textContent = 0; timeEl.textContent = "0s"; grid.innerHTML = "";
+    const deck = [...EMO, ...EMO].map((e) => ({ e, r: Math.random() })).sort((a, b) => a.r - b.r);
+    deck.forEach((d) => {
+      const c = el("button", { type: "button", class: "mm-c" }, el("span", { class: "mm-f" }, "?"), el("span", { class: "mm-b" }, d.e));
+      c.dataset.e = d.e;
+      c.onclick = () => {
+        if (lock || c.classList.contains("up") || c.classList.contains("ok")) return;
+        if (!t0) { t0 = Date.now(); timer = setInterval(() => { timeEl.textContent = Math.floor((Date.now() - t0) / 1000) + "s"; }, 500); }
+        c.classList.add("up");
+        if (!first) { first = c; return; }
+        moves++; movesEl.textContent = moves; const a = first; first = null;
+        if (a.dataset.e === c.dataset.e) {
+          a.classList.add("ok"); c.classList.add("ok"); matched++;
+          if (matched === 8) { clearInterval(timer); const secs = Math.floor((Date.now() - t0) / 1000); F.finish(Math.max(50, 1000 - moves * 20 - secs * 5), start, `${moves} moves in ${secs}s`); }
+        } else { lock = true; setTimeout(() => { a.classList.remove("up"); c.classList.remove("up"); lock = false; }, 750); }
+      };
+      grid.appendChild(c);
+    });
+  }
+  start();
+  return () => { clearInterval(timer); F.dispose(); };
+}
+
+// ---------------------------------------------------------------------------
+// WORD GUESS (daily word first, then random words)
+// ---------------------------------------------------------------------------
+const GM_WORDS = "about above actor adult after again agree alarm album alert alive allow alone along angry apple arena argue arise armor aside asset audio avoid awake aware badly baker basic beach begin being below bench black blame blind block blood board boost brain brand bread break brick brief bring broad brown build bunch cabin cable candy carry catch cause chair chalk charm chart chase cheap check chest chief child chill claim class clean clear clerk click climb clock close cloud coach coast color count court cover craft crash cream crowd crown curve daily dance dealt dirty dozen draft drama dream dress drink drive early earth eight elite empty enemy enjoy enter equal error event every exact extra faith false fault fever field fifth fight final first flame flash fleet floor focus force frame fresh front fruit funny ghost giant given glass globe glory grace grade grain grand grant grape grass great green group guess guest guide happy heart heavy honey horse hotel house human humor ideal image index inner issue ivory jelly joint judge juice knife known label large laser later laugh layer learn least leave legal lemon level light limit local logic loose lucky lunch magic major maker march match maybe mayor media metal might minor model money month moral motor mount mouse mouth movie music naked nerve never newly night noble noise north novel nurse ocean offer often olive onion opera orange order other outer owner paint panel paper party peace pearl phase phone photo piano pilot pitch place plain plane plant plate point power press price pride prime print prize proof proud pulse queen quick quiet radio raise range rapid ratio reach ready realm refer relax reply rider right river robot rough round route royal rural salad scale scene scope score sense serve seven shade shake shape share sharp sheep shelf shine shirt shock shoot short shown sight silly since skill sleep slide small smart smile smoke snake solid solve sound south space spare speak speed spend spice split sport staff stage stair stamp stand start state steam steel stick still stone store storm story sugar suite sunny super sweet swing table taste teach thank their theme there thick thing think third three throw tiger tight title today tooth topic total touch tough tower trace track trade trail train treat trend trial tribe truck truly trust truth twice uncle under union unite unity until upper upset urban usual valid value video virus visit vital voice waste watch water wheel where which while white whole whose woman world worry worth would write wrong young youth zebra".split(" ");
+function mountWord(root, { exit }) {
+  const F = gmFrame(root, gmDef("word"), exit);
+  const board = el("div", { class: "wd-board" }), kb = el("div", { class: "wd-kb" }), msg = el("p", { class: "gm-hint" }, "Guess the 5-letter word in 6 tries.");
+  F.stage.append(el("div", { class: "g48-wrap" }, board, msg, kb));
+  const day = Math.floor((Date.now() - new Date().getTimezoneOffset() * 60000) / 864e5), dayKey = "gb_word_day";
+  let word, row, cur, done, rows, keyEls = {};
+  const lastDay = () => { try { return +localStorage.getItem(dayKey) || 0; } catch { return 0; } };
+  function start() {
+    let daily = false;
+    if (lastDay() !== day) { daily = true; try { localStorage.setItem(dayKey, day); } catch {} }
+    word = daily ? GM_WORDS[(day * 7919) % GM_WORDS.length] : GM_WORDS[Math.floor(Math.random() * GM_WORDS.length)];
+    row = 0; cur = ""; done = false; msg.textContent = daily ? "Today's word. Everyone gets the same one." : "A fresh random word. Good luck!";
+    board.innerHTML = ""; rows = Array.from({ length: 6 }, () => { const r = el("div", { class: "wd-r" }, ...Array.from({ length: 5 }, () => el("i"))); board.appendChild(r); return r; });
+    kb.innerHTML = ""; keyEls = {};
+    ["qwertyuiop", "asdfghjkl", "↵zxcvbnm⌫"].forEach((line) => {
+      const k = el("div", { class: "wd-kr" });
+      [...line].forEach((ch) => {
+        const special = ch === "↵" || ch === "⌫";
+        const b = el("button", { type: "button", class: special ? "wide" : "" }, ch === "↵" ? "Enter" : ch);
+        b.onclick = () => key(ch === "↵" ? "Enter" : ch === "⌫" ? "Backspace" : ch);
+        keyEls[ch] = b; k.appendChild(b);
+      });
+      kb.appendChild(k);
+    });
+  }
+  const showRow = () => { [...rows[row].children].forEach((c, i) => { c.textContent = cur[i] || ""; c.classList.toggle("f", !!cur[i]); }); };
+  const rate = (g) => {
+    const res = Array(5).fill("x"), left = {};
+    for (let i = 0; i < 5; i++) { if (g[i] === word[i]) res[i] = "g"; else left[word[i]] = (left[word[i]] || 0) + 1; }
+    for (let i = 0; i < 5; i++) if (res[i] === "x" && left[g[i]]) { res[i] = "y"; left[g[i]]--; }
+    return res;
+  };
+  function key(k) {
+    if (done) return;
+    if (k === "Backspace") { cur = cur.slice(0, -1); showRow(); return; }
+    if (k === "Enter") {
+      if (cur.length < 5) { const rr = rows[row]; rr.classList.add("shake"); setTimeout(() => rr.classList.remove("shake"), 400); return; }
+      const res = rate(cur), r = row;
+      [...rows[r].children].forEach((c, i) => { setTimeout(() => c.classList.add(res[i]), i * 120); });
+      const rank = { x: 1, y: 2, g: 3 };
+      [...cur].forEach((ch, i) => { const b = keyEls[ch]; if (!b) return; if (rank[res[i]] > (+b.dataset.r || 0)) { b.dataset.r = rank[res[i]]; b.className = "k" + res[i]; } });
+      const guess = cur; row++; cur = "";
+      if (guess === word) { done = true; setTimeout(() => F.finish((7 - row) * 100, start, `Solved in ${row} ${row === 1 ? "try" : "tries"}`), 900); }
+      else if (row === 6) { done = true; setTimeout(() => F.finish(0, start, `The word was ${word.toUpperCase()}`), 900); }
+      return;
+    }
+    if (/^[a-z]$/i.test(k) && cur.length < 5) { cur += k.toLowerCase(); showRow(); }
+  }
+  const keys = (e) => { if (e.ctrlKey || e.metaKey || e.altKey) return; if (e.key === "Enter" || e.key === "Backspace" || /^[a-z]$/i.test(e.key)) { e.preventDefault(); key(e.key); } };
+  window.addEventListener("keydown", keys);
+  start();
+  return () => { window.removeEventListener("keydown", keys); F.dispose(); };
+}
+
+// ---------------------------------------------------------------------------
+// REACTION TEST
+// ---------------------------------------------------------------------------
+function mountReaction(root, { exit }) {
+  const F = gmFrame(root, gmDef("reaction"), exit), ROUNDS = 5;
+  const pad = el("button", { type: "button", class: "rx-pad" }), dots = el("div", { class: "rx-dots" });
+  F.stage.append(el("div", { class: "g48-wrap" }, el("div", { class: "g48-h" }, el("span", {}, "5 rounds. Tap when it turns green.")), pad, dots));
+  let times, st, t0, to = 0;
+  const say = (cls, big, small) => { pad.className = "rx-pad " + cls; pad.innerHTML = `<strong>${big}</strong><span>${small || ""}</span>`; };
+  const dotsDraw = () => { dots.innerHTML = ""; for (let i = 0; i < ROUNDS; i++) dots.appendChild(el("span", { class: times[i] ? "on" : "" }, times[i] ? times[i] + "ms" : "–")); };
+  function idle() { st = "idle"; say("blue", "Tap to begin", `Round ${times.length + 1} of ${ROUNDS}`); }
+  function start() { times = []; dotsDraw(); idle(); }
+  function wait() { st = "wait"; say("red", "Wait for green…", ""); to = setTimeout(() => { st = "go"; t0 = performance.now(); say("green", "TAP NOW!", ""); }, 1200 + Math.random() * 2800); }
+  pad.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    if (st === "idle") return wait();
+    if (st === "wait") { clearTimeout(to); st = "early"; return say("blue", "Too soon!", "Tap to try this round again"); }
+    if (st === "early") return wait();
+    if (st === "go") {
+      const ms = Math.round(performance.now() - t0); times.push(ms); dotsDraw();
+      if (times.length >= ROUNDS) { st = "end"; const avg = Math.round(times.reduce((a, b) => a + b, 0) / ROUNDS); say("blue", `${avg} ms`, "average"); F.finish(Math.max(1, 1000 - avg), start, `Average ${avg} ms`); }
+      else { st = "idle"; say("blue", `${ms} ms`, "Tap for the next round"); }
+    }
+  });
+  start();
+  return () => { clearTimeout(to); F.dispose(); };
 }
 
 // ---------------------------------------------------------------------------
@@ -8017,7 +8442,7 @@ function mountBubblePop(root, { exit }) {
         P.stars[idx + 1] = Math.max(P.stars[idx + 1] || 0, st);
         P.best[idx + 1] = Math.max(P.best[idx + 1] || 0, score);
         P.unlocked = Math.max(P.unlocked, Math.min(BP_LEVELS.length, idx + 2));
-        prog.write(P); beep(660, .5, "triangle", .08, 400);
+        prog.write(P); gmSubmit("bubble", Object.values(P.stars).reduce((a, b) => a + b, 0)); beep(660, .5, "triangle", .08, 400);
       } else beep(160, .5, "sawtooth", .07, -90);
       const m = el("div", { class: "gm-modal" }, el("div", { class: "gm-modal-c" },
         el("h3", {}, won ? "Level complete!" : "Out of shots"),
