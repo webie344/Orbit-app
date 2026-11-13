@@ -1,4 +1,4 @@
-// BUILD 2026-11-13 12:37 — onboarding cartoon + CSS logo + voice-only pages
+// BUILD 2026-11-13 17:35 — onboarding cartoon + CSS logo + voice-only pages
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
@@ -1864,7 +1864,7 @@ $("#notifBtn").addEventListener("click", () => { location.hash = "#notifications
 // 7. ROUTER
 // =========================================================================
 // "reels" removed — videos live in the feed as regular posts
-const routes = ["feed", "chats", "ai-chat", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn", "character", "prompt", "games"];
+const routes = ["feed", "chats", "ai-chat", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn", "character", "prompt", "games", "bro"];
 
 // Feed DOM caching — lets us restore the feed instantly when navigating
 // back from a post without re-rendering or re-shuffling.
@@ -1951,6 +1951,7 @@ const router = () => {
     case "explore":    renderExplore(content, rest[0] === "tag" ? rest[1] : null); break;
     case "character":  renderCharacterPage(content); break;
     case "games":      content._unsub = renderGames(content, rest[0]); break;
+    case "bro":        content._unsub = renderBro(content); break;
     case "prompt":     content._unsub = gb().renderPromptPage(content, rest[0]); break;
     case "saved":      renderSaved(content); break;
     case "settings":   renderSettings(content); break;
@@ -7545,12 +7546,14 @@ function _gbInit() {
 
     let lastDoc = null, loading = false, allLoaded = false, renderSeq = 0, lastIds = "";
     const rendered = new Set();
-    let strips = [];
+    let strips = [], bros = [];
     const placeStrips = () => {
       if (!strips.length) return;
       const posts = [...list.children].filter((c) => c.classList.contains("gb-post") && !c.classList.contains("gb-skel"));
       strips.forEach((st, k) => { const ref = posts[2 + k * 6]; if (ref) list.insertBefore(st, ref); else if (st.parentNode === list) st.remove(); });
+      bros.forEach((b, k) => { const ref = posts[4 + k * 6]; if (ref) list.insertBefore(b, ref); else if (b.parentNode === list) b.remove(); });
     };
+    try { bros = broFeedNodes(); } catch { bros = []; }
     buildGameStrips().then((n) => { strips = n; placeStrips(); }).catch(() => {});
 
     const appendPosts = async (posts) => {
@@ -7635,7 +7638,7 @@ function _gbInit() {
       },
     );
 
-    return () => { unsub(); io.disconnect(); composer.dispose(); stopAllAudio(); };
+    return () => { unsub(); io.disconnect(); composer.dispose(); stopAllAudio(); broStopAll(); };
   };
 
   // -------------------------------------------------------------------------
@@ -8724,6 +8727,247 @@ function mountBubblePop(root, { exit }) {
   return dispose;
 }
 
+
+
+// =========================================================================
+// 18. GET BETTER BRO — a virtual account that "posts" 3 animated stories a day
+//     (music + voice + captions). Scripts rotate by date; nothing to host.
+// =========================================================================
+const BRO_AVATAR = "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c5cff"/><stop offset="1" stop-color="#ff5cae"/></linearGradient></defs><circle cx="50" cy="50" r="50" fill="url(#g)"/><rect x="17" y="37" width="66" height="21" rx="10" fill="#111827"/><rect x="21" y="40" width="27" height="14" rx="7" fill="#475569"/><rect x="52" y="40" width="27" height="14" rx="7" fill="#475569"/><path d="M31 69 Q50 85 69 69" stroke="#fff" stroke-width="5" fill="none" stroke-linecap="round"/></svg>');
+const BRO_HOURS = [8, 13, 19];
+
+// scene: t=headline, s=sub, say=spoken+caption, art=visual, lines=chat lines, q=prompt
+const BRO_EPS = [
+  { id: "lol", bg: 0, mood: "chill", cap: "Typing “lol” with a straight face 😐", scenes: [
+    { art: "emoji:😐", t: "Typing “lol” with a straight face", say: "Be honest. How many times have you typed lol with a completely straight face?" },
+    { art: "keys", t: "Text has no tone", s: "Everything sounds rude or fake-happy", say: "Text has no tone. Everything comes out either rude, or weirdly cheerful." },
+    { art: "wave", t: "Your voice does the work", s: "The laugh. The pause. The “hmm”.", say: "Your voice carries the laugh, the pause, even the little hmm. Nothing to decode." },
+    { art: "chars", t: "So just say it", say: "That's kind of the whole idea over here. Say it out loud, and let people actually hear you." } ] },
+  { id: "streak", bg: 2, mood: "hype", cap: "Streaks, but without the guilt trip 🔥", scenes: [
+    { art: "emoji:😮‍💨", t: "Streaks can feel like homework", say: "Most streaks make you feel terrible the second you miss a day." },
+    { art: "flame", t: "Here it's just a nudge", s: "Show up. Say one thing.", say: "Here a streak is only a little nudge. Show up, say one thing, get a small reward." },
+    { art: "lock", t: "Seven days unlocks something", say: "Keep it going for seven days and you unlock a special character. No lectures. Just a surprise." },
+    { art: "emoji:🌱", t: "Tiny habits win", say: "Tiny habits beat big plans. Every single time." } ] },
+  { id: "face", bg: 3, mood: "warm", cap: "You don't need a selfie to be someone 🙈", scenes: [
+    { art: "emoji:🙈", t: "Not everyone wants their face out there", say: "Not everyone wants their face on the internet. And that's completely fine." },
+    { art: "chars", t: "Pick a character instead", s: "Colours, eyes, vibe", say: "So pick a character. Change the colours, the eyes, the whole vibe, until it feels like you." },
+    { art: "lock", t: "Earn the rare ones", s: "First comment. First post. 7-day streak.", say: "And you can earn rare ones. Your first comment, your first post, a seven day streak." },
+    { art: "chars", t: "Be someone, not a pose", say: "You get to be fully yourself without posing for it." } ] },
+  { id: "threads", bg: 1, mood: "chill", cap: "Group chats are chaos. Threads help 🧵", scenes: [
+    { art: "emoji:🤯", t: "Reply to a reply to a reply…", say: "You know when a conversation branches off, and suddenly nobody knows who is answering who?" },
+    { art: "chat", lines: [{ n: "Ada", t: "has anyone tried the new place?", d: 0 }, { n: "Tunde", t: "yes! the jollof is wild", d: 1 }, { n: "Bisi", t: "wait, which branch?", d: 2 }], t: "Replies hang off each other", say: "Here, replies hang off each other with little connecting lines. You can see exactly who is talking to who." },
+    { art: "chat", lines: [{ n: "Zee", t: "voice note · 0:14", d: 0 }, { n: "Ada", t: "voice note · 0:09", d: 1 }, { n: "Zee", t: "😂😂", d: 1 }], t: "Follow one thread", say: "Follow the one thread you care about, and ignore the noise." },
+    { art: "emoji:🧵", t: "Small thing. Big relief.", say: "Small thing, big relief." } ] },
+  { id: "offline", bg: 3, mood: "chill", cap: "When your data finishes at the worst time 📉", scenes: [
+    { art: "emoji:📉", t: "Data finished. Right now?", say: "Your data just finished. Right in the middle of something good." },
+    { art: "offline", t: "It still opens", s: "Your feed. Your saved notes.", say: "Here the app still opens. Your feed, your saved voice notes, everything you already looked at is still there." },
+    { art: "offline", t: "A small banner tells you", s: "Tap refresh when you're back", say: "A small banner tells you you're offline. Tap refresh when the network comes back. That's it." },
+    { art: "emoji:🔋", t: "No panic needed", say: "No panic needed." } ] },
+  { id: "beat", bg: 2, mood: "hype", cap: "“Beat my score” hits different 🎮", scenes: [
+    { art: "emoji:🎮", t: "When did you last play with a friend?", say: "Quick question. When was the last time you played a little game against a friend?" },
+    { art: "game", t: "Their score shows up in your feed", say: "When a friend plays, their score shows up in your feed. Tap it, and the challenge is on." },
+    { art: "emoji:🕹️", t: "Two-minute games", s: "2048 · Snake · Word of the day", say: "Short games. Two minutes. Perfect for when you just need a break." },
+    { art: "game2", t: "Win, then go brag", say: "And when you win, you can go tell them. In the chat. Loudly." } ] },
+  { id: "prompt", bg: 4, mood: "warm", cap: "Staring at an empty box? 🫠", scenes: [
+    { art: "emoji:🫠", t: "Staring at an empty box", say: "Staring at an empty box, wondering what to say. We've all been there." },
+    { art: "prompt", q: "What's one thing that made you smile today?", t: "One question a day", say: "So every day there's one question waiting. Something small and easy to answer." },
+    { art: "wave", t: "Answer out loud", s: "Ten seconds is plenty", say: "Answer it out loud. Ten seconds is plenty." },
+    { art: "chars", t: "Then hear everyone else", say: "And then you get to hear everybody else's answer. That's the fun part." } ] },
+  { id: "react", bg: 0, mood: "warm", cap: "A thumbs up can mean anything 👍", scenes: [
+    { art: "emoji:👍", t: "A thumbs up says nothing", say: "A thumbs up can mean anything. Thanks. Whatever. Please stop." },
+    { art: "wave", t: "React with your voice", s: "A laugh. A gasp. A real “wow”.", say: "Here you can react with your voice. A laugh. A gasp. An actual wow." },
+    { art: "emoji:😂", t: "They hear the laugh", say: "And when someone hears your laugh, they know it was real." },
+    { art: "chars", t: "Feels like being there", say: "It feels a lot more like being in the room." } ] },
+  { id: "quiet", bg: 4, mood: "chill", cap: "Quiet on purpose 🍃", scenes: [
+    { art: "emoji:📱", t: "Too many buttons", say: "Some apps feel like standing in a crowded market. Buttons everywhere, all shouting at you." },
+    { art: "calm", t: "We kept removing things", say: "Here we kept removing things. The extra bars, the boxes, the stuff you never touched." },
+    { art: "calm", t: "What's left is the point", s: "Listen. Speak.", say: "What's left is a place to listen, and a place to speak." },
+    { art: "emoji:🍃", t: "Quiet on purpose", say: "Quiet, on purpose." } ] },
+  { id: "video", bg: 1, mood: "hype", cap: "Not a reel. A note. 🎬", scenes: [
+    { art: "emoji:🎬", t: "Not a reel. A note.", say: "Sometimes a voice isn't enough and you want people to actually see it. A short video note." },
+    { art: "emoji:✂️", t: "Fix it before it's out", s: "Trim · Cover · Mute · Reframe", say: "You can trim it, pick a cover, mute it and reframe it, before anyone else sees it." },
+    { art: "emoji:🙌", t: "No pressure to be perfect", say: "It's just a note. Say it, check it, send it." },
+    { art: "chars", t: "Real, not staged", say: "Real beats staged. Every time." } ] },
+  { id: "long", bg: 3, mood: "warm", cap: "Some thoughts don't fit in one line 📝", scenes: [
+    { art: "emoji:📝", t: "Some thoughts are long", say: "Some thoughts are just too long for a tiny box." },
+    { art: "emoji:📖", t: "Write a proper post", s: "Up to 2,500 characters + a cover", say: "So you can write a proper long post here, with a cover image on top, like a little article." },
+    { art: "chat", lines: [{ n: "You", t: "my long thought…", d: 0 }, { n: "Ada", t: "this is so true", d: 1 }], t: "Easy to read, easy to reply", say: "Open the post and the picture and the words sit separately, so nothing gets covered." },
+    { art: "emoji:☕", t: "Grab some tea", say: "Grab some tea. Take your time." } ] },
+  { id: "review", bg: 2, mood: "chill", cap: "Sent it. Regretted it. 😬", scenes: [
+    { art: "emoji:😬", t: "Sent it. Instantly regretted it.", say: "You send a voice note, and immediately wish you hadn't." },
+    { art: "wave", t: "Listen before you post", say: "Here you can play it back first. Hear it. Redo it. Send it only when it feels right." },
+    { art: "emoji:🎧", t: "Your voice, your call", say: "Your voice, your call." },
+    { art: "emoji:✅", t: "Send with confidence", say: "Then send it, with a lot more confidence." } ] },
+  { id: "ritual", bg: 4, mood: "warm", cap: "Three tiny things a day ☀️", scenes: [
+    { art: "emoji:☀️", t: "A tiny daily routine", say: "Here's a tiny routine. It takes about five minutes." },
+    { art: "prompt", q: "Today's question", t: "One question", say: "One question, answered out loud." },
+    { art: "flame", t: "One streak day", say: "One more day on your streak." },
+    { art: "game", t: "One quick game", say: "And one quick game, just for fun. Done." } ] },
+  { id: "groups", bg: 1, mood: "chill", cap: "Your people, one tap away 👥", scenes: [
+    { art: "emoji:👥", t: "Different people, different corners", say: "You have different people for different parts of your life." },
+    { art: "chars", t: "A rail of your groups", say: "On the left there's a little rail with all your groups. One tap and you're in." },
+    { art: "emoji:🏘️", t: "Like your own street", say: "It's like a street where everyone you like lives." },
+    { art: "emoji:🚪", t: "Knock. Walk in.", say: "Knock, walk in, say hi." } ] },
+  { id: "late", bg: 3, mood: "chill", cap: "2 a.m. thoughts 🌙", scenes: [
+    { art: "emoji:🌙", t: "2 a.m. and your brain won't stop", say: "It's two a.m. and your brain will not switch off." },
+    { art: "wave", t: "Whisper it", s: "No need to type it perfectly", say: "You don't have to type it perfectly. Just whisper it into a voice note." },
+    { art: "chars", t: "Someone else is awake too", say: "And chances are someone else is awake, and needs to hear exactly that." },
+    { art: "emoji:😴", t: "Sleep after", say: "Okay now go to sleep." } ] },
+];
+
+const BRO_ART = {
+  emoji: (sc) => `<div class="ba-emoji">${(sc.art.split(":")[1]) || "✨"}</div>`,
+  wave: () => `<div class="ba-wave">${Array.from({ length: 22 }, (_, i) => `<i style="--i:${i}"></i>`).join("")}</div><div class="ba-mic">🎙️</div>`,
+  chars: () => `<div class="ba-chars">${["bro1", "bro2", "bro3"].map((s, i) => `<img src="${characterDataUri(defaultCharacter(s))}" alt="" style="animation-delay:${i * .25}s">`).join("")}</div>`,
+  flame: () => `<div class="ba-flame"><span class="fl">🔥</span><div class="ba-cnt">${[1, 2, 3, 4, 5, 6, 7].map((n) => `<b class="${n === 7 ? "last" : ""}" style="animation-delay:${(n - 1) * .42}s">${n}</b>`).join("")}</div><small>day streak</small></div>`,
+  chat: (sc) => `<div class="ba-chat">${(sc.lines || []).map((l, i) => `<div class="ba-msg d${l.d}" style="animation-delay:${i * .75}s"><b>${l.n}</b><span>${l.t}</span></div>`).join("")}</div>`,
+  offline: () => `<div class="ba-off"><span class="a">📵</span><span class="b">✅</span><small>offline · still here</small></div>`,
+  game: () => `<div class="ba-game"><div class="r1"><span>Ada</span><b>1,240</b></div><div class="r2"><span>You</span><b>1,310</b></div><span class="tp">Tap to beat 👆</span></div>`,
+  game2: () => `<div class="ba-game"><div class="r1"><span>Ada</span><b>1,240</b></div><div class="r2 win"><span>You</span><b>1,310</b></div><span class="tp">🎉 You win! 💬</span></div>`,
+  lock: () => `<div class="ba-lock"><span class="l">🔒</span><span class="u">🔓</span><span class="sp">✨</span><span class="sp2">✨</span></div>`,
+  calm: () => `<div class="ba-calm">${["🔔", "⚙️", "📌", "🛒", "📣", "🔍", "⭐", "📷"].map((e, i) => `<i style="animation-delay:${i * .25}s">${e}</i>`).join("")}<span class="big">🎙️</span></div>`,
+  keys: () => `<div class="ba-keys"><span class="k">⌨️</span><span class="m">🎙️</span></div>`,
+  prompt: (sc) => `<div class="ba-prompt"><small>TODAY'S QUESTION</small><b>${sc.q || ""}</b></div>`,
+};
+
+// ------------------------- sound: music + sfx + voice
+const BroSound = (() => {
+  let ac = null, master = null, timer = 0, step = 0, mood = null;
+  const MOODS = {
+    chill: { bpm: 74, chords: [[60, 64, 67, 71], [57, 60, 64, 67], [53, 57, 60, 64], [55, 59, 62, 65]], hat: false },
+    warm: { bpm: 84, chords: [[62, 66, 69, 73], [59, 62, 66, 69], [55, 59, 62, 66], [57, 61, 64, 68]], hat: false },
+    hype: { bpm: 108, chords: [[57, 60, 64, 67], [53, 57, 60, 64], [60, 64, 67, 71], [55, 59, 62, 65]], hat: true },
+  };
+  const hz = (m) => 440 * Math.pow(2, (m - 69) / 12);
+  const ctx = () => {
+    if (!ac) { ac = new (window.AudioContext || window.webkitAudioContext)(); master = ac.createGain(); master.gain.value = .55; master.connect(ac.destination); }
+    if (ac.state === "suspended") ac.resume();
+    return ac;
+  };
+  const tone = (f, t, d, type, v) => {
+    const o = ac.createOscillator(), g = ac.createGain(); o.type = type; o.frequency.value = f;
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(v, t + .02); g.gain.exponentialRampToValueAtTime(.0001, t + d);
+    o.connect(g).connect(master); o.start(t); o.stop(t + d + .05);
+  };
+  const noise = (t, d, v, hp) => {
+    const n = Math.floor(ac.sampleRate * d), b = ac.createBuffer(1, n, ac.sampleRate), x = b.getChannelData(0);
+    for (let i = 0; i < n; i++) x[i] = Math.random() * 2 - 1;
+    const s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain(); s.buffer = b; f.type = "highpass"; f.frequency.value = hp;
+    g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(.0001, t + d); s.connect(f).connect(g).connect(master); s.start(t);
+  };
+  const tick = () => {
+    if (!mood || !ac) return; const t = ac.currentTime + .05, ch = mood.chords[Math.floor(step / 8) % 4], s8 = step % 8;
+    if (s8 === 0) ch.forEach((m) => tone(hz(m - 12), t, 2.6, "triangle", .028));
+    if ([0, 2, 3, 5, 6].includes(s8)) tone(hz(ch[(step * 3) % ch.length] + 12), t, .45, "sine", .05);
+    if (s8 % 4 === 0) { const o = ac.createOscillator(), g = ac.createGain(); o.frequency.setValueAtTime(130, t); o.frequency.exponentialRampToValueAtTime(42, t + .14); g.gain.setValueAtTime(.16, t); g.gain.exponentialRampToValueAtTime(.0001, t + .18); o.connect(g).connect(master); o.start(t); o.stop(t + .2); }
+    if (mood.hat && s8 % 2 === 1) noise(t, .05, .03, 7000);
+    step++;
+  };
+  const muted = () => { try { return localStorage.getItem("gb_bro_mute") === "1"; } catch { return false; } };
+  return {
+    muted,
+    setMuted(m) { try { localStorage.setItem("gb_bro_mute", m ? "1" : "0"); } catch {} if (master) master.gain.value = m ? 0 : .55; if (m) window.speechSynthesis?.cancel(); },
+    start(name) { ctx(); master.gain.value = muted() ? 0 : .55; mood = MOODS[name] || MOODS.chill; step = 0; clearInterval(timer); tick(); timer = setInterval(tick, 60 / mood.bpm / 2 * 1000); },
+    stop() { clearInterval(timer); mood = null; window.speechSynthesis?.cancel(); },
+    sfx(kind) {
+      if (!ac || muted()) return; const t = ac.currentTime;
+      if (kind === "whoosh") { noise(t, .28, .05, 1800); } else if (kind === "pop") tone(620, t, .12, "sine", .08);
+      else if (kind === "spark") [0, 4, 7, 12].forEach((n, i) => tone(hz(84 + n), t + i * .07, .25, "triangle", .05));
+    },
+    speak(text) {
+      if (muted() || !window.speechSynthesis) return;
+      try {
+        speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text), vs = speechSynthesis.getVoices();
+        const v = vs.find((x) => /^en[-_](US|GB|NG|AU)/i.test(x.lang) && /natural|google|samantha|daniel|aaron/i.test(x.name)) || vs.find((x) => /^en/i.test(x.lang));
+        if (v) u.voice = v; u.rate = 1.03; u.pitch = .92; speechSynthesis.speak(u);
+      } catch {}
+    },
+  };
+})();
+
+let _broCur = null;
+const broStopAll = () => { _broCur?.stop(); _broCur = null; };
+
+function broPlayer(ep) {
+  const root = el("div", { class: `bro-player` });
+  const bars = el("div", { class: "bro-bars" }, ...ep.scenes.map(() => el("i", {}, el("b"))));
+  const art = el("div", { class: "bro-art" }), tt = el("div", { class: "bro-t" }), ss = el("div", { class: "bro-s" }), cap = el("div", { class: "bro-cap" });
+  const stage = el("div", { class: `bro-stage bg${ep.bg || 0} paused` }, bars, art, el("div", { class: "bro-txt" }, tt, ss), cap);
+  const snd = el("button", { class: "bro-snd", type: "button", title: "Sound", onclick: (e) => { e.stopPropagation(); BroSound.setMuted(!BroSound.muted()); paintSnd(); if (!BroSound.muted() && playing) BroSound.speak(ep.scenes[i].say); } });
+  const paintSnd = () => { snd.innerHTML = `<i class="${BroSound.muted() ? "ri-volume-mute-fill" : "ri-volume-up-fill"}"></i>`; };
+  const poster = el("button", { class: "bro-poster", type: "button", onclick: () => play() }, el("span", { class: "bro-play" }, el("i", { class: "ri-play-fill" })), el("small", {}, "Tap to play with sound"));
+  stage.append(snd, poster); root.appendChild(stage); paintSnd();
+  let i = 0, playing = false, timer = 0, ended = false;
+  const dur = (sc) => sc.ms || Math.min(6800, Math.max(2800, (sc.say || "").length * 62 + 800));
+  const show = (k) => {
+    const sc = ep.scenes[k], key = (sc.art || "emoji").split(":")[0];
+    art.innerHTML = (BRO_ART[key] || BRO_ART.emoji)(sc);
+    tt.textContent = sc.t || ""; ss.textContent = sc.s || "";
+    [tt, ss, art].forEach((n) => { n.classList.remove("in"); void n.offsetWidth; n.classList.add("in"); });
+    const words = (sc.say || "").split(" "), d = dur(sc);
+    cap.innerHTML = ""; words.forEach((w, n) => cap.appendChild(el("span", { class: "w", style: `animation-delay:${Math.round(d * .82 / words.length * n)}ms` }, w + " ")));
+    [...bars.children].forEach((c, n) => { c.className = n < k ? "done" : ""; c.firstChild.style.removeProperty("--d"); });
+    if (playing) { void bars.offsetWidth; bars.children[k].firstChild.style.setProperty("--d", d + "ms"); bars.children[k].className = "run"; }
+  };
+  const next = () => {
+    if (i < ep.scenes.length - 1) { i++; go(); } else finish();
+  };
+  const go = () => {
+    const sc = ep.scenes[i]; show(i); BroSound.sfx("whoosh"); if (/lock/.test(sc.art)) setTimeout(() => BroSound.sfx("spark"), 1100);
+    BroSound.speak(sc.say); timer = setTimeout(next, dur(sc));
+  };
+  const finish = () => {
+    playing = false; ended = true; BroSound.stop(); stage.classList.add("paused"); [...bars.children].forEach((c) => { c.className = "done"; });
+    poster.innerHTML = '<span class="bro-play"><i class="ri-replay-10-line"></i></span><small>Watch again</small>'; poster.hidden = false; if (_broCur === api) _broCur = null;
+  };
+  const play = () => {
+    broStopAll(); try { gb().stopAllAudio(); } catch {}
+    playing = true; ended = false; i = 0; poster.hidden = true; stage.classList.remove("paused"); BroSound.start(ep.mood); _broCur = api; go();
+  };
+  const stop = () => {
+    clearTimeout(timer); if (playing) { playing = false; BroSound.stop(); stage.classList.add("paused"); poster.innerHTML = '<span class="bro-play"><i class="ri-play-fill"></i></span><small>Tap to play with sound</small>'; poster.hidden = false; }
+  };
+  const api = { el: root, play, stop };
+  show(0);
+  if ("IntersectionObserver" in window) new IntersectionObserver((en) => { if (!en[0].isIntersecting && playing) stop(); }, { threshold: .2 }).observe(root);
+  return api;
+}
+
+const broDay = (d = new Date()) => Math.floor((d.getTime() - d.getTimezoneOffset() * 60000) / 864e5);
+const broHourLabel = (h) => `${h % 12 || 12}:00 ${h < 12 ? "am" : "pm"}`;
+function broItems(days) {
+  const now = new Date(), today = broDay(now), out = [], N = BRO_EPS.length;
+  for (let dd = today; dd > today - days; dd--) for (let k = 0; k < 3; k++) {
+    if (dd === today && now.getHours() < BRO_HOURS[k]) continue;
+    out.push({ ep: BRO_EPS[(((dd * 3 + k) % N) + N) % N], day: dd, k, label: `${dd === today ? "Today" : dd === today - 1 ? "Yesterday" : `${today - dd} days ago`} · ${broHourLabel(BRO_HOURS[k])}` });
+  }
+  return out.sort((a, b) => b.day - a.day || b.k - a.k);
+}
+
+function broCard(it) {
+  const pl = broPlayer(it.ep);
+  const open = () => { location.hash = "#bro"; };
+  return el("article", { class: "gb-bro" },
+    el("div", { class: "gb-bro-h" },
+      el("button", { class: "gb-bro-av", type: "button", onclick: open }, el("img", { src: BRO_AVATAR, alt: "" })),
+      el("div", { class: "gb-bro-n", onclick: open }, el("b", {}, "Get better bro ", el("i", { class: "ri-verified-badge-fill" })), el("small", {}, `@getbetterbro · ${it.label}`))),
+    el("p", { class: "gb-bro-cap" }, it.ep.cap), pl.el);
+}
+
+function renderBro(root) {
+  const items = broItems(7);
+  const page = el("div", { class: "bro-page" },
+    el("div", { class: "bro-hero" },
+      el("img", { src: BRO_AVATAR, alt: "" }),
+      el("h2", {}, "Get better bro ", el("i", { class: "ri-verified-badge-fill" })),
+      el("small", {}, "@getbetterbro"),
+      el("p", {}, "Your friend in the app. Short stories, small tips and the occasional dad joke. Three new ones every day. 😎")));
+  let last = "";
+  items.forEach((it) => { const day = it.label.split(" · ")[0]; if (day !== last) { page.appendChild(el("h4", { class: "bro-day" }, day)); last = day; } page.appendChild(broCard(it)); });
+  root.appendChild(page);
+  return () => { broStopAll(); page.remove(); };
+}
+const broFeedNodes = () => broItems(2).slice(0, 3).map(broCard);
 
 
 // =========================================================================

@@ -6,7 +6,7 @@
 
 // ⚠️  Bump this string every time you deploy — it triggers the
 //     "New version available" update banner in the app.
-const CACHE_NAME = "getbetter-v19";
+const CACHE_NAME = "getbetter-v20";
 const IMG_CACHE  = "getbetter-img";   // photos only (kept across versions, capped)
 
 // App shell — saved on install so the app opens with no data.
