@@ -34,6 +34,8 @@ const CFG = {
   ROLL_SPEED: 17, ROLL_TIME: 0.62, ROLL_CD: 2.6,
   BODY_H: 1.85,
   RIFLE_LEN: 0.95,
+  GRIP: 0.36,      // where along the rifle the right hand holds it (0 = stock, 1 = muzzle)
+  HAND_FWD: 0.1, HAND_UP: 0.02,   // nudge the rifle relative to the hand (metres)
 };
 const WEAPON = { dmg: 21, rate: 0.092, mag: 30, reload: 1.7, head: 2, range: 140 };
 const MELEE = { punch: { dmg: 34, range: 2.3, delay: 0.16, cd: 0.45 }, kick: { dmg: 48, range: 2.5, delay: 0.26, cd: 0.8 }, sword: { dmg: 80, range: 3.1, delay: 0.22, cd: 0.7 } };
@@ -575,6 +577,9 @@ class Rig {
     this.upper = new Set(); if (up) up.traverse((o) => { if (o.isBone) this.upper.add(THREE.PropertyBinding.sanitizeNodeName(o.name)); });
     this.split = this.upper.size > 0;
     const rootB = bones.find((b) => !(b.parent && b.parent.isBone)); this.rootName = rootB ? THREE.PropertyBinding.sanitizeNodeName(rootB.name) : 'Hips';
+    // rest pose of every bone: bones may never change length or scale (stops stretched legs)
+    this.rest = bones.map((b) => ({ b, p: b.position.clone(), s: b.scale.clone(), root: b === rootB }));
+    const rp = rootB ? rootB.position : { x: 0, y: 1, z: 0 }; this.vAxis = Math.abs(rp.x) > Math.abs(rp.y) && Math.abs(rp.x) > Math.abs(rp.z) ? 'x' : Math.abs(rp.z) > Math.abs(rp.y) ? 'z' : 'y';
     this.clock = Math.random() * 3; this.phase = Math.random(); this.w = { idle: 1, F: 1, B: 0, L: 0, R: 0, k: 0, sp: 0, aim: 0, S: 0 };
     this.full = null; this.over = null; this.shootT = 9; this.shootHold = 0; this.shootName = 'Idle_Gun_Shoot'; this.dead = false;
   }
@@ -682,6 +687,11 @@ class Rig {
     }
     if (this.full && Fw > 0.001) { this.full.a.setEffectiveWeight(this.full.a.getEffectiveWeight() + Fw); }
     this.mixer.update(0);
+    for (const r of this.rest) {
+      r.b.scale.copy(r.s);
+      if (!r.root) r.b.position.copy(r.p);
+      else { const v = r.b.position[this.vAxis], lo = r.p[this.vAxis] * 0.12, hi = r.p[this.vAxis] * 1.25; r.b.position.copy(r.p); r.b.position[this.vAxis] = clamp(v, Math.min(lo, hi), Math.max(lo, hi)); }
+    }
   }
   get busy() { return !!this.full; }
 }
@@ -742,21 +752,28 @@ function makeModel(tint, onStep) {
     model.position.y = -box.min.y; pivot.scale.setScalar(s); group.updateMatrixWorld(true);
     out.rig = new Rig(model, ASSETS.soldier.animations, onStep);
     const bone = findBone(model, /^wrist.?r$/i) || findBone(model, /wrist.?r|hand.?r|right.?hand|palm.?r/i);
-    let axis = new THREE.Vector3(0, 1, 0), tip = null;
+    var swAxis = null;
     if (bone) {
       const ws = new THREE.Vector3(); bone.getWorldScale(ws); const sc = 1 / Math.max(ws.x, 1e-4);
+      // The rifle is NOT glued to the wrist bone (its orientation is unknown and floated / pointed down).
+      // It lives in world space: grip at the right hand, barrel along the aim direction (see placeRifle).
+      const root = new THREE.Group(); let r, mz = new THREE.Object3D(), ai = 'z', sign = 1, upV = new THREE.Vector3(0, 1, 0);
       if (ASSETS.rifle) {
-        const r = ASSETS.rifle.scene.clone(true); r.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
-        const rb = new THREE.Box3().setFromObject(r), sz = rb.getSize(new THREE.Vector3()), ctr = rb.getCenter(new THREE.Vector3()), mx = Math.max(sz.x, sz.y, sz.z);
-        const ai = sz.x >= sz.y && sz.x >= sz.z ? 'x' : sz.y >= sz.z ? 'y' : 'z', sign = Math.abs(rb.max[ai]) >= Math.abs(rb.min[ai]) ? 1 : -1;
-        axis = new THREE.Vector3(); axis[ai] = sign; tip = ctr.clone(); tip[ai] = sign > 0 ? rb.max[ai] : rb.min[ai];
-        r.position.set(0, 0.05, 0.05); r.rotation.set(0, 0, 0); r.scale.setScalar(CFG.RIFLE_LEN * sc / mx); bone.add(r); out.rifle = r;
-        const mz = new THREE.Object3D(); mz.position.copy(tip); r.add(mz); out.muzzle = mz;
+        r = ASSETS.rifle.scene.clone(true); r.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+        const rb = new THREE.Box3().setFromObject(r), sz = rb.getSize(new THREE.Vector3()), ctr = rb.getCenter(new THREE.Vector3()), mx = Math.max(sz.x, sz.y, sz.z), s = CFG.RIFLE_LEN / mx;
+        ai = sz.x >= sz.y && sz.x >= sz.z ? 'x' : sz.y >= sz.z ? 'y' : 'z'; sign = Math.abs(rb.max[ai]) >= Math.abs(rb.min[ai]) ? 1 : -1; if (qs.get('rflip')) sign = -sign;
+        const dims = ['x', 'y', 'z'].filter((k) => k !== ai).sort((a, b) => sz[b] - sz[a]); upV = new THREE.Vector3(); upV[dims[0]] = 1; // taller of the two short axes = "up" (sights / magazine)
+        const back = sign > 0 ? rb.min[ai] : rb.max[ai], front = sign > 0 ? rb.max[ai] : rb.min[ai], grip = ctr.clone(); grip[ai] = back + (front - back) * CFG.GRIP;
+        const tip = ctr.clone(); tip[ai] = front; mz.position.copy(tip); r.add(mz); r.scale.setScalar(s); r.position.copy(grip).multiplyScalar(-s); root.add(r);
       } else {
-        const r = new THREE.Group(); r.add(new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.09, 0.8), new THREE.MeshStandardMaterial({ color: '#2a2f38', metalness: 0.6, roughness: 0.4 }))); r.children[0].castShadow = true; r.children[0].position.z = 0.3; r.scale.setScalar(sc); bone.add(r); out.rifle = r;
-        const mz = new THREE.Object3D(); mz.position.set(0, 0, 0.72); r.add(mz); out.muzzle = mz;
+        r = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.1, 0.9), new THREE.MeshStandardMaterial({ color: '#2a2f38', metalness: 0.6, roughness: 0.4 })); r.castShadow = true; r.position.z = 0.25; mz.position.set(0, 0, 0.45); r.add(mz); root.add(r);
       }
-      const sw = makeSword(0.95); sw.scale.setScalar(sc); sw.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis); sw.position.set(0, 0.05, 0.05); bone.add(sw); sw.visible = false; out.sword = sw;
+      const axis = new THREE.Vector3(); axis[ai] = ASSETS.rifle ? sign : 1; scene.add(root);
+      out.rifle = root; out.muzzle = mz; out.world = true; out.hand = bone; out.axis = axis; out.up = upV;
+      const axisS = axis.clone();
+      axis.copy(axisS);
+      var swAxis = axisS;
+      const sw = makeSword(0.95); sw.scale.setScalar(sc); sw.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), swAxis || new THREE.Vector3(0, 1, 0)); sw.position.set(0, 0.05, 0.05); bone.add(sw); sw.visible = false; out.sword = sw;
     }
   } else {
     const p = makeProcSoldier(tint); pivot.add(p.root); out.rig = new FakeRig(p);
@@ -765,6 +782,21 @@ function makeModel(tint, onStep) {
     const sw = makeSword(0.9); sw.position.set(0.38, 1.1, 0.2); sw.rotation.x = Math.PI / 2; p.root.add(sw); sw.visible = false; out.sword = sw;
   }
   return out;
+}
+
+const _hand = new THREE.Vector3(), _fwd = new THREE.Vector3(), _up = new THREE.Vector3(), _want = new THREE.Vector3(), _cr = new THREE.Vector3(), _rq = new THREE.Quaternion(), _rq2 = new THREE.Quaternion();
+function placeRifle(f) {
+  const m = f.m; if (!m.world) return;
+  const vis = f.alive && f.stance === 'rifle'; m.rifle.visible = vis; if (!vis) return;
+  f.group.updateMatrixWorld(true); m.hand.getWorldPosition(_hand);
+  const p = f.aimPitch || 0, cp = Math.cos(p);
+  _fwd.set(Math.sin(f.yaw) * cp, Math.sin(p), Math.cos(f.yaw) * cp);
+  _rq.setFromUnitVectors(m.axis, _fwd);                                  // barrel -> aim direction
+  _up.copy(m.up).applyQuaternion(_rq); _want.set(0, 1, 0).addScaledVector(_fwd, -_fwd.y).normalize();
+  _cr.crossVectors(_up, _want); _rq2.setFromAxisAngle(_fwd, Math.atan2(_fwd.dot(_cr), _up.dot(_want))); _rq.premultiply(_rq2); // sights up
+  m.rifle.quaternion.copy(_rq);
+  m.rifle.position.copy(_hand).addScaledVector(_fwd, CFG.HAND_FWD - (f.kick || 0)); m.rifle.position.y += CFG.HAND_UP;
+  m.rifle.updateMatrixWorld(true);
 }
 
 /* ========================================================================== */
@@ -805,7 +837,7 @@ class Fighter {
   interact(cb) { if (!this.alive || this.rollT > 0) return; this.rig.playFull('Interact', { dur: 0.9, fin: 0.1, fout: 0.2 }); this.lockT = 0.9; later(0.45, cb); }
   wave() { if (this.alive) this.rig.playFull('Wave', { dur: Math.min(2.4, this.rig.dur('Wave')), fin: 0.15, fout: 0.2 }); }
   update(dt) {
-    if (!this.alive) { this.deadT += dt; this.vx = damp(this.vx, 0, 8, dt); this.vz = damp(this.vz, 0, 8, dt); moveBody(this, dt); this.group.position.set(this.x, this.y, this.z); this.rig.update(dt, { fwd: 0, rgt: 0, speed: 0, air: false, stance: this.stance, aim: false, sprint: false }); return; }
+    if (!this.alive) { this.deadT += dt; this.vx = damp(this.vx, 0, 8, dt); this.vz = damp(this.vz, 0, 8, dt); moveBody(this, dt); this.group.position.set(this.x, this.y, this.z); this.rig.update(dt, { fwd: 0, rgt: 0, speed: 0, air: false, stance: this.stance, aim: false, sprint: false }); placeRifle(this); return; }
     this.fireCd -= dt; this.meleeCd -= dt; this.rollCd -= dt; this.iframe -= dt; this.lockT -= dt;
     if (this.reloadT > 0) { this.reloadT -= dt; if (this.reloadT <= 0) { const t = Math.min(WEAPON.mag - this.mag, this.reserve); this.mag += t; if (this.isPlayer) this.reserve -= t; } }
     this.coyote = this.grounded ? 0.1 : this.coyote - dt;
@@ -820,8 +852,9 @@ class Fighter {
     this.dispY = this.grounded ? damp(this.dispY, this.y, 24, dt) : this.y; if (Math.abs(this.dispY - this.y) > 0.9) this.dispY = this.y;
     this.group.position.set(this.x, this.dispY, this.z); this.group.rotation.y = this.yaw;
     const fx = Math.sin(this.yaw), fz = Math.cos(this.yaw), rx = -Math.cos(this.yaw), rz = Math.sin(this.yaw);
-    this.speed = Math.hypot(this.vx, this.vz);
+    this.speed = Math.hypot(this.vx, this.vz); this.kick = Math.max(0, (this.kick || 0) - dt * 0.9);
     this.rig.update(dt, { fwd: this.vx * fx + this.vz * fz, rgt: this.vx * rx + this.vz * rz, speed: this.speed, air: !this.grounded, stance: this.relax && this.stance !== 'sword' ? 'relaxed' : this.stance, aim: this.aiming && this.stance === 'rifle', sprint: this.inp.sprint && this.speed > CFG.RUN * 0.92 });
+    placeRifle(this);
   }
 }
 
@@ -959,7 +992,7 @@ function playerFire() {
   const moving = clamp(P.speed / CFG.RUN, 0, 1.4), spread = (P.aiming ? 0.0035 : 0.011) + moving * 0.012 + (P.grounded ? 0 : 0.02) + G.bloom;
   const d = camDir(G.cam.yaw + rnd(-1, 1) * spread, G.cam.pitch + G.cam.recoil + rnd(-1, 1) * spread), o = { x: camera.position.x + d.x * G.cam.dist, y: camera.position.y + d.y * G.cam.dist, z: camera.position.z + d.z * G.cam.dist };
   shootBullet(P, o, d, false);
-  P.rig.fire(P.aiming, moving > 0.25); AU.shot(1);
+  P.rig.fire(P.aiming, moving > 0.25); P.kick = 0.07; AU.shot(1);
   G.bloom = Math.min(0.03, G.bloom + 0.0035); G.cam.recoil += P.aiming ? 0.006 : 0.011; G.cam.yaw += rnd(-0.0025, 0.0025); G.cam.shake = Math.min(1, G.cam.shake + 0.05);
   if (P.mag <= 0 && P.reserve > 0) later(0.25, () => P.startReload());
 }
@@ -1071,6 +1104,7 @@ function botThink(f, dt) {
   a.stuckCk -= dt; if (a.stuckCk <= 0) { a.stuckCk = 0.5; const moved = Math.hypot(f.x - a.lx, f.z - a.lz); a.lx = f.x; a.lz = f.z; if (speed > 0 && moved < 0.5) { a.stuckT += 0.5; if (a.stuckT >= 1) { a.detour = 1; a.detourDir = Math.random() < 0.5 ? -1 : 1; a.stuckT = 0; a.goal = null; } } else a.stuckT = 0; }
   if (f.hitWall && f.grounded && speed > 0) f.inp.jump = true;
   f.inp.mx = mx; f.inp.mz = mz; f.inp.speed = speed; f.inp.sprint = sprint;
+  { const tp = engaged && T ? clamp(Math.atan2(T.y + 1.1 - (f.y + 1.3), Math.hypot(T.x - f.x, T.z - f.z) || 1), -0.5, 0.6) : 0; f.aimPitch = damp(f.aimPitch || 0, tp, 8, dt); }
   f.relax = !engaged && !danger && G.t - a.lastSeen > 4 && G.t - f.lastHit > 4;
   const face = engaged ? yawTo : speed > 0.1 ? yawTo : f.yaw; f.yaw = dampAng(f.yaw, face, engaged ? 8 * D * a.skill : 9, dt); f.aiming = engaged && a.seen && Math.hypot(T.x - f.x, T.z - f.z) > 14;
   // auto loot
@@ -1082,7 +1116,7 @@ function botShoot(f, T, dist) {
   const hit = Math.random() < p, j = hit ? 0.05 : rnd(0.8, 2.2);
   let dx = tx + rnd(-1, 1) * j - e.x, dy = ty + rnd(-0.5, 0.5) * j - e.y, dz = tz + rnd(-1, 1) * j - e.z; const L = Math.hypot(dx, dy, dz); dx /= L; dy /= L; dz /= L;
   const r = shootBulletSoft(f, e, { x: dx, y: dy, z: dz }, T, hit);
-  f.rig.fire(f.aiming, f.speed > 3); AU.shot(Math.pow(clamp(1 - distToPlayer(f.x, f.z) / 95, 0, 1), 2));
+  f.rig.fire(f.aiming, f.speed > 3); f.kick = 0.06; AU.shot(Math.pow(clamp(1 - distToPlayer(f.x, f.z) / 95, 0, 1), 2));
 }
 function shootBulletSoft(f, o, d, T, forceHit) {
   // bots: world blocks bullets; hits land on the target only when the roll succeeded
@@ -1100,7 +1134,8 @@ function shootBulletSoft(f, o, d, T, forceHit) {
 /* ========================================================================== */
 const keys = {}; let fireHeld = false, aimHeld = false, exhausted = false, idleT = 0;
 const joy = { x: 0, y: 0, id: null }; const tb = { fire: false, aim: false };
-const lookBy = (dx, dy, k) => { const c = G.cam, P = G.player; if (!P) return; const s = k * G.sens * (P.aiming ? 0.55 : 1); c.yaw -= dx * s; c.pitch = clamp(c.pitch - dy * s, -0.75, 1.1); };
+const lookAcc = { x: 0, y: 0 };
+const lookBy = (dx, dy, k, smooth) => { const P = G.player; if (!P) return; const s = k * G.sens * (P.aiming ? 0.55 : 1); if (smooth) { lookAcc.x += dx * s; lookAcc.y += dy * s; } else { G.cam.yaw -= dx * s; G.cam.pitch = clamp(G.cam.pitch - dy * s, -0.75, 1.1); } };
 function lockPointer() { try { const r = U.canvas.requestPointerLock?.(); r && r.catch && r.catch(() => {}); } catch {} }
 const playing = () => G.state === 'playing' && !G.paused && G.player;
 const meleeKey = () => { const P = G.player; P.melee(P.stance === 'sword' ? 'sword' : 'punch'); };
@@ -1140,7 +1175,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden && G.s
   U.joy.addEventListener('pointerup', up); U.joy.addEventListener('pointercancel', up);
   let lid = null, lx = 0, ly = 0;
   U.look.addEventListener('pointerdown', (e) => { if (lid !== null) return; lid = e.pointerId; U.look.setPointerCapture(e.pointerId); lx = e.clientX; ly = e.clientY; });
-  U.look.addEventListener('pointermove', (e) => { if (e.pointerId !== lid) return; if (playing()) lookBy(e.clientX - lx, e.clientY - ly, 0.0052); lx = e.clientX; ly = e.clientY; });
+  U.look.addEventListener('pointermove', (e) => { if (e.pointerId !== lid) return; if (playing()) lookBy(e.clientX - lx, e.clientY - ly, 0.0052, true); lx = e.clientX; ly = e.clientY; });
   const lup = (e) => { if (e.pointerId === lid) lid = null; }; U.look.addEventListener('pointerup', lup); U.look.addEventListener('pointercancel', lup);
   for (const [name, b] of Object.entries(U.btn)) {
     const hold = name === 'fire' || name === 'aim';
@@ -1154,7 +1189,8 @@ document.addEventListener('visibilitychange', () => { if (document.hidden && G.s
 /*  PLAYER · CAMERA                                                           */
 /* ========================================================================== */
 function playerControl(dt) {
-  const P = G.player, c = G.cam; c.recoil = damp(c.recoil, 0, 9, dt); G.bloom = Math.max(0, G.bloom - dt * 0.045);
+  const P = G.player, c = G.cam; c.recoil = damp(c.recoil, 0, 9, dt);
+  { const k = 1 - Math.exp(-24 * dt); c.yaw -= lookAcc.x * k; c.pitch = clamp(c.pitch - lookAcc.y * k, -0.75, 1.1); lookAcc.x *= 1 - k; lookAcc.y *= 1 - k; }  // touch look: eased so swipes glide G.bloom = Math.max(0, G.bloom - dt * 0.045);
   if (!P.alive) return;
   let ix = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0), iz = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0), mag = 0, analog = false;
   const jl = Math.hypot(joy.x, joy.y);
@@ -1169,6 +1205,7 @@ function playerControl(dt) {
   let base = P.aiming ? CFG.AIM_SPEED : wantSprint ? CFG.SPRINT : CFG.RUN; if (analog) base = lerp(CFG.WALK, base, smooth(0.28, 0.92, mag));
   P.inp.mx = mx; P.inp.mz = mz; P.inp.speed = mag > 0 ? base : 0; P.inp.sprint = wantSprint;
   if (P.rollT <= 0) P.yaw = dampAng(P.yaw, c.yaw, 20, dt);
+  P.aimPitch = clamp(c.pitch + c.recoil, -0.5, 0.7);
   if (fireHeld) { idleT = 0; if (P.stance === 'rifle') playerFire(); else meleeKey(); }
   idleT = mag > 0 || P.aiming || fireHeld ? 0 : idleT + dt; P.relax = idleT > 5;
   if (mag > 0) P.relax = false;
@@ -1239,7 +1276,7 @@ function drawHUD(dt) {
 /*  MATCH FLOW                                                                */
 /* ========================================================================== */
 function clearWorld() {
-  for (const f of fighters) scene.remove(f.group); fighters.length = 0; for (const p of pickups) scene.remove(p.g); pickups.length = 0; timers.length = 0;
+  for (const f of fighters) { scene.remove(f.group); if (f.m.world) scene.remove(f.m.rifle); } fighters.length = 0; for (const p of pickups) scene.remove(p.g); pickups.length = 0; timers.length = 0;
   for (const T of FX.tracers) { T.t = 0; T.m.visible = false; } U.feed.innerHTML = ''; G.showcase = null;
 }
 function startMatch() {

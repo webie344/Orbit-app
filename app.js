@@ -1,4 +1,4 @@
-// BUILD 2026-11-14 19:10 — Compound Clash 3D game
+// BUILD 2026-11-14 19:50 — rifle grip + look smoothing + leg fix
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
