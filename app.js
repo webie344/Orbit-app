@@ -1,4 +1,4 @@
-// BUILD 2026-11-13 17:35 — onboarding cartoon + CSS logo + voice-only pages
+// BUILD 2026-11-14 19:10 — Compound Clash 3D game
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
@@ -7809,6 +7809,11 @@ const GAMES = [
     mount: (root, ctx) => mountBubblePop(root, ctx),
   },
   {
+    id: "compound", tips: ["Be the last fighter standing in the compound", "Stay inside the purple safe zone as it shrinks", "Roll to dodge bullets, climb stairs to rooftops and towers", "Pick up medkits, armor and ammo"], name: "Compound Clash", tagline: "3D battle in a walled compound. 15 bots, one winner.", fmt: (s) => `${Number(s).toLocaleString()} pts`,
+    art: () => _gmSvg('<rect width="120" height="90" fill="#25205a"/><rect x="8" y="8" width="104" height="74" rx="6" fill="#3b4a6b" stroke="#c4a1ff" stroke-width="3" stroke-dasharray="6 4"/><rect x="18" y="16" width="30" height="20" fill="#9c5b45"/><rect x="70" y="20" width="32" height="14" fill="#7d90b0"/><rect x="22" y="52" width="36" height="22" fill="#8d96a8"/><rect x="74" y="50" width="22" height="22" fill="#d94c4c"/><circle cx="60" cy="45" r="7" fill="#fde047" stroke="#1e1b4b" stroke-width="2"/><path d="M60 45 L84 30" stroke="#fde047" stroke-width="2" stroke-dasharray="3 3"/>'),
+    mount: (root, ctx) => mountCompound(root, ctx),
+  },
+  {
     id: "g2048", tips: ["Swipe to slide every tile", "Equal numbers merge into one", "Reach 2048 (and beyond!)"], name: "2048", tagline: "Slide and merge tiles. Chase the big one.", fmt: (s) => Number(s).toLocaleString(),
     art: () => _gmSvg([[14, 12, "#eee4da", "2"], [48, 12, "#f2b179", "8"], [82, 12, "#f67c5f", "16"], [14, 46, "#edc850", "32"], [48, 46, "#edc22e", "64"], [82, 46, "#3c3a32", "2048"]]
       .map(([x, y, c, t]) => `<rect x="${x}" y="${y}" width="26" height="26" rx="6" fill="${c}"/><text x="${x + 13}" y="${y + 18}" text-anchor="middle" font-size="${t.length > 3 ? 9 : 12}" font-weight="800" fill="${c === "#eee4da" ? "#776e65" : "#fff"}">${t}</text>`).join("")),
@@ -8374,6 +8379,26 @@ function mountReaction(root, { exit }) {
 }
 
 // ---------------------------------------------------------------------------
+// COMPOUND CLASH — 3D shooter. Lives in gamers.html (+ gamers.js, Soldier.glb, Rifle.glb)
+// and is shown in an iframe. It posts the final score back; we save it like any game.
+// ---------------------------------------------------------------------------
+function mountCompound(root, { exit }) {
+  const F = gmFrame(root, gmDef("compound"), exit);
+  F.stage.classList.add("gm-3d");
+  const name = encodeURIComponent((state.me?.name || state.me?.username || "You").split(" ")[0]);
+  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?name=${name}`, allow: "fullscreen; autoplay", title: "Compound Clash" });
+  F.stage.appendChild(frame);
+  const onMsg = async (e) => {
+    if (e.source !== frame.contentWindow) return;
+    const d = e.data || {};
+    if (d.type === "gb-game-exit") exit();
+    else if (d.type === "gb-game-score" && d.score > 0) { const r = await gmSubmit("compound", d.score); if (r.isBest) toast("New best in Compound Clash! 🏆"); }
+  };
+  window.addEventListener("message", onMsg);
+  return () => { window.removeEventListener("message", onMsg); F.dispose(); };
+}
+
+// ---------------------------------------------------------------------------
 // BUBBLE POP — hex-grid bubble shooter
 // ---------------------------------------------------------------------------
 const BP_LEVELS = [
@@ -8834,9 +8859,9 @@ const BRO_ART = {
 const BroSound = (() => {
   let ac = null, master = null, timer = 0, step = 0, mood = null;
   const MOODS = {
-    chill: { bpm: 74, chords: [[60, 64, 67, 71], [57, 60, 64, 67], [53, 57, 60, 64], [55, 59, 62, 65]], hat: false },
-    warm: { bpm: 84, chords: [[62, 66, 69, 73], [59, 62, 66, 69], [55, 59, 62, 66], [57, 61, 64, 68]], hat: false },
-    hype: { bpm: 108, chords: [[57, 60, 64, 67], [53, 57, 60, 64], [60, 64, 67, 71], [55, 59, 62, 65]], hat: true },
+    chill: { bpm: 74, mel: [76,0,79,0,76,74,72,0, 72,0,76,0,74,72,69,0, 69,0,72,0,77,76,72,0, 74,0,79,0,77,74,71,0], chords: [[60, 64, 67, 71], [57, 60, 64, 67], [53, 57, 60, 64], [55, 59, 62, 65]], hat: false },
+    warm: { bpm: 84, mel: [74,0,78,0,81,78,74,0, 71,0,74,0,78,74,71,0, 67,0,71,0,74,71,67,0, 69,0,73,0,76,73,69,0], chords: [[62, 66, 69, 73], [59, 62, 66, 69], [55, 59, 62, 66], [57, 61, 64, 68]], hat: false },
+    hype: { bpm: 108, mel: [81,0,76,79,81,0,79,76, 77,0,72,76,77,0,76,72, 79,0,76,72,79,0,84,79, 74,0,79,71,74,0,79,0], chords: [[57, 60, 64, 67], [53, 57, 60, 64], [60, 64, 67, 71], [55, 59, 62, 65]], hat: true },
   };
   const hz = (m) => 440 * Math.pow(2, (m - 69) / 12);
   const ctx = () => {
@@ -8858,7 +8883,9 @@ const BroSound = (() => {
   const tick = () => {
     if (!mood || !ac) return; const t = ac.currentTime + .05, ch = mood.chords[Math.floor(step / 8) % 4], s8 = step % 8;
     if (s8 === 0) ch.forEach((m) => tone(hz(m - 12), t, 2.6, "triangle", .028));
-    if ([0, 2, 3, 5, 6].includes(s8)) tone(hz(ch[(step * 3) % ch.length] + 12), t, .45, "sine", .05);
+    const note = mood.mel[step % 32];
+    if (note) { tone(hz(note), t, .38, "triangle", .07); tone(hz(note) * 2, t, .2, "sine", .015); }
+    if (s8 === 0 || s8 === 4) tone(hz(ch[0] - 24), t, .5, "sine", .09);
     if (s8 % 4 === 0) { const o = ac.createOscillator(), g = ac.createGain(); o.frequency.setValueAtTime(130, t); o.frequency.exponentialRampToValueAtTime(42, t + .14); g.gain.setValueAtTime(.16, t); g.gain.exponentialRampToValueAtTime(.0001, t + .18); o.connect(g).connect(master); o.start(t); o.stop(t + .2); }
     if (mood.hat && s8 % 2 === 1) noise(t, .05, .03, 7000);
     step++;
@@ -8893,9 +8920,9 @@ function broPlayer(ep) {
   const bars = el("div", { class: "bro-bars" }, ...ep.scenes.map(() => el("i", {}, el("b"))));
   const art = el("div", { class: "bro-art" }), tt = el("div", { class: "bro-t" }), ss = el("div", { class: "bro-s" }), cap = el("div", { class: "bro-cap" });
   const stage = el("div", { class: `bro-stage bg${ep.bg || 0} paused` }, bars, art, el("div", { class: "bro-txt" }, tt, ss), cap);
-  const snd = el("button", { class: "bro-snd", type: "button", title: "Sound", onclick: (e) => { e.stopPropagation(); BroSound.setMuted(!BroSound.muted()); paintSnd(); if (!BroSound.muted() && playing) BroSound.speak(ep.scenes[i].say); } });
+  const snd = el("button", { class: "bro-snd", type: "button", title: "Sound", onclick: (e) => { e.stopPropagation(); BroSound.setMuted(!BroSound.muted()); paintSnd(); } });
   const paintSnd = () => { snd.innerHTML = `<i class="${BroSound.muted() ? "ri-volume-mute-fill" : "ri-volume-up-fill"}"></i>`; };
-  const poster = el("button", { class: "bro-poster", type: "button", onclick: () => play() }, el("span", { class: "bro-play" }, el("i", { class: "ri-play-fill" })), el("small", {}, "Tap to play with sound"));
+  const poster = el("button", { class: "bro-poster", type: "button", onclick: () => play() }, el("span", { class: "bro-play" }, el("i", { class: "ri-play-fill" })), el("small", {}, "Tap to play with music"));
   stage.append(snd, poster); root.appendChild(stage); paintSnd();
   let i = 0, playing = false, timer = 0, ended = false;
   const dur = (sc) => sc.ms || Math.min(6800, Math.max(2800, (sc.say || "").length * 62 + 800));
@@ -8914,7 +8941,7 @@ function broPlayer(ep) {
   };
   const go = () => {
     const sc = ep.scenes[i]; show(i); BroSound.sfx("whoosh"); if (/lock/.test(sc.art)) setTimeout(() => BroSound.sfx("spark"), 1100);
-    BroSound.speak(sc.say); timer = setTimeout(next, dur(sc));
+    timer = setTimeout(next, dur(sc));
   };
   const finish = () => {
     playing = false; ended = true; BroSound.stop(); stage.classList.add("paused"); [...bars.children].forEach((c) => { c.className = "done"; });
@@ -8925,7 +8952,7 @@ function broPlayer(ep) {
     playing = true; ended = false; i = 0; poster.hidden = true; stage.classList.remove("paused"); BroSound.start(ep.mood); _broCur = api; go();
   };
   const stop = () => {
-    clearTimeout(timer); if (playing) { playing = false; BroSound.stop(); stage.classList.add("paused"); poster.innerHTML = '<span class="bro-play"><i class="ri-play-fill"></i></span><small>Tap to play with sound</small>'; poster.hidden = false; }
+    clearTimeout(timer); if (playing) { playing = false; BroSound.stop(); stage.classList.add("paused"); poster.innerHTML = '<span class="bro-play"><i class="ri-play-fill"></i></span><small>Tap to play with music</small>'; poster.hidden = false; }
   };
   const api = { el: root, play, stop };
   show(0);

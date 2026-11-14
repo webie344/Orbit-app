@@ -6,7 +6,7 @@
 
 // ⚠️  Bump this string every time you deploy — it triggers the
 //     "New version available" update banner in the app.
-const CACHE_NAME = "getbetter-v20";
+const CACHE_NAME = "getbetter-v22";
 const IMG_CACHE  = "getbetter-img";   // photos only (kept across versions, capped)
 
 // App shell — saved on install so the app opens with no data.
@@ -15,6 +15,7 @@ const SHELL_FILES = [
   "/", "/index.html", "/manifest.json",
   "/style.css", "/chat.css", "/features.css",
   "/app.js", "/chat.js", "/additional.js", "/notifications.js", "/features.js", "/b.js", "/sounds.js",
+  "/gamers.html", "/gamers.js", "/Soldier.glb", "/Rifle.glb",
   "/icon.svg", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png",
 ];
 
