@@ -1,4 +1,4 @@
-// BUILD 2026-11-14 19:50 — rifle grip + look smoothing + leg fix
+// BUILD 2026-11-15 08:05 — AK-47 two-hand hold, zoom, Free Fire look
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
