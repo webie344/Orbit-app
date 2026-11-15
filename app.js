@@ -1,4 +1,4 @@
-// BUILD 2026-11-15 08:55 — whole-clip animation, raw look, performance
+// BUILD 2026-11-15 15:10 — full-screen media viewer with Like / Comment / Share
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
@@ -363,7 +363,7 @@ function _songHeaderBadge(song) {
 }
 
 const buildVideoPlayer = (url, opts = {}) => {
-  const { song, overlays } = opts;
+  const { song, overlays, onOpen } = opts;
   const poster = _cloudPoster(url);
   // muted enables browser auto-play-on-scroll; user can unmute via the button
   const video = el("video", { src: url, poster, preload: "none", playsinline: "", style: "width:100%;display:block;" });
@@ -413,7 +413,11 @@ const buildVideoPlayer = (url, opts = {}) => {
   }, { passive: true });
 
   const togglePlay = () => { video.paused ? video.play() : video.pause(); };
-  overlay.onclick = togglePlay;
+  // In the feed: tapping the video (anywhere except the play button / bar) opens the full-screen viewer
+  overlay.onclick = (e) => {
+    if (onOpen && !e.target.closest(".vp-big-play")) { try { video.pause(); } catch {} onOpen(); return; }
+    togglePlay();
+  };
   playSmBtn.onclick = (e) => { e.stopPropagation(); togglePlay(); };
   video.addEventListener("play",  () => {
     playIcon.className = playSmI.className = "ri-pause-fill";
@@ -630,7 +634,30 @@ const _injectVVStyles = () => {
     .vv-dot.active {
       background: #fff; transform: scale(1.25);
     }
+    .vv-modal.has-actions { padding-bottom: 92px; }
+    .vv-actions {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+      display: flex; justify-content: center; gap: 10px;
+      padding: 22px 12px calc(14px + env(safe-area-inset-bottom, 0px));
+      background: linear-gradient(transparent, rgba(0,0,0,0.78));
+      pointer-events: none;
+    }
+    .vv-act {
+      pointer-events: auto;
+      display: flex; align-items: center; gap: 7px;
+      min-width: 108px; justify-content: center;
+      padding: 10px 16px; border: none; border-radius: 999px;
+      background: rgba(255,255,255,0.14); color: #fff;
+      font-size: 14px; font-weight: 600; cursor: pointer;
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+      transition: background .15s, transform .1s;
+    }
+    .vv-act i { font-size: 19px; }
+    .vv-act:hover { background: rgba(255,255,255,0.24); }
+    .vv-act:active { transform: scale(.95); }
+    .vv-act.active { background: rgba(79,140,255,0.9); }
     @media (max-width: 600px) {
+      .vv-act { min-width: 0; flex: 1; padding: 10px 8px; }
       .vv-modal { padding: 0 40px; }
       .vv-nav   { width: 34px; height: 34px; font-size: 20px; }
       .vv-prev  { left: 2px; }
@@ -640,7 +667,35 @@ const _injectVVStyles = () => {
   document.head.appendChild(s);
 };
 
-const openVideoViewer = (mediaItems, startIndex = 0) => {
+// Bottom bar shown in the full-screen viewers: Like (reactions) · Comment · Share.
+// `ctx` is built by the post card (lazily — it is filled in after the media is rendered).
+const _buildViewerActions = (ctx, close) => {
+  if (!ctx || typeof ctx.like !== "function") return null;
+  const likeI = el("i"), likeN = el("span");
+  const likeBtn = el("button", { class: "vv-act", title: "Like" }, likeI, likeN);
+  const syncLike = () => {
+    const on = !!ctx.isLiked(), n = ctx.likeCount();
+    likeI.className = on ? "ri-thumb-up-fill" : "ri-thumb-up-line";
+    likeBtn.classList.toggle("active", on);
+    likeN.textContent = n ? String(n) : "Like";
+  };
+  likeBtn.onclick = (e) => { e.stopPropagation(); ctx.like(); syncLike(); };
+  const cn = ctx.commentCount();
+  const cmtBtn = el("button", { class: "vv-act", title: "Comments" },
+    el("i", { class: "ri-chat-1-line" }), el("span", {}, cn ? String(cn) : "Comment"));
+  cmtBtn.onclick = (e) => { e.stopPropagation(); close(); ctx.comment(); };
+  const bar = el("div", { class: "vv-actions" }, likeBtn, cmtBtn);
+  if (typeof ctx.share === "function") {
+    const shBtn = el("button", { class: "vv-act", title: "Share" }, el("i", { class: "ri-share-forward-line" }), el("span", {}, "Share"));
+    shBtn.onclick = (e) => { e.stopPropagation(); ctx.share(); };
+    bar.appendChild(shBtn);
+  }
+  bar.addEventListener("click", (e) => e.stopPropagation());
+  syncLike();
+  return bar;
+};
+
+const openVideoViewer = (mediaItems, startIndex = 0, ctx = null) => {
   _injectVVStyles();
   let cur = startIndex;
 
@@ -711,13 +766,16 @@ const openVideoViewer = (mediaItems, startIndex = 0) => {
     modal.appendChild(dotsWrap);
   }
   backdrop.appendChild(modal);
+  const _acts = _buildViewerActions(ctx, () => close());
+  if (_acts) { modal.classList.add("has-actions"); backdrop.appendChild(_acts); }
   document.body.appendChild(backdrop);
   show(cur);
 };
 // =========================================================================
 // IMAGE ZOOM VIEWER — fullscreen modal with pinch / scroll zoom
 // =========================================================================
-const openImageZoom = (src) => {
+const openImageZoom = (src, ctx = null) => {
+  _injectVVStyles();
   let scale = 1, originX = 0.5, originY = 0.5;
   let isDragging = false, dragStartX = 0, dragStartY = 0, translateX = 0, translateY = 0;
 
@@ -854,6 +912,8 @@ const openImageZoom = (src) => {
   backdrop.appendChild(img);
   backdrop.appendChild(closeBtn);
   backdrop.appendChild(zoomHint);
+  const _acts = _buildViewerActions(ctx, close);
+  if (_acts) { backdrop.appendChild(_acts); zoomHint.style.bottom = "86px"; }
   document.body.appendChild(backdrop);
 };
 
@@ -2208,7 +2268,7 @@ const renderTrendingCard = (p, author) => {
 // 3 items → 1 large left + 2 stacked right (Facebook-style)
 // 4+      → swipeable carousel
 // =========================================================================
-const _makeGridCell = (m, spanRows = false, _allItems = [], _idx = 0, _postId = null) => {
+const _makeGridCell = (m, spanRows = false, _allItems = [], _idx = 0, _postId = null, _ctx = null) => {
   const cellStyle = [
     "position:relative;overflow:hidden;cursor:pointer;",
     spanRows ? "grid-row:1/3;" : "",
@@ -2217,6 +2277,7 @@ const _makeGridCell = (m, spanRows = false, _allItems = [], _idx = 0, _postId = 
 
   const _navigateToPost = (e) => {
     e.stopPropagation();
+    if (_ctx) { openVideoViewer(_allItems, _idx, _ctx); return; }
     if (_postId) location.hash = `#post/${_postId}`;
   };
 
@@ -2246,7 +2307,7 @@ const _makeGridCell = (m, spanRows = false, _allItems = [], _idx = 0, _postId = 
 };
 
 const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
-  const { detailView = false, song = null } = opts;
+  const { detailView = false, song = null, viewerCtx = null } = opts;
   const items = Array.isArray(mediaRaw) ? mediaRaw : (mediaRaw ? [mediaRaw] : []);
   if (!items.length) return null;
   // A song attaches at the post level; if the media itself isn't a single
@@ -2269,7 +2330,7 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
           src: m.url, loading: "lazy",
           style: "width:100%;display:block;max-height:520px;object-fit:cover;cursor:zoom-in;border-radius:0;",
         });
-        img.addEventListener("click", () => openImageZoom(m.url));
+        img.addEventListener("click", () => openImageZoom(m.url, viewerCtx));
         stack.appendChild(img);
       }
     });
@@ -2282,15 +2343,15 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
     const m = items[0];
     if (m.type === "video") {
       // Full-width, no side border-radius so it stretches edge-to-edge
-      const player = buildVideoPlayer(m.url, { song, overlays: m.overlays });
+      const player = buildVideoPlayer(m.url, { song, overlays: m.overlays, onOpen: detailView || !viewerCtx ? null : () => openVideoViewer(items, 0, viewerCtx) });
       player.style.borderRadius = "14px";
       const wrap = el("div", { class: "post-media", style: "border-radius:14px;overflow:hidden;margin:8px 0;" });
       wrap.appendChild(player);
       return wrap;
     }
-    const _imgStyle = "width:100%;display:block;max-height:520px;object-fit:cover;" + (detailView ? "cursor:zoom-in;" : "");
+    const _imgStyle = "width:100%;display:block;max-height:520px;object-fit:cover;" + (detailView || viewerCtx ? "cursor:zoom-in;" : "");
     const singleImg = el("img", { src: m.url, loading: "lazy", style: _imgStyle });
-    if (detailView) singleImg.addEventListener("click", () => openImageZoom(m.url));
+    if (detailView || viewerCtx) singleImg.addEventListener("click", (e) => { e.stopPropagation(); openImageZoom(m.url, viewerCtx); });
     const wrap = el("div", { class: "post-media", style: "border-radius:14px;overflow:hidden;margin:8px 0;" }, singleImg);
     if (song) _wireStandaloneSong(wrap);
     return wrap;
@@ -2302,7 +2363,7 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
       class: "post-media",
       style: "display:grid;grid-template-columns:1fr 1fr;gap:3px;border-radius:14px;overflow:hidden;height:260px;margin:8px 0;position:relative;",
     });
-    items.forEach((m, i) => grid.appendChild(_makeGridCell(m, false, items, i, postId)));
+    items.forEach((m, i) => grid.appendChild(_makeGridCell(m, false, items, i, postId, viewerCtx)));
     if (song) _wireStandaloneSong(grid);
     return grid;
   }
@@ -2313,7 +2374,7 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
       class: "post-media",
       style: "display:grid;grid-template-columns:2fr 1fr;grid-template-rows:130px 130px;gap:3px;border-radius:14px;overflow:hidden;margin:8px 0;position:relative;",
     });
-    items.forEach((m, i) => grid.appendChild(_makeGridCell(m, i === 0, items, i, postId)));
+    items.forEach((m, i) => grid.appendChild(_makeGridCell(m, i === 0, items, i, postId, viewerCtx)));
     if (song) _wireStandaloneSong(grid);
     return grid;
   }
@@ -2326,11 +2387,11 @@ const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
     style: "display:grid;grid-template-columns:1fr 1fr;grid-template-rows:130px 130px;gap:3px;border-radius:14px;overflow:hidden;margin:8px 0;position:relative;",
   });
   show.forEach((m, i) => {
-    const cell = _makeGridCell(m, false, items, i, postId);
+    const cell = _makeGridCell(m, false, items, i, postId, viewerCtx);
     if (i === 3 && overflow > 0) {
       const moreOverlay = el("div", {
         style: "position:absolute;inset:0;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;cursor:pointer;",
-        onclick: (e) => { e.stopPropagation(); if (postId) location.hash = `#post/${postId}`; },
+        onclick: (e) => { e.stopPropagation(); if (viewerCtx) openVideoViewer(items, 3, viewerCtx); else if (postId) location.hash = `#post/${postId}`; },
       }, el("span", {
         style: "color:#fff;font-size:22px;font-weight:700;font-family:var(--font-display);letter-spacing:-0.02em;",
       }, `+${overflow}`));
@@ -2650,7 +2711,8 @@ const _renderMediaPost = (p, author, opts = {}) => {
   }
 
   // ── Media ────────────────────────────────────────────────────────
-  const mediaNode = renderMediaCarousel(p.media, p.id, { detailView: _detailView, song: p.song });
+  const _vctx = {};   // filled in below once the Like / Comment buttons exist
+  const mediaNode = renderMediaCarousel(p.media, p.id, { detailView: _detailView, song: p.song, viewerCtx: _vctx });
   if (mediaNode) {
     // Swap post-media class for tfb-media
     mediaNode.classList.remove("post-media");
@@ -2753,6 +2815,14 @@ const _renderMediaPost = (p, author, opts = {}) => {
       el("i", { class: "ri-share-forward-line" }), " Share",
     ),
   );
+  Object.assign(_vctx, {
+    isLiked: () => _iOrbited,
+    likeCount: () => p.orbitCount || 0,
+    like: () => orbitBtn.click(),
+    commentCount: () => p.commentCount || 0,
+    comment: () => { if (!_detailView) location.hash = `#post/${p.id}`; },
+    share: () => openPostShareModal(p, author),
+  });
   post.appendChild(el("div", { class: "tfb-post-stats" }, likeSummary, commentSummaryBtn));
   post.appendChild(actions);
 

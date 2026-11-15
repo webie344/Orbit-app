@@ -145,7 +145,7 @@ function buildUI() {
   root.innerHTML = `
   <canvas class="cc-gl"></canvas><div class="cc-scope"></div><div class="cc-vig"></div><div class="cc-hurt"></div>
   <div class="cc-hud">
-    <div class="cc-top"><div class="cc-pill">👥<b data-k="alive">16</b><small>alive</small></div><div class="cc-pill">🎯<b data-k="kills">0</b><small>kills</small></div><div class="cc-pill" data-k="zonep">🌀<b data-k="zone">--</b><small data-k="zonel">zone</small></div></div>
+    <div class="cc-top"><div class="cc-pill">👥<b data-k="alive">16</b><small>alive</small></div><div class="cc-pill">🎯<b data-k="kills">0</b><small>kills</small></div><div class="cc-pill" data-k="netp" style="display:none">🌐<b data-k="netn">1</b><small>online</small></div><div class="cc-pill" data-k="zonep">🌀<b data-k="zone">--</b><small data-k="zonel">zone</small></div></div>
     <canvas class="cc-map" width="224" height="224"></canvas>
     <div class="cc-feed"></div>
     <div class="cc-xh"><i></i><i></i><i></i><i></i><u></u></div>
@@ -174,6 +174,8 @@ function buildUI() {
       <div class="cc-seg" data-k="diff"><button data-d="0.8">Easy</button><button data-d="1" class="on">Normal</button><button data-d="1.25">Hard</button></div>
     </div>
     <div class="cc-row" data-k="menurow2" style="display:none"><div class="cc-seg" data-k="assist"><button data-a="1" class="on">Auto-aim on</button><button data-a="0">Auto-aim off</button></div></div>
+    <div class="cc-row" data-k="menurow3" style="display:none"><div class="cc-seg" data-k="online"><button data-o="1" class="on">Online players + bots</button><button data-o="0">Solo (bots only)</button></div></div>
+    <p data-k="netst" style="font-size:13px;opacity:.8;margin:2px 0"></p>
     <div class="cc-sens" data-k="sensrow" style="display:none">Look speed <input type="range" min="0.4" max="2.2" step="0.05" data-k="sens"></div>
     <div class="cc-row"><button class="cc-b" data-k="play" style="display:none">Deploy</button><button class="cc-b alt" data-k="exit1">Exit</button></div>
     <div class="cc-keys" data-k="keys"></div>
@@ -784,7 +786,7 @@ class Fighter {
     let dx = this.inp.mx, dz = this.inp.mz; if (Math.hypot(dx, dz) < 0.1) { dx = Math.sin(this.yaw); dz = Math.cos(this.yaw); }
     const l = Math.hypot(dx, dz); this.rollDX = dx / l; this.rollDZ = dz / l; this.rollYaw = Math.atan2(dx, dz);
     this.rollT = CFG.ROLL_TIME; this.rollCd = CFG.ROLL_CD; this.iframe = CFG.ROLL_TIME * 0.85; this.reloadT = 0;
-    this.rig.playFull('Roll', { dur: CFG.ROLL_TIME, fin: 0.05, fout: 0.12 }); AU.swing(); return true;
+    this.rig.playFull('Roll', { dur: CFG.ROLL_TIME, fin: 0.05, fout: 0.12 }); AU.swing(); if (this.isPlayer) netEmit('roll'); return true;
   }
   startReload() {
     if (!this.alive || this.reloadT > 0 || this.mag >= WEAPON.mag || this.reserve <= 0 || this.stance !== 'rifle' || this.rollT > 0) return;
@@ -796,12 +798,13 @@ class Fighter {
     if (kind === 'punch') { this.rig.playOver(this.punchSide++ % 2 ? 'Punch_Right' : 'Punch_Left', { dur: 0.42, prio: 3, fin: 0.04, fout: 0.1 }); }
     else if (kind === 'kick') { this.rig.playFull(this.kickSide++ % 2 ? 'Kick_Right' : 'Kick_Left', { dur: 0.8, fin: 0.06, fout: 0.16 }); this.lockT = 0.5; }
     else this.rig.playOver('Sword_Slash', { dur: 0.6, prio: 3, fin: 0.04, fout: 0.12 });
-    AU.swing(); later(M.delay, () => meleeHit(this, kind)); return true;
+    AU.swing(); if (this.isPlayer) netEmit(kind); later(M.delay, () => meleeHit(this, kind)); return true;
   }
   flinch() { this.rig.playOver(Math.random() < 0.5 ? 'HitRecieve' : 'HitRecieve_2', { dur: 0.4, prio: 1, fin: 0.03, fout: 0.14 }); }
   interact(cb) { if (!this.alive || this.rollT > 0) return; this.rig.playFull('Interact', { dur: 0.9, fin: 0.1, fout: 0.2 }); this.lockT = 0.9; later(0.45, cb); }
-  wave() { if (this.alive) this.rig.playFull('Wave', { dur: Math.min(2.4, this.rig.dur('Wave')), fin: 0.15, fout: 0.2 }); }
+  wave() { if (this.alive && this.isPlayer) netEmit('wave'); if (this.alive) this.rig.playFull('Wave', { dur: Math.min(2.4, this.rig.dur('Wave')), fin: 0.15, fout: 0.2 }); }
   update(dt) {
+    if (this.remote) return this.updateRemote(dt);
     if (!this.alive) { this.dt = dt; this.deadT += dt; this.vx = damp(this.vx, 0, 8, dt); this.vz = damp(this.vz, 0, 8, dt); moveBody(this, dt); this.group.position.set(this.x, this.y, this.z); this.rig.update(dt, { fwd: 0, rgt: 0, speed: 0, air: false, stance: this.stance, aim: false, sprint: false }); placeRifle(this); return; }
     this.fireCd -= dt; this.meleeCd -= dt; this.rollCd -= dt; this.iframe -= dt; this.lockT -= dt;
     if (this.reloadT > 0) { this.reloadT -= dt; if (this.reloadT <= 0) { const t = Math.min(WEAPON.mag - this.mag, this.reserve); this.mag += t; if (this.isPlayer) this.reserve -= t; } }
@@ -907,6 +910,10 @@ function muzzlePos(f, out) { if (f.m.muzzle) { f.m.muzzle.getWorldPosition(tmpV)
 const distToPlayer = (x, z) => (G.player ? Math.hypot(G.player.x - x, G.player.z - z) : 99);
 function damage(target, amt, attacker, o = {}) {
   if (!target.alive || target.iframe > 0 || G.over) return false;
+  if (target.remote) {   // a real player: only a real hit from you counts; their own client applies the damage
+    if (!attacker || !attacker.isPlayer || !target.uid) return false;
+    netQueueHit(target, amt, o); hitMarker(o.head); o.head ? AU.head() : AU.hit(); dmgNumber(target.x, target.y + 2, target.z, amt, o.head); target.hp = Math.max(1, target.hp - amt); return true;
+  }
   let a = amt; if (target.armor > 0) { const ab = Math.min(target.armor, a * 0.5); target.armor -= ab; a -= ab; }
   target.relax = false; target.hp -= a; target.lastHit = G.t; target.lastAttacker = attacker;
   if (a > 7 && Math.random() < 0.6 && !target.isPlayer) target.flinch();
@@ -926,8 +933,7 @@ function kill(t, by, kind) {
     G.streak = G.t - G.lastKillT < 9 ? G.streak + 1 : 1; G.lastKillT = G.t;
     banner(G.streak >= 3 ? `${['', '', '', 'TRIPLE KILL', 'QUAD KILL', 'RAMPAGE'][Math.min(G.streak, 5)]}!` : `ELIMINATED ${t.name.toUpperCase()}`, G.streak >= 3 ? '#fde047' : '#fff');
   }
-  if (t.isPlayer) { G.aliveAtDeath = G.alive + 1; later(2.4, () => endMatch(false, by)); }
-  else if (G.alive === 1 && G.player.alive) later(1.4, () => endMatch(true));
+  if (t.isPlayer) { G.aliveAtDeath = G.alive + 1; netDeath(by, kind); later(2.4, () => endMatch(false, by)); }
 }
 function meleeHit(f, kind) {
   if (!f.alive || G.over) return; const M = MELEE[kind]; let hitAny = false;
@@ -953,7 +959,7 @@ function shootBullet(f, o, d, isBot) {
 function playerFire() {
   const P = G.player; if (!P.alive || P.stance !== 'rifle' || P.fireCd > 0 || P.rollT > 0 || P.lockT > 0) return;
   if (P.reloadT > 0) return; if (P.mag <= 0) { P.startReload(); return; }
-  P.mag--; P.fireCd = WEAPON.rate;
+  P.mag--; P.fireCd = WEAPON.rate; NET.fs++; NET.sendT = Math.min(NET.sendT, 0.05);
   P.lastFire = G.t; const zl = zoomLevel(), moving = clamp(P.speed / CFG.RUN, 0, 1.4), spread = (P.aiming ? 0.0035 / Math.max(1, zl) : 0.011) + moving * 0.012 + (P.grounded ? 0 : 0.02) + G.bloom;
   const d = camDir(G.cam.yaw + rnd(-1, 1) * spread, G.cam.pitch + G.cam.recoil + rnd(-1, 1) * spread), o = { x: camera.position.x + d.x * G.cam.dist, y: camera.position.y + d.y * G.cam.dist, z: camera.position.z + d.z * G.cam.dist };
   if (G.lock && G.lock.alive && G.assist) { const T = G.lock, tx = T.x - o.x, ty = T.y + 1.35 - o.y, tz = T.z - o.z, tl = Math.hypot(tx, ty, tz) || 1, dot = (d.x * tx + d.y * ty + d.z * tz) / tl; if (dot > 0.985) { d.x = lerp(d.x, tx / tl, 0.6); d.y = lerp(d.y, ty / tl, 0.6); d.z = lerp(d.z, tz / tl, 0.6); const dl = Math.hypot(d.x, d.y, d.z); d.x /= dl; d.y /= dl; d.z /= dl; } }   // bullet magnetism toward the locked enemy
@@ -1011,7 +1017,7 @@ function zoneUpdate(dt) {
     if (Z.timer <= 0) { Z.r = Z.nr; Z.cx = Z.nx; Z.cz = Z.nz; Z.ph++; if (Z.ph < ZPH.length) zonePlan(Z.ph); else { Z.state = 'final'; Z.timer = 999; } }
   }
   Z.mesh.scale.set(Z.r, 1, Z.r); Z.mesh.position.x = Z.cx; Z.mesh.position.z = Z.cz; Z.tex.offset.x += dt * 0.02; Z.tex.offset.y -= dt * 0.05;
-  for (const f of fighters) if (f.alive && f !== G.showcase && Math.hypot(f.x - Z.cx, f.z - Z.cz) > Z.r) { f.hp -= Z.dps * dt; if (f.isPlayer) { U.hurt.style.opacity = 0.35 + Math.sin(G.t * 8) * 0.1; } if (f.hp <= 0) kill(f, null, 'zone'); }
+  for (const f of fighters) if (f.alive && !f.remote && f !== G.showcase && Math.hypot(f.x - Z.cx, f.z - Z.cz) > Z.r) { f.hp -= Z.dps * dt; if (f.isPlayer) { U.hurt.style.opacity = 0.35 + Math.sin(G.t * 8) * 0.1; } if (f.hp <= 0) kill(f, null, 'zone'); }
   if (G.player && G.player.alive && Math.hypot(G.player.x - Z.cx, G.player.z - Z.cz) <= Z.r && U.hurt.style.opacity === '0.35') U.hurt.style.opacity = 0;
 }
 
@@ -1026,7 +1032,7 @@ function makeBot(i) {
 function retarget(f) {
   const a = f.ai; let best = null, bd = 58;
   for (const c of fighters) {
-    if (c === f || !c.alive || c === G.showcase) continue; const dx = c.x - f.x, dz = c.z - f.z, d = Math.hypot(dx, dz); if (d > bd) continue;
+    if (c === f || !c.alive || c.remote || c === G.showcase) continue; const dx = c.x - f.x, dz = c.z - f.z, d = Math.hypot(dx, dz); if (d > bd) continue;
     const e = f.eye, h = c.head, dy = h.y - e.y, L = Math.hypot(dx, dy, dz), t = rayWorld(e.x, e.y, e.z, dx / L, dy / L, dz / L, L); if (t >= L - 0.4) { best = c; bd = d; }
   }
   const was = a.seen; a.seen = !!best;
@@ -1087,13 +1093,175 @@ function botShoot(f, T, dist) {
 function shootBulletSoft(f, o, d, T, forceHit) {
   // bots: world blocks bullets; hits land on the target only when the roll succeeded
   const m = muzzlePos(f, {}), w = rayWorld(o.x, o.y, o.z, d.x, d.y, d.z, WEAPON.range); let t = w, who = null, head = false;
-  for (const c of fighters) { if (!c.alive || c === f || c === G.showcase) continue; const r = rayFighter(o.x, o.y, o.z, d.x, d.y, d.z, c, t); if (r.t < t) { t = r.t; who = c; head = r.head; } }
+  for (const c of fighters) { if (!c.alive || c === f || c.remote || c === G.showcase) continue; const r = rayFighter(o.x, o.y, o.z, d.x, d.y, d.z, c, t); if (r.t < t) { t = r.t; who = c; head = r.head; } }
   const end = { x: o.x + d.x * t, y: o.y + d.y * t, z: o.z + d.z * t };
   fxTracer(m, end, '#ffb07a'); fxFlash(m, 0.6);
   if (who && (forceHit || who !== T)) { damage(who, rnd(5.5, 8.5) * (who.isPlayer ? G.diff : 0.5) * (head && Math.random() < 0.15 ? 1.6 : 1), f, { head, kind: 'rifle' }); fxBurst(end, '#ff5d73', 4, 3); }
   else if (!who) fxBurst(end, '#ffd9a0', 4, 3, 1);
   return t;
 }
+
+/* ========================================================================== */
+/*  ONLINE PLAYERS  (Firebase, loaded lazily so the game still works solo)    */
+/*  Hybrid model: every client runs its own bots + zone; real players appear  */
+/*  as "ghost" fighters driven by their position doc. Shooters detect hits;   */
+/*  the victim's client applies damage and announces kills.                   */
+/* ========================================================================== */
+const FBCFG = { apiKey: 'AIzaSyC9jF-ocy6HjsVzWVVlAyXW-4aIFgA79-A', authDomain: 'crypto-6517d.firebaseapp.com', projectId: 'crypto-6517d', storageBucket: 'crypto-6517d.firebasestorage.app', messagingSenderId: '60263975159', appId: '1:60263975159:web:bd53dcaad86d6ed9592bf2' };
+const NET = {
+  on: store.get('online', 1) !== 0, ready: false, joined: false, initP: null, token: 0, uid: null, fsm: null, db: null, unsubs: [],
+  remotes: new Map(), sendT: 0, hbT: 0, hb: 0, last: '', fs: 0, ev: '', evs: 0, hitQ: new Map(), hitT: 0, msg: '', warned: false,
+};
+const r2 = (v) => Math.round(v * 100) / 100;
+function netStatus(t) { NET.msg = t; if (U.netst) U.netst.textContent = t; }
+function netErr(e) {
+  const c = (e && e.code) || '';
+  if (!NET.warned) { NET.warned = true; feed(c === 'permission-denied' ? '🌐 Online blocked — Firestore rules not added yet' : '🌐 Online connection problem — bots only', true); }
+  netStatus(c === 'permission-denied' ? 'Online blocked: add the Firestore rules (see README)' : 'Online unavailable right now — playing with bots');
+}
+function netInit() {
+  if (NET.initP) return NET.initP;
+  return (NET.initP = (async () => {
+    try {
+      if (navigator.onLine === false) throw new Error('offline');
+      const B = 'https://www.gstatic.com/firebasejs/10.13.2/';
+      const [A, AU_, FS] = await Promise.race([Promise.all([import(B + 'firebase-app.js'), import(B + 'firebase-auth.js'), import(B + 'firebase-firestore.js')]), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))]);
+      const app = A.getApps().length ? A.getApp() : A.initializeApp(FBCFG), auth = AU_.getAuth(app);
+      const user = await new Promise((res) => { let d = false; const fin = (u) => { if (!d) { d = true; res(u); } }; setTimeout(() => fin(auth.currentUser || null), 4500); AU_.onAuthStateChanged(auth, fin); });
+      if (!user) { netStatus('Sign in to Get better to play with other people (bots only for now)'); return false; }
+      NET.uid = user.uid; NET.fsm = FS; NET.db = FS.getFirestore(app); NET.ready = true; netStatus(`Online as ${PLAYER_NAME} · other players + bots`); return true;
+    } catch (e) { netStatus('Offline — playing with bots'); return false; }
+  })());
+}
+function netOff() { NET.initP = null; }
+async function netJoin() {
+  netLeave(); NET.warned = false;
+  if (!NET.on) { netStatus('Solo mode'); return; }
+  const tk = ++NET.token; netStatus('Connecting…');
+  const ok = await netInit(); if (tk !== NET.token) return;
+  if (!ok) { if (!NET.ready) { NET.initP = null; } feed('🌐 ' + NET.msg, true); return; }
+  const { collection, doc, onSnapshot, query, where, deleteDoc } = NET.fsm, db = NET.db, uid = NET.uid;
+  NET.joined = true; NET.sendT = 0; NET.hbT = 0; NET.last = ''; NET.hitQ.clear();
+  let firstP = true, firstH = true, firstK = true;
+  NET.unsubs.push(onSnapshot(collection(db, 'cc_players'), (snap) => {
+    if (tk !== NET.token) return; const now = Date.now();
+    snap.docChanges().forEach((ch) => {
+      if (ch.doc.id === uid) return;
+      if (ch.type === 'removed') { netRemove(ch.doc.id); return; }
+      const d = ch.doc.data(); if (firstP && ch.type === 'added' && Math.abs(now - (d.ts || 0)) > 60000) return;   // leftovers from a crashed tab
+      netUpsert(ch.doc.id, d);
+    }); firstP = false;
+  }, netErr));
+  NET.unsubs.push(onSnapshot(query(collection(db, 'cc_hits'), where('to', '==', uid)), (snap) => {
+    if (tk !== NET.token) return;
+    snap.docChanges().forEach((ch) => { if (ch.type !== 'added') return; const d = ch.doc.data(); deleteDoc(ch.doc.ref).catch(() => {}); if (!firstH) netApplyHit(d); }); firstH = false;
+  }, netErr));
+  NET.unsubs.push(onSnapshot(collection(db, 'cc_kills'), (snap) => {
+    if (tk !== NET.token) return;
+    snap.docChanges().forEach((ch) => { if (ch.type !== 'added' || firstK) return; const d = ch.doc.data(); if (d.victim !== uid) netKillFeed(d); }); firstK = false;
+  }, netErr));
+  netWriteState(true); feed('🌐 Online — other players can join this match', true);
+}
+function netLeave() {
+  NET.token++; for (const u of NET.unsubs) { try { u(); } catch {} } NET.unsubs = [];
+  for (const id of [...NET.remotes.keys()]) netRemove(id);
+  if (NET.joined && NET.ready) { try { NET.fsm.deleteDoc(NET.fsm.doc(NET.db, 'cc_players', NET.uid)).catch(() => {}); } catch {} }
+  NET.joined = false;
+}
+function netRemove(id) {
+  const r = NET.remotes.get(id); if (!r) return; NET.remotes.delete(id); const f = r.f;
+  scene.remove(f.group); if (f.m.world && f.m.rifle) scene.remove(f.m.rifle); const i = fighters.indexOf(f); if (i >= 0) fighters.splice(i, 1);
+  if (G.lock === f) G.lock = null;
+}
+function netUpsert(id, d) {
+  let r = NET.remotes.get(id);
+  if (!r) {
+    if (d.alive === false || G.state !== 'playing') return;
+    let h = 0; for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+    const f = new Fighter(String(d.name || 'Player').slice(0, 16), false, new THREE.Color().setHSL((h % 360) / 360, 0.6, 0.62));
+    f.remote = true; f.uid = id; f.lastShot = -9; f.shootT = 0; f.lastFs = d.fs || 0; f.lastEvs = d.evs || 0; f.spawnAt(d.x, d.z); f.y = d.y; f.dispY = d.y; f.yaw = d.yaw || 0; f.net = d;
+    r = { f, recv: performance.now() }; NET.remotes.set(id, r); feed(`<b>${f.name}</b> joined the match`, false);
+  }
+  r.f.net = d; r.recv = performance.now();
+}
+function netWriteState(force) {
+  if (!NET.joined || !G.player) return; const P = G.player;
+  const s = { name: PLAYER_NAME, x: r2(P.x), y: r2(P.y), z: r2(P.z), yaw: r2(P.yaw), pitch: r2(clamp(G.cam.pitch, -0.75, 1.1)), hp: Math.max(0, Math.round(P.hp)), armor: Math.round(P.armor), alive: P.alive, st: P.stance, aim: P.aiming ? 1 : 0, fs: NET.fs, ev: NET.ev, evs: NET.evs, kills: P.kills };
+  const key = JSON.stringify(s); if (!force && key === NET.last && NET.hbT > 0) return;
+  NET.last = key; NET.hbT = 2; s.hb = ++NET.hb; s.ts = Date.now();
+  NET.fsm.setDoc(NET.fsm.doc(NET.db, 'cc_players', NET.uid), s).catch(netErr);
+}
+function netEmit(ev) { NET.ev = ev; NET.evs++; NET.sendT = Math.min(NET.sendT, 0.05); }
+function netQueueHit(target, amt, o) {
+  const q = NET.hitQ.get(target.uid) || { dmg: 0, head: false, kind: 'rifle', fn: PLAYER_NAME }; q.dmg += amt; q.head = q.head || !!o.head; q.kind = o.kind || 'rifle'; NET.hitQ.set(target.uid, q);
+}
+function netApplyHit(d) {
+  const P = G.player; if (!P || !P.alive || G.over || G.state !== 'playing') return;
+  const r = NET.remotes.get(d.from), by = r ? r.f : { name: String(d.fn || 'Player'), x: P.x, z: P.z - 1, kills: 0, remote: true, isPlayer: false, uid: d.from };
+  damage(P, clamp(Number(d.dmg) || 0, 0, 70), by, { head: !!d.head, kind: d.kind || 'rifle' });
+}
+const KICON = { rifle: '🔫', punch: '🥊', kick: '🦶', sword: '⚔️', zone: '🌀' };
+function netKillFeed(d) {
+  const P = G.player; if (!P) return; const me = d.killer === NET.uid;
+  feed(`<b>${d.kn || 'Zone'}</b> ${KICON[d.kind] || '🔫'} ${d.vn}`, me);
+  const v = NET.remotes.get(d.victim); if (v && v.f.alive) { v.f.alive = false; v.f.hp = 0; v.f.rig.playFull('Death', { hold: true, fin: 0.08 }); v.f.aiming = false; }
+  if (me && P.alive) { P.kills++; G.streak = G.t - G.lastKillT < 9 ? G.streak + 1 : 1; G.lastKillT = G.t; banner(G.streak >= 3 ? `${['', '', '', 'TRIPLE KILL', 'QUAD KILL', 'RAMPAGE'][Math.min(G.streak, 5)]}!` : `ELIMINATED ${String(d.vn).toUpperCase()}`, G.streak >= 3 ? '#fde047' : '#fff'); }
+}
+function netDeath(by, kind) {
+  if (!NET.joined) return; netWriteState(true);
+  const k = { victim: NET.uid, killer: by && by.remote ? by.uid : '', vn: PLAYER_NAME, kn: by && by !== G.player ? by.name : 'Zone', kind: kind || 'rifle', ts: Date.now() };
+  NET.fsm.addDoc(NET.fsm.collection(NET.db, 'cc_kills'), k).then((ref) => { setTimeout(() => NET.fsm.deleteDoc(ref).catch(() => {}), 20000); }).catch(netErr);
+}
+function netTick(dt) {
+  if (!NET.joined) return;
+  NET.sendT -= dt; NET.hbT -= dt; NET.hitT -= dt;
+  if (NET.sendT <= 0) { NET.sendT = 0.2; netWriteState(false); }
+  if (NET.hitT <= 0 && NET.hitQ.size) {
+    NET.hitT = 0.15;
+    for (const [to, q] of NET.hitQ) NET.fsm.addDoc(NET.fsm.collection(NET.db, 'cc_hits'), { to, from: NET.uid, dmg: Math.round(q.dmg), head: q.head, kind: q.kind, fn: q.fn }).catch(netErr);
+    NET.hitQ.clear();
+  }
+  const now = performance.now();
+  for (const [id, r] of [...NET.remotes]) if (now - r.recv > 6000 || (!r.f.alive && r.f.deadT > 10)) netRemove(id);
+  if (U.netn) { setT(U.netn, NET.remotes.size + 1); U.netp.style.display = ''; }
+}
+
+/* A remote player's body: smooth toward the last received state, replay their events */
+Fighter.prototype.updateRemote = function (dt) {
+  const n = this.net, k = 1 - Math.exp(-12 * dt), px = this.x, pz = this.z;
+  if (n.alive === false && this.alive) { this.alive = false; this.hp = 0; this.aiming = false; this.rig.playFull('Death', { hold: true, fin: 0.08 }); }
+  if (!this.alive) {
+    this.deadT += dt; this.group.position.set(this.x, this.y, this.z); this.group.rotation.y = this.yaw;
+    this.rig.update(dt, { fwd: 0, rgt: 0, speed: 0, air: false, stance: this.stance, aim: false, sprint: false }); placeRifle(this); return;
+  }
+  if (Math.hypot(n.x - this.x, n.z - this.z) > 14) { this.x = n.x; this.z = n.z; this.y = n.y; } else { this.x = lerp(this.x, n.x, k); this.z = lerp(this.z, n.z, k); this.y = lerp(this.y, n.y, k); }
+  this.yaw = dampAng(this.yaw, n.yaw || 0, 14, dt); this.hp = n.hp; this.armor = n.armor || 0; this.aiming = !!n.aim; this.aimPitch = clamp(n.pitch || 0, -0.5, 0.6);
+  if (n.st && n.st !== this.stance) this.setStance(n.st);
+  this.vx = damp(this.vx, (this.x - px) / dt, 10, dt); this.vz = damp(this.vz, (this.z - pz) / dt, 10, dt); this.speed = Math.hypot(this.vx, this.vz); this.dt = dt;
+  this.rollT = Math.max(0, this.rollT - dt); this.kick = Math.max(0, (this.kick || 0) - dt * 0.9);
+  this.dispY = this.y; this.group.position.set(this.x, this.y, this.z); this.group.rotation.y = this.yaw;
+  if (n.evs !== this.lastEvs) { this.lastEvs = n.evs; this.netEvent(n.ev); }
+  const fx = Math.sin(this.yaw), fz = Math.cos(this.yaw), rx = -Math.cos(this.yaw), rz = Math.sin(this.yaw), air = this.y > groundAt(this.x, this.z, this.y) + 0.45;
+  this.rig.update(dt, { fwd: this.vx * fx + this.vz * fz, rgt: this.vx * rx + this.vz * rz, speed: this.speed, air, stance: this.stance, aim: this.aiming && this.stance === 'rifle', sprint: this.speed > CFG.RUN * 0.95 });
+  placeRifle(this);
+  if (n.fs !== this.lastFs) { this.lastFs = n.fs; this.shootT = 0.32; }
+  if (this.shootT > 0 && this.alive && this.stance === 'rifle') {
+    this.shootT -= dt; this.fireCd -= dt;
+    if (this.fireCd <= 0) {
+      this.fireCd = WEAPON.rate * 1.5; const m = muzzlePos(this, {}), d = camDir(this.yaw, this.aimPitch), t = Math.min(70, rayWorld(m.x, m.y, m.z, d.x, d.y, d.z, 70));
+      fxTracer(m, { x: m.x + d.x * t, y: m.y + d.y * t, z: m.z + d.z * t }, '#ffb07a'); fxFlash(m, 0.7); this.rig.fire(this.aiming, this.speed > 3); this.kick = 0.06; this.lastShot = G.t;
+      AU.shot(Math.pow(clamp(1 - distToPlayer(this.x, this.z) / 95, 0, 1), 2));
+    }
+  }
+};
+Fighter.prototype.netEvent = function (ev) {
+  if (ev === 'roll') { this.rollT = CFG.ROLL_TIME; this.rig.playFull('Roll', { dur: CFG.ROLL_TIME, fin: 0.05, fout: 0.12 }); }
+  else if (ev === 'punch') this.rig.playOver(this.punchSide++ % 2 ? 'Punch_Right' : 'Punch_Left', { dur: 0.42, prio: 3, fin: 0.04, fout: 0.1 });
+  else if (ev === 'kick') this.rig.playFull(this.kickSide++ % 2 ? 'Kick_Right' : 'Kick_Left', { dur: 0.8, fin: 0.06, fout: 0.16 });
+  else if (ev === 'sword') this.rig.playOver('Sword_Slash', { dur: 0.6, prio: 3, fin: 0.04, fout: 0.12 });
+  else if (ev === 'wave') this.wave();
+};
+addEventListener('pagehide', () => { try { netLeave(); } catch {} });
 
 /* ========================================================================== */
 /*  INPUT                                                                     */
@@ -1253,7 +1421,7 @@ function drawHUD(dt) {
     g.lineWidth = 1.2; g.strokeStyle = '#c4a1ff'; g.beginPath(); g.arc(Z.cx, -Z.cz, Z.r, 0, 6.283); g.stroke();
     if (Z.state !== 'final') { g.strokeStyle = 'rgba(255,255,255,.8)'; g.setLineDash([3, 3]); g.beginPath(); g.arc(Z.nx, -Z.nz, Z.nr, 0, 6.283); g.stroke(); g.setLineDash([]); }
     for (const p of pickups) if (!p.taken) { g.fillStyle = PK[p.k].color; g.fillRect(p.x - 0.9, -p.z - 0.9, 1.8, 1.8); }
-    for (const f of fighters) { if (f === P || !f.alive || f === G.showcase) continue; const d = Math.hypot(f.x - P.x, f.z - P.z); if (d > 34 && G.t - f.lastShot > 1.2) continue; g.fillStyle = '#ff4d6d'; g.beginPath(); g.arc(f.x, -f.z, 1.9, 0, 6.283); g.fill(); }
+    for (const f of fighters) { if (f === P || !f.alive || f === G.showcase) continue; const d = Math.hypot(f.x - P.x, f.z - P.z); if (d > 34 && G.t - f.lastShot > 1.2 && !(f.remote && d < 80)) continue; g.fillStyle = '#ff4d6d'; g.beginPath(); g.arc(f.x, -f.z, 1.9, 0, 6.283); g.fill(); }
     g.restore(); g.save(); g.translate(W / 2, W / 2); g.fillStyle = '#fde047'; g.beginPath(); g.moveTo(0, -9); g.lineTo(6, 7); g.lineTo(0, 3); g.lineTo(-6, 7); g.closePath(); g.fill(); g.restore();
   }
   // name tags (closest few, on screen, with line of sight)
@@ -1275,23 +1443,25 @@ function clearWorld() {
   for (const T of FX.tracers) { T.t = 0; T.m.visible = false; } U.feed.innerHTML = ''; G.showcase = null;
 }
 function startMatch() {
-  AU.init(); clearWorld(); G.over = false; G.t = 0; G.paused = false; G.streak = 0; G.lastKillT = -9; G.bloom = 0; exhausted = false; idleT = 0;
+  AU.init(); netLeave(); clearWorld(); G.total = 0; G._winT = 0; NET.fs = 0; NET.evs = 0; NET.ev = ''; G.over = false; G.t = 0; G.paused = false; G.streak = 0; G.lastKillT = -9; G.bloom = 0; exhausted = false; idleT = 0;
   const sp = WORLD.spawns.slice().sort(() => Math.random() - 0.5);
   const P = new Fighter(PLAYER_NAME, true, null); G.player = P; P.spawnAt(sp[0].x, sp[0].z); P.lastShot = -9;
   for (let i = 0; i < CFG.BOTS; i++) { const b = makeBot(i); const s = sp[(i + 1) % sp.length]; b.spawnAt(s.x, s.z); b.yaw = rnd(0, 6.28); b.lastShot = -9; }
   P.yaw = Math.atan2(-P.x, -P.z); G.cam.yaw = P.yaw; G.cam.pitch = 0.12; G.cam.recoil = 0; G.zoom = 0; G.cam.len = undefined;
   G.alive = fighters.length; zoneReset();
   for (const l of WORLD.loot) addPickup(l.x, l.z, l.k);
+  NET.on = U.online.querySelector('.on')?.dataset.o !== '0'; store.set('online', NET.on ? 1 : 0); netJoin();
   G.diff = Number(U.diff.querySelector('.on')?.dataset.d || 1); G.assist = U.assist.querySelector('.on')?.dataset.a !== '0'; store.set('assist', G.assist ? 1 : 0); G.lock = null; store.set('diff', G.diff);
   for (const s of Object.values(U.screens)) s.classList.remove('on'); U.hud.classList.add('on'); if (TOUCH) U.touch.classList.add('on');
   G.state = 'playing'; setTimeout(() => P.wave(), 150); banner(`DROP IN · ${G.alive} FIGHTERS`, '#fde047');
   try { if (TOUCH) { document.documentElement.requestFullscreen?.().catch(() => {}); screen.orientation?.lock?.('landscape').catch(() => {}); } else lockPointer(); } catch {}
 }
 function endMatch(won, by) {
-  if (G.over) return; G.over = true; const P = G.player, place = won ? 1 : (G.aliveAtDeath || 16), total = CFG.BOTS + 1;
+  if (G.over) return; G.over = true; const P = G.player, place = won ? 1 : (G.aliveAtDeath || 16), total = Math.max(G.total || 0, CFG.BOTS + 1);
   const score = P.kills * 100 + (total + 1 - place) * 30 + (won ? 500 : 0);
   if (won) { P.wave(); AU.win(); } else AU.lose();
   fireHeld = aimHeld = false; try { document.exitPointerLock?.(); } catch {}
+  later(won ? 0.5 : 3, netLeave);
   later(won ? 2.6 : 0.3, () => {
     U.hud.classList.remove('on'); U.touch.classList.remove('on');
     setT(U.endt, won ? 'WINNER WINNER!' : by ? `Eliminated by ${by.name}` : 'Eliminated'); setT(U.endsub, won ? 'Last fighter standing in the compound.' : `You finished #${place} of ${total}.`);
@@ -1303,13 +1473,14 @@ function setPaused(p) {
   if (G.over || G.state !== 'playing') return; G.paused = p; U.screens.pause.classList.toggle('on', p); fireHeld = aimHeld = false;
   if (!p && !TOUCH) lockPointer();
 }
-function toMenu() { try { parent !== window && parent.postMessage({ type: 'gb-game-exit' }, '*'); } catch {} if (parent === window) location.href = qs.get('back') || './'; }
+function toMenu() { netLeave(); try { parent !== window && parent.postMessage({ type: 'gb-game-exit' }, '*'); } catch {} if (parent === window) location.href = qs.get('back') || './'; }
 U.pause.addEventListener('click', () => setPaused(true)); U.resume.addEventListener('click', () => setPaused(false));
-U.quit.addEventListener('click', () => { G.over = true; try { document.exitPointerLock?.(); } catch {} toMenu(); });
+U.quit.addEventListener('click', () => { G.over = true; netLeave(); try { document.exitPointerLock?.(); } catch {} toMenu(); });
 U.exit1.addEventListener('click', toMenu); U.exit2.addEventListener('click', toMenu);
 U.again.addEventListener('click', () => { U.screens.end.classList.remove('on'); startMatch(); });
 U.play.addEventListener('click', startMatch);
 U.diff.addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; U.diff.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); });
+U.online.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { U.online.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); NET.on = b.dataset.o !== '0'; if (NET.on) netInit(); else netStatus('Solo mode'); } });
 U.assist.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) U.assist.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); });
 { const a = store.get('assist', 1); U.assist.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x.dataset.a === String(a))); G.assist = a !== 0; }
 U.sens.value = G.sens; U.sens.addEventListener('input', () => { G.sens = Number(U.sens.value); store.set('sens', G.sens); });
@@ -1338,6 +1509,8 @@ function menuCam(dt) {
 function step(dt) {
   G.t += dt; for (let i = timers.length - 1; i >= 0; i--) { const t = timers[i]; t.t -= dt; if (t.t <= 0) { timers.splice(i, 1); try { t.fn(); } catch (e) { console.error(e); } } }
   playerControl(dt);
+  { let n = 0; for (const f of fighters) if (f.alive && f !== G.showcase) n++; G.alive = n; G.total = Math.max(G.total || 0, fighters.length); if (n === 1 && G.player.alive && !G.over && !G._winT) { G._winT = 1; later(1.4, () => endMatch(true)); } }
+  netTick(dt);
   for (const f of fighters) if (f.ai && f.alive) botThink(f, dt);
   for (const f of fighters) f.update(dt);
   const P = G.player; P.lastShot = P.fireCd > WEAPON.rate * 0.6 ? G.t : P.lastShot; for (const f of fighters) if (f.ai && f.fireCd > WEAPON.rate) f.lastShot = G.t;
@@ -1371,8 +1544,9 @@ addEventListener('resize', resize); resize();
 (async function boot() {
   buildWorld(); requestAnimationFrame(frame);
   if (TOUCH && innerHeight > innerWidth) U.loadt.insertAdjacentHTML('afterend', '<p style="color:#fde047;font-size:14px">📱 Turn your phone sideways for the best view.</p>');
-  U.sensrow.style.display = 'flex'; U.menurow.style.display = 'flex'; U.menurow2.style.display = 'flex';
+  U.sensrow.style.display = 'flex'; U.menurow.style.display = 'flex'; U.menurow2.style.display = 'flex'; U.menurow3.style.display = 'flex'; if (!NET.on) { U.online.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.o === '0')); }
   await loadAssets(); G.state = 'menu'; showcaseInit(); U.play.style.display = ''; U.load.parentElement.style.display = 'none'; U.loadt.style.display = TOUCH || ASSETS.soldier ? 'none' : '';
+  if (NET.on && !qs.get('auto')) netInit();
   if (qs.get('auto')) startMatch();
 })();
-window.__cc = { G, fighters, COL, scene, camera, renderer, startMatch, step, WORLD, Z, pickups, act };
+window.__cc = { G, fighters, COL, scene, camera, renderer, startMatch, step, WORLD, Z, pickups, act, NET, rayWorld, playerFire, damage, Fighter };
