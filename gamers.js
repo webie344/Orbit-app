@@ -29,10 +29,11 @@ const CFG = {
   HALF: 60,                  // compound is 120 x 120 m
   BOTS: 15,
   // movement (about 2x the old game)
-  WALK: 4.8, RUN: 10.2, SPRINT: 15, AIM_SPEED: 4.4,
-  JUMP: 9.4, GRAV: 28, STEP: 0.45, RADIUS: 0.42, HEIGHT: 1.85,
-  ROLL_SPEED: 17, ROLL_TIME: 0.62, ROLL_CD: 2.6,
+  WALK: 5.6, RUN: 12.5, SPRINT: 18, AIM_SPEED: 6.2,
+  JUMP: 9.8, GRAV: 30, STEP: 0.45, RADIUS: 0.42, HEIGHT: 1.85,
+  ROLL_SPEED: 21, ROLL_TIME: 0.62, ROLL_CD: 2.6,
   BODY_H: 1.85,
+  LOCK_RANGE: 42, LOCK_CONE: 0.45,   // auto-aim: how far / how wide (radians) an enemy can be and still be locked
   RIFLE_LEN: 0.95,
   // AK-47 two-hand hold: stock in the right shoulder, hands go to the pistol grip and the handguard
   STOCK_FWD: 0.06, STOCK_SIDE: 0.1, STOCK_DOWN: 0.1, GRIP_R: 0.3, GRIP_L: 0.56,
@@ -78,6 +79,8 @@ html,body{margin:0;height:100%;overflow:hidden;background:#0b0920;color:#fff;tou
 .cc-feed div{background:var(--cc-bg);border-radius:8px;padding:3px 9px;font-size:14px;font-weight:600;animation:ccf .25s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .cc-feed .me{border-left:3px solid var(--cc-y)}
 @keyframes ccf{from{opacity:0;transform:translateX(20px)}}
+.cc-lock{position:absolute;left:0;top:0;width:46px;height:46px;margin:-23px 0 0 -23px;border:2px solid var(--cc-r);border-radius:50%;display:none;box-shadow:0 0 12px var(--cc-r),inset 0 0 8px rgba(255,60,90,.5);animation:ccl .5s infinite alternate}.cc-lock:before,.cc-lock:after{content:'';position:absolute;background:var(--cc-r);left:50%;top:50%}.cc-lock:before{width:2px;height:62px;margin:-31px 0 0 -1px}.cc-lock:after{width:62px;height:2px;margin:-1px 0 0 -31px}
+@keyframes ccl{to{transform:scale(1.12)}}
 .cc-xh{position:absolute;left:50%;top:50%;width:0;height:0}
 .cc-xh i{position:absolute;background:#fff;box-shadow:0 0 3px #000;width:2px;height:9px;left:-1px;top:-1px;transition:transform .08s}
 .cc-xh i:nth-child(1){transform:translateY(calc(-14px - var(--s,0px)))}
@@ -148,7 +151,7 @@ function buildUI() {
     <div class="cc-xh"><i></i><i></i><i></i><i></i><u></u></div>
     <div class="cc-bars"><div class="cc-bar sp"><i data-k="stam"></i><span>STAMINA</span></div><div class="cc-bar ar"><i data-k="ar"></i><span>ARMOR</span></div><div class="cc-bar"><i data-k="hp"></i><span>HEALTH</span></div></div>
     <div class="cc-gun"><div data-k="wname">Rifle</div><b data-k="mag">30</b><small data-k="res">/ 120</small></div>
-    <div class="cc-prompt"></div><div class="cc-banner"></div><div class="cc-dmg"></div><div class="cc-tags"></div>
+    <div class="cc-lock"></div><div class="cc-prompt"></div><div class="cc-banner"></div><div class="cc-dmg"></div><div class="cc-tags"></div>
     <button class="cc-pause" data-k="pause">❚❚</button>
   </div>
   <div class="cc-touch">
@@ -170,6 +173,7 @@ function buildUI() {
     <div class="cc-row" data-k="menurow" style="display:none">
       <div class="cc-seg" data-k="diff"><button data-d="0.8">Easy</button><button data-d="1" class="on">Normal</button><button data-d="1.25">Hard</button></div>
     </div>
+    <div class="cc-row" data-k="menurow2" style="display:none"><div class="cc-seg" data-k="assist"><button data-a="1" class="on">Auto-aim on</button><button data-a="0">Auto-aim off</button></div></div>
     <div class="cc-sens" data-k="sensrow" style="display:none">Look speed <input type="range" min="0.4" max="2.2" step="0.05" data-k="sens"></div>
     <div class="cc-row"><button class="cc-b" data-k="play" style="display:none">Deploy</button><button class="cc-b alt" data-k="exit1">Exit</button></div>
     <div class="cc-keys" data-k="keys"></div>
@@ -179,7 +183,7 @@ function buildUI() {
     <div class="cc-stat"><div>Place<b data-k="eplace">#1</b></div><div>Kills<b data-k="ekills">0</b></div><div>Score<b data-k="escore">0</b></div></div>
     <div class="cc-row"><button class="cc-b" data-k="again">Play again</button><button class="cc-b alt" data-k="exit2">Exit</button></div></div>`;
   document.body.appendChild(root);
-  const U = { root, canvas: root.querySelector('.cc-gl'), hud: root.querySelector('.cc-hud'), hurt: root.querySelector('.cc-hurt'), scope: root.querySelector('.cc-scope'), map: root.querySelector('.cc-map'), feed: root.querySelector('.cc-feed'), xh: root.querySelector('.cc-xh'), prompt: root.querySelector('.cc-prompt'), banner: root.querySelector('.cc-banner'), dmg: root.querySelector('.cc-dmg'), tags: root.querySelector('.cc-tags'), touch: root.querySelector('.cc-touch'), joy: root.querySelector('.cc-joy'), look: root.querySelector('.cc-look'), screens: {} };
+  const U = { root, canvas: root.querySelector('.cc-gl'), hud: root.querySelector('.cc-hud'), hurt: root.querySelector('.cc-hurt'), scope: root.querySelector('.cc-scope'), map: root.querySelector('.cc-map'), feed: root.querySelector('.cc-feed'), xh: root.querySelector('.cc-xh'), prompt: root.querySelector('.cc-prompt'), lock: root.querySelector('.cc-lock'), banner: root.querySelector('.cc-banner'), dmg: root.querySelector('.cc-dmg'), tags: root.querySelector('.cc-tags'), touch: root.querySelector('.cc-touch'), joy: root.querySelector('.cc-joy'), look: root.querySelector('.cc-look'), screens: {} };
   root.querySelectorAll('[data-k]').forEach((e) => { U[e.dataset.k] = e; });
   root.querySelectorAll('[data-s]').forEach((e) => { U.screens[e.dataset.s] = e; });
   U.btn = {}; root.querySelectorAll('[data-b]').forEach((e) => { U.btn[e.dataset.b] = e; });
@@ -233,7 +237,7 @@ const AU = {
 const U = buildUI();
 const MOBILE = TOUCH;
 const renderer = new THREE.WebGLRenderer({ canvas: U.canvas, antialias: !MOBILE, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio || 1, MOBILE ? 1.5 : 2));
+renderer.setPixelRatio(Math.min(devicePixelRatio || 1, MOBILE ? 1.25 : 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -565,134 +569,57 @@ function buildWorld() {
 /*   full body  : Roll · Kick · Interact (loot) · Wave · Death                */
 /*  Every bone always receives weights that add up to 1, so nothing T-poses.  */
 /* ========================================================================== */
-const LOCO = new Set(['walk', 'run', 'run_back', 'run_left', 'run_right']);
+/* One whole animation at a time with a short crossfade (the way your old gamers.js did it).
+   Walk / Run / Run_Left / Run_Right / Run_Back follow your movement direction, Run_Shoot / Gun_Shoot / Idle_Gun_Shoot play while firing,
+   Roll / Kick / Wave / Interact / Death / Punch / Sword_Slash are one-shots. Clips are used exactly as authored (no splitting, no edits). */
 class Rig {
   constructor(model, clips, onStep) {
-    this.model = model; this.mixer = new THREE.AnimationMixer(model); this.onStep = onStep;
-    this.src = {}; clips.forEach((c) => { this.src[c.name.toLowerCase()] = c; });
-    this.cache = {}; this.acts = {}; this.list = [];
-    // find the bone that starts the upper body (Abdomen / Spine / Torso …) and collect its children
-    const bones = []; model.traverse((o) => { if (o.isBone) bones.push(o); });
-    let up = null, best = 1e9;
-    for (const b of bones) if (/abdomen|spine|torso|chest/i.test(b.name)) { let d = 0, p = b; while (p.parent) { p = p.parent; d++; } if (d < best) { best = d; up = b; } }
-    this.upper = new Set(); if (up) up.traverse((o) => { if (o.isBone) this.upper.add(THREE.PropertyBinding.sanitizeNodeName(o.name)); });
-    this.split = this.upper.size > 0;
-    const rootB = bones.find((b) => !(b.parent && b.parent.isBone)); this.rootName = rootB ? THREE.PropertyBinding.sanitizeNodeName(rootB.name) : 'Hips';
-    // rest pose of every bone: bones may never change length or scale (stops stretched legs)
-    this.rest = bones.map((b) => ({ b, p: b.position.clone(), s: b.scale.clone(), root: b === rootB }));
-    const rp = rootB ? rootB.position : { x: 0, y: 1, z: 0 }; this.vAxis = Math.abs(rp.x) > Math.abs(rp.y) && Math.abs(rp.x) > Math.abs(rp.z) ? 'x' : Math.abs(rp.z) > Math.abs(rp.y) ? 'z' : 'y';
-    this.clock = Math.random() * 3; this.phase = Math.random(); this.w = { idle: 1, F: 1, B: 0, L: 0, R: 0, k: 0, sp: 0, aim: 0, S: 0 };
-    this.full = null; this.over = null; this.shootT = 9; this.shootHold = 0; this.shootName = 'Idle_Gun_Shoot'; this.dead = false;
+    this.model = model; this.mixer = new THREE.AnimationMixer(model); this.onStep = onStep; this.clips = {}; this.acts = {};
+    clips.forEach((c) => { this.clips[c.name.toLowerCase()] = c; });
+    this.cur = null; this.curName = ''; this.clock = 0; this.dead = false; this.one = null; this.full = null; this.over = null; this.shootUntil = 0; this.dist = 0;
   }
-  has(name) { return !!this.src[name.toLowerCase()]; }
-  dur(name) { const c = this.src[name.toLowerCase()]; return c ? c.duration : 0.8; }
-  clip(name, part) {
-    if (!this.split) { if (part === 'up') return null; part = 'full'; }
-    const key = name.toLowerCase() + '|' + part; if (key in this.cache) return this.cache[key];
-    const src = this.src[name.toLowerCase()]; if (!src) return (this.cache[key] = null);
-    const tracks = [];
-    for (const t of src.tracks) {
-      const node = THREE.PropertyBinding.parseTrackName(t.name).nodeName, isUp = this.upper.has(node);
-      if (part === 'lo' && isUp) continue; if (part === 'up' && !isUp) continue;
-      const tr = t.clone();
-      if (t.name.endsWith('.position')) { if (node !== this.rootName) continue; const v = tr.values; for (let i = 0; i < v.length; i += 3) { v[i] = v[0]; v[i + 2] = v[2]; } } // keep hip bounce, drop root drift
-      if (t.name.endsWith('.scale')) continue;
-      tracks.push(tr);
-    }
-    return (this.cache[key] = tracks.length ? new THREE.AnimationClip(name + '_' + part, src.duration, tracks) : null);
+  has(n) { return !!this.clips[n.toLowerCase()]; }
+  dur(n) { const c = this.clips[n.toLowerCase()]; return c ? c.duration : 0.8; }
+  act(n) { const k = n.toLowerCase(); if (!(k in this.acts)) this.acts[k] = this.clips[k] ? this.mixer.clipAction(this.clips[k]) : null; return this.acts[k]; }
+  go(name, o = {}) {
+    const a = this.act(name); if (!a) return false; const { loop = true, fade = 0.14, speed = 1, clamp = false, force = false } = o;
+    if (this.curName === name && !force) { a.timeScale = speed; return true; }
+    const prev = this.cur; if (prev && prev !== a) prev.fadeOut(fade);
+    a.reset(); a.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1); a.clampWhenFinished = clamp; a.timeScale = speed; a.fadeIn(fade).play();
+    this.cur = a; this.curName = name; return true;
   }
-  act(name, part) {
-    const k = name.toLowerCase() + '|' + part; if (k in this.acts) return this.acts[k];
-    const c = this.clip(name, part); if (!c) return (this.acts[k] = null);
-    const a = this.mixer.clipAction(c); a.setEffectiveTimeScale(0); a.setEffectiveWeight(0); a.play(); this.list.push(a); return (this.acts[k] = a);
+  oneShot(name, o, melee) {
+    if (this.dead || !this.has(name)) return 0; const prio = o.prio || (melee ? 3 : 5);
+    if (this.one && this.one.prio > prio && this.clock < this.one.until) return 0;
+    const d = o.dur || this.dur(name) / (o.speed || 1);
+    this.go(name, { loop: false, clamp: true, fade: o.fin ?? 0.08, speed: this.dur(name) / d, force: true });
+    this.one = { until: this.clock + d, prio, hold: !!o.hold, melee }; this.full = melee ? null : this.one; this.over = melee ? { until: this.clock + d, prio } : null; if (o.hold) this.dead = true; return d;
   }
-  playFull(name, o = {}) {
-    if (this.dead) return 0; const a = this.act(name, 'full'); if (!a) return 0;
-    const cd = a.getClip().duration, d = o.dur || cd / (o.speed || 1);
-    this.full = { a, t: 0, d, sp: cd / d, fin: o.fin ?? 0.07, fout: o.fout ?? 0.14, hold: !!o.hold }; if (o.hold) this.dead = true; return d;
-  }
+  playFull(name, o = {}) { return this.oneShot(name, o, false); }
   playOver(name, o = {}) {
-    if (this.dead) return 0;
-    if (!this.split) return this.playFull(name, o);
-    if (this.over && (o.prio || 1) < this.over.prio && this.over.t < this.over.d) return 0;
-    const a = this.act(name, 'up'); if (!a) return 0; const cd = a.getClip().duration, d = o.dur || cd / (o.speed || 1);
-    this.over = { name, t: 0, d, sp: cd / d, fin: o.fin ?? 0.05, fout: o.fout ?? 0.12, prio: o.prio || 1 }; return d;
+    if ((o.prio || 1) >= 3) return this.oneShot(name, o, true);
+    if (this.dead) return 0; const d = o.dur || 0.4; this.over = { until: this.clock + d, prio: o.prio || 1 }; return d;   // reload / flinch: no clip, the body keeps moving
   }
-  fire(aim, moving) {
-    this.shootName = aim ? 'Gun_Shoot' : moving ? 'Run_Shoot' : 'Idle_Gun_Shoot'; this.shootT = 0; this.shootHold = 0.16;
-  }
+  fire() { this.shootUntil = this.clock + 0.16; }
   update(dt, p) {
-    const w = this.w; this.clock += dt;
-    const m = clamp(p.speed / CFG.RUN, 0, 1.5);
-    // --- direction weights (4-way strafe blend) ---
-    if (m > 0.08) {
-      const ax = Math.abs(p.rgt), az = Math.abs(p.fwd), s = ax + az + 1e-5;
-      w.F = damp(w.F, p.fwd > 0 ? az / s : 0, 12, dt); w.B = damp(w.B, p.fwd < 0 ? az / s : 0, 12, dt);
-      w.R = damp(w.R, p.rgt > 0 ? ax / s : 0, 12, dt); w.L = damp(w.L, p.rgt < 0 ? ax / s : 0, 12, dt);
+    this.clock += dt;
+    if (this.over && this.clock >= this.over.until) this.over = null;
+    if (this.one && !this.one.hold && this.clock >= this.one.until) { this.one = null; this.full = null; this.curName = ''; }
+    if (!this.one) {
+      const sp = p.speed, st = p.stance, shooting = this.clock < this.shootUntil && st === 'rifle'; let name, ts = 1;
+      if (sp > 0.6) {
+        if (shooting) name = 'Run_Shoot';
+        else if (Math.abs(p.rgt) > Math.abs(p.fwd) * 1.15) name = p.rgt > 0 ? 'Run_Right' : 'Run_Left';
+        else if (p.fwd < -0.1) name = 'Run_Back';
+        else name = sp < CFG.RUN * 0.5 ? 'Walk' : 'Run';
+        ts = clamp(sp / (name === 'Walk' ? 5.5 : CFG.RUN * 0.9), 0.6, 1.9); if (p.air) ts = Math.min(ts, 0.8);
+      } else if (shooting) name = p.aim ? 'Gun_Shoot' : 'Idle_Gun_Shoot';
+      else name = st === 'sword' ? 'Idle_Sword' : st === 'relaxed' ? 'Idle_Neutral' : p.aim ? 'Idle_Gun_Pointing' : 'Idle_Gun';
+      if (!this.has(name)) name = this.has('Run') && sp > 0.6 ? 'Run' : 'Idle';
+      this.go(name, { fade: 0.12, speed: ts });
+      this.dist += sp * dt; if (this.dist > 2.6) { this.dist = 0; if (!p.air && sp > 3) this.onStep && this.onStep(clamp(sp / CFG.RUN, 0.3, 1)); }
     }
-    w.idle = damp(w.idle, 1 - smooth(0.03, 0.2, m), 13, dt); w.k = damp(w.k, smooth(0.34, 0.66, m), 10, dt);
-    const dsum = w.F + w.B + w.L + w.R || 1, mv = 1 - w.idle;
-    const loco = [['Walk', mv * (w.F / dsum) * (1 - w.k)], ['Run', mv * (w.F / dsum) * w.k], ['Run_Back', mv * w.B / dsum], ['Run_Left', mv * w.L / dsum], ['Run_Right', mv * w.R / dsum]];
-    // --- phase (foot cycle) ---
-    const hz = p.air ? 0.3 : clamp(p.speed / 5, 0, 2.5), p0 = this.phase; this.phase = (this.phase + hz * dt) % 1;
-    if (!p.air && m > 0.2 && ((p0 < 0.25 && this.phase >= 0.25) || (p0 < 0.75 && this.phase >= 0.75) || p0 > this.phase)) this.onStep && this.onStep(m);
-    // --- envelopes ---
-    let Fw = 0, Ow = 0;
-    if (this.full) {
-      const f = this.full; f.t += dt; let e = clamp(f.t / f.fin, 0, 1); if (!f.hold) e = Math.min(e, clamp((f.d - f.t) / f.fout, 0, 1));
-      Fw = e; if (!f.hold && f.t >= f.d) { this.full = null; Fw = 0; } else f.a.time = Math.min(f.t * f.sp, f.a.getClip().duration - 1e-3);
-    }
-    if (this.over) {
-      const o = this.over; o.t += dt; let e = Math.min(clamp(o.t / o.fin, 0, 1), clamp((o.d - o.t) / o.fout, 0, 1)); Ow = e; if (o.t >= o.d) { this.over = null; Ow = 0; }
-    }
-    this.shootHold -= dt; this.shootT += dt; w.S = damp(w.S, this.shootHold > 0 ? 1 : 0, 26, dt);
-    const K = 1 - Fw;
-    // --- reset all, then assign ---
-    for (const a of this.list) a.setEffectiveWeight(0);
-    const set = (name, part, wt, time) => { if (wt <= 0.0005) return null; const a = this.act(name, part); if (!a) return null; a.setEffectiveWeight(a.getEffectiveWeight() + wt); a.time = time; return a; };
-    const tm = (name) => (LOCO.has(name.toLowerCase()) ? this.phase : (this.clock / this.dur(name)) % 1) * this.dur(name);
-    const apply = (entries, part, target) => {
-      const used = []; let sum = 0;
-      for (const [n, wt] of entries) { if (wt <= 0.0005) continue; const a = this.act(n, part); if (a) { used.push([n, wt, a]); sum += wt; } }
-      if (!used.length || target <= 0.0005) return;
-      for (const [n, wt, a] of used) { const ww = wt / sum * target; a.setEffectiveWeight(a.getEffectiveWeight() + ww); a.time = tm(n) % Math.max(a.getClip().duration - 1e-3, 1e-3); }
-    };
-    // lower body
-    const lowIdle = p.stance === 'sword' ? 'Idle_Sword' : p.stance === 'relaxed' ? 'Idle' : 'Idle_Gun';
-    const lower = [[lowIdle, w.idle], ...loco];
-    apply(lower, this.split ? 'lo' : 'full', K);
-    // upper body
-    if (this.split) {
-      const sprinting = p.sprint && !p.aim ? 1 : 0; w.sp = damp(w.sp, sprinting * 0.75, 9, dt); w.aim = damp(w.aim, p.aim ? 1 : 0, 12, dt);
-      let ups = [];
-      if (p.stance === 'rifle') { ups = [['Idle_Gun', (1 - w.sp) * (1 - w.aim)], ['Idle_Gun_Pointing', (1 - w.sp) * w.aim]]; }
-      else if (p.stance === 'sword') { ups = [['Idle_Sword', 1 - w.sp]]; }
-      else { ups = [['Idle_Neutral', (1 - w.sp)]]; }
-      const locoUp = [['Idle_Neutral', w.idle * w.sp], ...loco.map(([n, x]) => [n, x * w.sp])];
-      // relaxed stance: arms swing naturally, so full loco on top (idle handled by Idle_Neutral above)
-      let base = [...ups.map(([n, x]) => [n, x * (1 - w.S)]), ...locoUp.map(([n, x]) => [n, x * (1 - w.S)])];
-      if (w.S > 0.002 && p.stance === 'rifle') base.push([this.shootName, w.S]);
-      else if (w.S > 0.002) base = base.map(([n, x]) => [n, x / (1 - w.S + 1e-5) * (1 - w.S) ]);
-      const tail = Ow;
-      base = base.map(([n, x]) => [n, x * (1 - tail)]);
-      if (this.over && tail > 0.002) base.push([this.over.name, tail]);
-      // shoot / over actions have their own clocks
-      const sumB = base.reduce((s, [n, x]) => { const a = this.act(n, 'up'); return s + (a && x > 0.0005 ? x : 0); }, 0);
-      if (sumB > 0.0005) for (const [n, x] of base) {
-        if (x <= 0.0005) continue; const a = this.act(n, 'up'); if (!a) continue; const ww = x / sumB * K; a.setEffectiveWeight(a.getEffectiveWeight() + ww);
-        const dd = Math.max(a.getClip().duration - 1e-3, 1e-3);
-        if (n === this.shootName) a.time = Math.min(this.shootT * 1.8, dd);
-        else if (this.over && n === this.over.name) a.time = Math.min(this.over.t * this.over.sp, dd);
-        else a.time = tm(n) % dd;
-      }
-    }
-    if (this.full && Fw > 0.001) { this.full.a.setEffectiveWeight(this.full.a.getEffectiveWeight() + Fw); }
-    this.mixer.update(0);
-    for (const r of this.rest) {
-      r.b.scale.copy(r.s);
-      if (!r.root) r.b.position.copy(r.p);
-      else { const v = r.b.position[this.vAxis], lo = r.p[this.vAxis] * 0.12, hi = r.p[this.vAxis] * 1.25; r.b.position.copy(r.p); r.b.position[this.vAxis] = clamp(v, Math.min(lo, hi), Math.max(lo, hi)); }
-    }
+    this.mixer.update(dt);
   }
   get busy() { return !!this.full; }
 }
@@ -883,7 +810,7 @@ class Fighter {
     if (this.rollT > 0) { this.rollT -= dt; this.vx = this.rollDX * CFG.ROLL_SPEED; this.vz = this.rollDZ * CFG.ROLL_SPEED; this.yaw = this.rollYaw; }
     else {
       let sp = this.inp.speed; if (this.lockT > 0) sp *= 0.2;
-      const k = this.grounded ? 15 : 3.2; this.vx = damp(this.vx, this.inp.mx * sp, k, dt); this.vz = damp(this.vz, this.inp.mz * sp, k, dt);
+      const k = this.grounded ? 24 : 4.5; this.vx = damp(this.vx, this.inp.mx * sp, k, dt); this.vz = damp(this.vz, this.inp.mz * sp, k, dt);
       if (this.jumpBuf > 0 && this.coyote > 0 && this.lockT <= 0) { this.vy = CFG.JUMP; this.grounded = false; this.coyote = 0; this.jumpBuf = 0; this.y += 0.02; }
     }
     moveBody(this, dt);
@@ -982,7 +909,7 @@ function damage(target, amt, attacker, o = {}) {
   if (!target.alive || target.iframe > 0 || G.over) return false;
   let a = amt; if (target.armor > 0) { const ab = Math.min(target.armor, a * 0.5); target.armor -= ab; a -= ab; }
   target.relax = false; target.hp -= a; target.lastHit = G.t; target.lastAttacker = attacker;
-  if (a > 7 && Math.random() < 0.6) target.flinch();
+  if (a > 7 && Math.random() < 0.6 && !target.isPlayer) target.flinch();
   if (target.isPlayer) { G.cam.shake = Math.min(1, G.cam.shake + 0.25); U.hurt.style.opacity = 0.9; setTimeout(() => { U.hurt.style.opacity = 0; }, 160); AU.hurt(); if (attacker) hurtArc(attacker); }
   if (attacker && attacker.isPlayer) { hitMarker(o.head); o.head ? AU.head() : AU.hit(); dmgNumber(target.x, target.y + 2, target.z, amt, o.head); }
   if (target.ai && Math.random() < 0.22) target.ai.dodge = 0.05;
@@ -1029,6 +956,7 @@ function playerFire() {
   P.mag--; P.fireCd = WEAPON.rate;
   P.lastFire = G.t; const zl = zoomLevel(), moving = clamp(P.speed / CFG.RUN, 0, 1.4), spread = (P.aiming ? 0.0035 / Math.max(1, zl) : 0.011) + moving * 0.012 + (P.grounded ? 0 : 0.02) + G.bloom;
   const d = camDir(G.cam.yaw + rnd(-1, 1) * spread, G.cam.pitch + G.cam.recoil + rnd(-1, 1) * spread), o = { x: camera.position.x + d.x * G.cam.dist, y: camera.position.y + d.y * G.cam.dist, z: camera.position.z + d.z * G.cam.dist };
+  if (G.lock && G.lock.alive && G.assist) { const T = G.lock, tx = T.x - o.x, ty = T.y + 1.35 - o.y, tz = T.z - o.z, tl = Math.hypot(tx, ty, tz) || 1, dot = (d.x * tx + d.y * ty + d.z * tz) / tl; if (dot > 0.985) { d.x = lerp(d.x, tx / tl, 0.6); d.y = lerp(d.y, ty / tl, 0.6); d.z = lerp(d.z, tz / tl, 0.6); const dl = Math.hypot(d.x, d.y, d.z); d.x /= dl; d.y /= dl; d.z /= dl; } }   // bullet magnetism toward the locked enemy
   shootBullet(P, o, d, false);
   P.rig.fire(P.aiming, moving > 0.25); P.kick = 0.07; AU.shot(1);
   G.bloom = Math.min(0.03, G.bloom + 0.0035); G.cam.recoil += P.aiming ? 0.006 : 0.011; G.cam.yaw += rnd(-0.0025, 0.0025); G.cam.shake = Math.min(1, G.cam.shake + 0.05);
@@ -1217,12 +1145,12 @@ document.addEventListener('visibilitychange', () => { if (document.hidden && G.s
   U.joy.addEventListener('pointerup', up); U.joy.addEventListener('pointercancel', up);
   let lid = null, lx = 0, ly = 0;   // look: drag anywhere on the right side (even between buttons), like Free Fire
   addEventListener('pointerdown', (e) => { if (!TOUCH || lid !== null || !playing() || e.target.closest('.cc-btn,.cc-pause,.cc-joy,.cc-screen')) return; if (e.clientX < innerWidth * 0.36) return; lid = e.pointerId; lx = e.clientX; ly = e.clientY; });
-  addEventListener('pointermove', (e) => { if (e.pointerId !== lid) return; if (playing()) lookBy(e.clientX - lx, e.clientY - ly, 0.0052, true); lx = e.clientX; ly = e.clientY; });
+  addEventListener('pointermove', (e) => { if (e.pointerId !== lid) return; if (playing()) lookBy(e.clientX - lx, e.clientY - ly, 0.0058, false); lx = e.clientX; ly = e.clientY; });
   const lup = (e) => { if (e.pointerId === lid) lid = null; }; addEventListener('pointerup', lup); addEventListener('pointercancel', lup);
   for (const [name, b] of Object.entries(U.btn)) {
     let bx = 0, by = 0, bid = null;
     b.addEventListener('pointerdown', (e) => { e.preventDefault(); b.setPointerCapture(e.pointerId); b.classList.add('on'); bid = e.pointerId; bx = e.clientX; by = e.clientY; if (name === 'fire') fireHeld = true; else act(name === 'aim' ? 'zoom' : name); });
-    b.addEventListener('pointermove', (e) => { if ((name === 'fire' || name === 'aim') && e.pointerId === bid) { if (playing()) lookBy(e.clientX - bx, e.clientY - by, 0.0052, true); bx = e.clientX; by = e.clientY; } });  // slide on Fire / Zoom to look
+    b.addEventListener('pointermove', (e) => { if ((name === 'fire' || name === 'aim') && e.pointerId === bid) { if (playing()) lookBy(e.clientX - bx, e.clientY - by, 0.0058, false); bx = e.clientX; by = e.clientY; } });  // slide on Fire / Zoom to look
     const end = () => { b.classList.remove('on'); bid = null; if (name === 'fire') fireHeld = false; };
     b.addEventListener('pointerup', end); b.addEventListener('pointercancel', end);
   }
@@ -1231,10 +1159,28 @@ document.addEventListener('visibilitychange', () => { if (document.hidden && G.s
 /* ========================================================================== */
 /*  PLAYER · CAMERA                                                           */
 /* ========================================================================== */
+function updateLock(dt) {
+  const P = G.player, c = G.cam; G.lock = G.lock && G.lock.alive ? G.lock : null;
+  if (!G.assist || !P.alive || P.stance !== 'rifle') { G.lock = null; return; }
+  const e = P.eye; let best = null, bs = 1e9;
+  for (const f of fighters) {
+    if (f === P || !f.alive || f === G.showcase) continue; const dx = f.x - P.x, dz = f.z - P.z, dist = Math.hypot(dx, dz); if (dist > CFG.LOCK_RANGE || dist < 0.5) continue;
+    const dy = angDelta(c.yaw, Math.atan2(dx, dz)), dp = Math.atan2(f.y + 1.35 - e.y, dist) - c.pitch, ang = Math.hypot(dy, dp * 0.8); if (ang > CFG.LOCK_CONE) continue;
+    const L = Math.hypot(dx, f.y + 1.35 - e.y, dz); if (rayWorld(e.x, e.y, e.z, dx / L, (f.y + 1.35 - e.y) / L, dz / L, L) < L - 0.6) continue;
+    const sc = ang + dist * 0.004 - (f === G.lock ? 0.12 : 0); if (sc < bs) { bs = sc; best = f; }
+  }
+  G.lock = best;
+  if (best && (fireHeld || P.aiming)) {                          // soft lock: the view glides onto the enemy
+    const dx = best.x - P.x, dz = best.z - P.z, dist = Math.hypot(dx, dz), near = 1 - clamp(dist / CFG.LOCK_RANGE, 0, 1);
+    const user = clamp(1 - (Math.abs(lookAcc.x) + Math.abs(lookAcc.y)) * 25, 0.3, 1), k = 1 - Math.exp(-(5 + near * 14) * user * dt);
+    c.yaw += angDelta(c.yaw, Math.atan2(dx, dz)) * k; c.pitch += (Math.atan2(best.y + 1.3 - e.y, dist) - (c.pitch + c.recoil)) * k;
+  }
+}
 function playerControl(dt) {
   const P = G.player, c = G.cam; c.recoil = damp(c.recoil, 0, 9, dt);
   { const k = 1 - Math.exp(-24 * dt); c.yaw -= lookAcc.x * k; c.pitch = clamp(c.pitch - lookAcc.y * k, -0.75, 1.1); lookAcc.x *= 1 - k; lookAcc.y *= 1 - k; }  // touch look: eased so swipes glide G.bloom = Math.max(0, G.bloom - dt * 0.045);
-  if (!P.alive) return;
+  if (!P.alive) { G.lock = null; U.lock.style.display = 'none'; return; }
+  updateLock(dt);
   let ix = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0), iz = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0), mag = 0, analog = false;
   joy.sx = damp(joy.sx || 0, joy.x, 22, dt); joy.sy = damp(joy.sy || 0, joy.y, 22, dt);
   const jl = Math.hypot(joy.sx, joy.sy);
@@ -1250,7 +1196,7 @@ function playerControl(dt) {
   P.inp.mx = mx; P.inp.mz = mz; P.inp.speed = mag > 0 ? base : 0; P.inp.sprint = wantSprint;
   // Free-Fire style: run facing where you go; face the camera while aiming / shooting
   const firing = fireHeld || G.t - (P.lastFire || -9) < 0.7;
-  if (P.rollT <= 0) { const ty = P.aiming || firing ? c.yaw : mag > 0.05 ? Math.atan2(mx, mz) : P.yaw; P.yaw = dampAng(P.yaw, ty, P.aiming || firing ? 22 : 11, dt); }
+  if (P.rollT <= 0) { const ty = P.aiming || firing ? c.yaw : mag > 0.05 ? Math.atan2(mx, mz) : P.yaw; P.yaw = dampAng(P.yaw, ty, P.aiming || firing ? 26 : 16, dt); }
   P.aimPitch = clamp(c.pitch + c.recoil, -0.5, 0.7);
   if (fireHeld) { idleT = 0; if (P.stance === 'rifle') playerFire(); else meleeKey(); }
   idleT = mag > 0 || P.aiming || fireHeld ? 0 : idleT + dt; P.relax = idleT > 5;
@@ -1297,6 +1243,7 @@ function drawHUD(dt) {
   const t = Math.max(0, Math.ceil(Z.timer)), zt = Z.state === 'final' ? 'FINAL' : `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
   setT(U.zone, zt); setT(U.zonel, Z.state === 'shrink' ? 'closing' : Z.state === 'final' ? 'zone' : 'next'); U.zonep.classList.toggle('warn', Z.state === 'shrink' || Math.hypot(P.x - Z.cx, P.z - Z.cz) > Z.r);
   const sp = (P.aiming ? 0 : 3) + (P.speed / CFG.RUN) * 8 + G.bloom * 600 + (P.grounded ? 0 : 8); U.xh.style.setProperty('--s', sp.toFixed(1) + 'px'); U.xh.classList.toggle('ads', P.aiming);
+  if (G.lock && G.lock.alive) { const s = toScreen(G.lock.x, G.lock.y + 1.3, G.lock.z); U.lock.style.display = s.v ? 'block' : 'none'; U.lock.style.left = s.x + 'px'; U.lock.style.top = s.y + 'px'; } else U.lock.style.display = 'none';
   // minimap (every other frame)
   if ((mapTick++ & 1) === 0) {
     const g = mctx, W = U.map.width, S = 1.75;
@@ -1335,7 +1282,7 @@ function startMatch() {
   P.yaw = Math.atan2(-P.x, -P.z); G.cam.yaw = P.yaw; G.cam.pitch = 0.12; G.cam.recoil = 0; G.zoom = 0; G.cam.len = undefined;
   G.alive = fighters.length; zoneReset();
   for (const l of WORLD.loot) addPickup(l.x, l.z, l.k);
-  G.diff = Number(U.diff.querySelector('.on')?.dataset.d || 1); store.set('diff', G.diff);
+  G.diff = Number(U.diff.querySelector('.on')?.dataset.d || 1); G.assist = U.assist.querySelector('.on')?.dataset.a !== '0'; store.set('assist', G.assist ? 1 : 0); G.lock = null; store.set('diff', G.diff);
   for (const s of Object.values(U.screens)) s.classList.remove('on'); U.hud.classList.add('on'); if (TOUCH) U.touch.classList.add('on');
   G.state = 'playing'; setTimeout(() => P.wave(), 150); banner(`DROP IN · ${G.alive} FIGHTERS`, '#fde047');
   try { if (TOUCH) { document.documentElement.requestFullscreen?.().catch(() => {}); screen.orientation?.lock?.('landscape').catch(() => {}); } else lockPointer(); } catch {}
@@ -1363,6 +1310,8 @@ U.exit1.addEventListener('click', toMenu); U.exit2.addEventListener('click', toM
 U.again.addEventListener('click', () => { U.screens.end.classList.remove('on'); startMatch(); });
 U.play.addEventListener('click', startMatch);
 U.diff.addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; U.diff.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); });
+U.assist.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) U.assist.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); });
+{ const a = store.get('assist', 1); U.assist.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x.dataset.a === String(a))); G.assist = a !== 0; }
 U.sens.value = G.sens; U.sens.addEventListener('input', () => { G.sens = Number(U.sens.value); store.set('sens', G.sens); });
 { const d = String(store.get('diff', 1)); U.diff.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x.dataset.d === d || (d === '1' && x.dataset.d === '1'))); }
 
@@ -1397,7 +1346,14 @@ function step(dt) {
   updateCamera(dt); fxUpdate(dt); drawHUD(dt);
   for (const c of clouds) { c.position.applyAxisAngle(new THREE.Vector3(0, 1, 0), dt * 0.004 * c.userData.sp); c.lookAt(0, 0, 0); }
 }
-let last = performance.now();
+let last = performance.now(), fcount = 0, ema = 1 / 60, qLevel = 0, qTimer = 0;
+renderer.shadowMap.autoUpdate = false;
+function lowerQuality() {
+  qLevel++;
+  if (qLevel === 1) { renderer.setPixelRatio(1); resize(); }
+  else if (qLevel === 2) { renderer.shadowMap.enabled = false; sun.castShadow = false; scene.traverse((o) => { if (o.material) { (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => { m.needsUpdate = true; }); } }); }
+  else if (qLevel === 3) { renderer.setPixelRatio(0.75); resize(); }
+}
 function frame(now) {
   requestAnimationFrame(frame); const dt = Math.min(0.05, (now - last) / 1000); last = now;
   try {
@@ -1405,6 +1361,8 @@ function frame(now) {
     else if (G.state === 'end') { for (const f of fighters) f.update(dt); G.t += dt; for (let i = timers.length - 1; i >= 0; i--) { timers[i].t -= dt; if (timers[i].t <= 0) { const t = timers.splice(i, 1)[0]; t.fn(); } } updateCamera(dt); fxUpdate(dt); }
     else if (G.state === 'menu' || G.state === 'loading') { if (G.showcase) G.showcase.update(dt); menuCam(dt); }
   } catch (e) { console.error(e); }
+  ema = lerp(ema, dt, 0.05); qTimer += dt; if (G.state === 'playing' && qTimer > 2.5) { qTimer = 0; if (ema > 1 / 40 && qLevel < 3) lowerQuality(); }
+  renderer.shadowMap.needsUpdate = (fcount++ & 1) === 0;
   renderer.render(scene, camera);
 }
 function resize() { const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
@@ -1413,7 +1371,7 @@ addEventListener('resize', resize); resize();
 (async function boot() {
   buildWorld(); requestAnimationFrame(frame);
   if (TOUCH && innerHeight > innerWidth) U.loadt.insertAdjacentHTML('afterend', '<p style="color:#fde047;font-size:14px">📱 Turn your phone sideways for the best view.</p>');
-  U.sensrow.style.display = 'flex'; U.menurow.style.display = 'flex';
+  U.sensrow.style.display = 'flex'; U.menurow.style.display = 'flex'; U.menurow2.style.display = 'flex';
   await loadAssets(); G.state = 'menu'; showcaseInit(); U.play.style.display = ''; U.load.parentElement.style.display = 'none'; U.loadt.style.display = TOUCH || ASSETS.soldier ? 'none' : '';
   if (qs.get('auto')) startMatch();
 })();

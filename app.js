@@ -1,4 +1,4 @@
-// BUILD 2026-11-15 08:05 — AK-47 two-hand hold, zoom, Free Fire look
+// BUILD 2026-11-15 08:55 — whole-clip animation, raw look, performance
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
