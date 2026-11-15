@@ -1,4 +1,4 @@
-// BUILD 2026-11-15 15:10 — full-screen media viewer with Like / Comment / Share
+// BUILD 2026-11-15 16:25 — full-screen viewer: big video filling the screen
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
@@ -561,7 +561,7 @@ const _injectVVStyles = () => {
   const s = document.createElement("style");
   s.textContent = `
     .vv-backdrop {
-      position: fixed; inset: 0; z-index: 2000;
+      position: fixed; inset: 0; z-index: 10060;
       background: rgba(0,0,0,0.93);
       display: flex; align-items: center; justify-content: center;
       overflow-y: auto;
@@ -663,6 +663,17 @@ const _injectVVStyles = () => {
       .vv-prev  { left: 2px; }
       .vv-next  { right: 2px; }
     }
+    /* Full-screen: the video fills the whole screen (contain = never cropped) */
+    .vv-backdrop { overflow: hidden; align-items: stretch; background: #000; }
+    .vv-modal { max-width: none; width: 100%; height: 100dvh; padding: 0 !important; justify-content: center; }
+    .vv-header { position: absolute; top: 0; left: 0; right: 0; z-index: 6; box-sizing: border-box;
+      padding: calc(10px + env(safe-area-inset-top, 0px)) 14px 22px; background: linear-gradient(rgba(0,0,0,.65), transparent); }
+    .vv-media { flex: 1 1 auto; min-height: 0; width: 100%; height: 100%; box-sizing: border-box; }
+    .vv-modal.has-actions .vv-media { padding-bottom: 72px; }
+    .vv-media .vid-player { width: 100%; height: 100%; max-width: none !important; border-radius: 0 !important; background: #000; }
+    .vv-media .vid-player video { width: 100%; height: 100%; max-height: none; object-fit: contain; }
+    .vv-media img { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; border-radius: 0; }
+    .vv-dots { position: absolute; left: 0; right: 0; bottom: 78px; justify-content: center; padding: 0; z-index: 6; }
   `;
   document.head.appendChild(s);
 };
@@ -675,7 +686,8 @@ const _buildViewerActions = (ctx, close) => {
   const likeBtn = el("button", { class: "vv-act", title: "Like" }, likeI, likeN);
   const syncLike = () => {
     const on = !!ctx.isLiked(), n = ctx.likeCount();
-    likeI.className = on ? "ri-thumb-up-fill" : "ri-thumb-up-line";
+    const ic = ctx.likeIcons || ["ri-thumb-up-fill", "ri-thumb-up-line"];
+    likeI.className = on ? ic[0] : ic[1];
     likeBtn.classList.toggle("active", on);
     likeN.textContent = n ? String(n) : "Like";
   };
@@ -685,6 +697,11 @@ const _buildViewerActions = (ctx, close) => {
     el("i", { class: "ri-chat-1-line" }), el("span", {}, cn ? String(cn) : "Comment"));
   cmtBtn.onclick = (e) => { e.stopPropagation(); close(); ctx.comment(); };
   const bar = el("div", { class: "vv-actions" }, likeBtn, cmtBtn);
+  if (typeof ctx.react === "function") {
+    const rBtn = el("button", { class: "vv-act", title: "React with your voice" }, el("i", { class: "ri-mic-line" }), el("span", {}, "React"));
+    rBtn.onclick = (e) => { e.stopPropagation(); close(); ctx.react(); };
+    bar.appendChild(rBtn);
+  }
   if (typeof ctx.share === "function") {
     const shBtn = el("button", { class: "vv-act", title: "Share" }, el("i", { class: "ri-share-forward-line" }), el("span", {}, "Share"));
     shBtn.onclick = (e) => { e.stopPropagation(); ctx.share(); };
@@ -781,7 +798,7 @@ const openImageZoom = (src, ctx = null) => {
 
   const backdrop = document.createElement("div");
   Object.assign(backdrop.style, {
-    position: "fixed", inset: "0", zIndex: "3000",
+    position: "fixed", inset: "0", zIndex: "10060",
     background: "rgba(0,0,0,0.96)", display: "flex",
     alignItems: "center", justifyContent: "center",
     animation: "vvFadeIn .18s ease",
@@ -7204,7 +7221,7 @@ function _gbInit() {
   // VIDEO NOTE — rounded frame, muted autoplay in view, tap to pause, sound toggle, seek bar
   // -------------------------------------------------------------------------
   let _soundVid = null;
-  const buildVideoNote = (v) => {
+  const buildVideoNote = (v, ctx = null) => {
     const ar = arOf(v.fit || "4:5", v.width, v.height);
     const vid = el("video", { playsinline: "", loop: "", preload: "metadata", poster: vidPoster(v) });
     vid.muted = true; vid.src = vidSrc(v);
@@ -7224,11 +7241,18 @@ function _gbInit() {
       const s = v.start || 0, e = v.end || vid.duration || 1, f = Math.min(1, Math.max(0, (vid.currentTime - s) / (e - s || 1)));
       prog.firstChild.style.width = f * 100 + "%";
     });
-    vid.addEventListener("play", () => box.classList.remove("paused"));
-    vid.addEventListener("pause", () => box.classList.add("paused"));
+    badge.style.pointerEvents = "none";
+    vid.addEventListener("play", () => { box.classList.remove("paused"); badge.style.pointerEvents = "none"; });
+    vid.addEventListener("pause", () => { box.classList.add("paused"); badge.style.pointerEvents = "auto"; });
     box.addEventListener("click", (e) => {
       e.stopPropagation();
       if (e.target.closest(".gb-vid-snd")) return;
+      // tap the video (not the play badge / sound / seek bar) -> full-screen viewer with Like / Comment / React
+      if (ctx && !e.target.closest(".gb-vid-prog,.gb-vid-play")) {
+        try { vid.pause(); } catch {} vid._manual = false;
+        const _tx = v.url.includes("/video/upload/") ? [`so_${(v.start || 0).toFixed(1)}`, v.end ? `eo_${v.end.toFixed(1)}` : null, "vc_h264", "q_auto"].filter(Boolean).join(",") : "";
+        openVideoViewer([{ type: "video", url: _tx ? v.url.replace("/video/upload/", `/video/upload/${_tx}/`).replace(/\.\w+$/, ".mp4") : v.url }], 0, ctx); return;
+      }
       if (e.target.closest(".gb-vid-prog")) {
         const r = prog.getBoundingClientRect(), f = (e.clientX - r.left) / r.width, s = v.start || 0, en = v.end || vid.duration || 1;
         vid.currentTime = s + f * (en - s); return;
@@ -7419,8 +7443,8 @@ function _gbInit() {
     return el("div", { class: "gb-text-wrap" }, t, el("button", { class: "gb-more", type: "button", onclick: () => { location.hash = `#post/${p.id}`; } }, "Read more"));
   };
 
-  const buildCover = (p, detail) => {
-    const open = (e) => { if (e.target.closest("a,button")) return; e.stopPropagation(); openLightbox(coverUrl(p.cover, 1800, { crop: false })); };
+  const buildCover = (p, detail, ctx = null) => {
+    const open = (e) => { if (e.target.closest("a,button")) return; e.stopPropagation(); if (ctx) openImageZoom(coverUrl(p.cover, 1800, { crop: false }), ctx); else openLightbox(coverUrl(p.cover, 1800, { crop: false })); };
     if (detail) {
       return el("div", { class: "gb-cover-plain" },
         el("img", { src: coverUrl(p.cover, 1200), alt: "", loading: "lazy", onclick: open }),
@@ -7451,6 +7475,7 @@ function _gbInit() {
   const renderVoicePost = (p, author, { detail = false } = {}) => {
     const mine = p.authorUid === state.uid;
     let liked = (p.orbits || []).includes(state.uid);
+    const _vctx = {};   // used by the full-screen media viewer (Like / Comment / React)
     const post = el("article", { class: `gb-post${detail ? " detail" : ""}`, data: { postId: p.id } });
     const hasThread = !detail && (p.commentCount || 0) > 0;
 
@@ -7506,13 +7531,22 @@ function _gbInit() {
       el("i", { class: "ri-chat-1-line" }), el("span", {}, p.commentCount ? String(p.commentCount) : ""));
     const vr = buildReactions(p, author, detail);
     const actions = el("div", { class: "gb-actions" }, likeBtn, replyBtn, vr.btn);
+    Object.assign(_vctx, {
+      likeIcons: ["ri-heart-3-fill", "ri-heart-3-line"],
+      isLiked: () => liked,
+      likeCount: () => p.orbitCount || 0,
+      like: () => likeBtn.click(),
+      commentCount: () => p.commentCount || 0,
+      comment: () => { if (!detail) location.hash = `#post/${p.id}`; },
+      react: () => vr.btn.click(),
+    });
 
     const main = el("div", { class: "gb-main" },
       el("div", { class: "gb-headrow" }, nameLine(author, p.createdAt, detail), tools),
       p.prompt?.q ? el("a", { class: "gb-ptag", href: `#prompt/${p.prompt.day}`, onclick: (e) => e.stopPropagation() }, el("i", { class: "ri-chat-quote-line" }), ` ${p.prompt.q}`) : null,
-      p.cover?.url && p.text ? buildCover(p, detail) : (p.text ? longText(p, detail) : null),
+      p.cover?.url && p.text ? buildCover(p, detail, _vctx) : (p.text ? longText(p, detail) : null),
       p.audio?.url ? buildVoicePlayer(p.audio) : null,
-      p.video?.url ? buildVideoNote(p.video) : null,
+      p.video?.url ? buildVideoNote(p.video, _vctx) : null,
       actions, vr.rec, vr.row,
     );
     post.append(avcol, main);
