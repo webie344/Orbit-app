@@ -1,4 +1,4 @@
-// BUILD 2026-11-15 16:25 — full-screen viewer: big video filling the screen
+// BUILD 2026-11-15 20:40 — Boxing Arena game
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
@@ -7918,6 +7918,11 @@ const GAMES = [
     mount: (root, ctx) => mountCompound(root, ctx),
   },
   {
+    id: "boxing", tips: ["Jab to wear them down, heavy punch to stagger", "Hold Block to cut damage, but it drains stamina", "Dodge-roll to avoid a big punch", "Grab power-ups: Rage, Shield, Speed, Heal, Iron Fist", "Best of 3 rounds against a real player or a bot"], name: "Boxing Arena", tagline: "Best of 3 rounds. Real players or bots.", gline: "3D boxing ring with power-ups. We find you a real challenger, or a bot.", fmt: (s) => `${Number(s).toLocaleString()} pts`,
+    art: () => _gmSvg('<rect width="120" height="90" fill="#1b1e3a"/><polygon points="14,70 106,70 96,38 24,38" fill="#16327a" stroke="#fff" stroke-width="2"/><path d="M24 38 L96 38 M20 50 L100 50 M17 60 L103 60" stroke="#e11d48" stroke-width="2"/><circle cx="38" cy="46" r="13" fill="#e11d48" stroke="#fff" stroke-width="2.5"/><circle cx="82" cy="46" r="13" fill="#2563eb" stroke="#fff" stroke-width="2.5"/><rect x="30" y="56" width="16" height="8" rx="3" fill="#fde047"/><rect x="74" y="56" width="16" height="8" rx="3" fill="#fde047"/>'),
+    mount: (root, ctx) => mountBoxing(root, ctx),
+  },
+  {
     id: "g2048", tips: ["Swipe to slide every tile", "Equal numbers merge into one", "Reach 2048 (and beyond!)"], name: "2048", tagline: "Slide and merge tiles. Chase the big one.", fmt: (s) => Number(s).toLocaleString(),
     art: () => _gmSvg([[14, 12, "#eee4da", "2"], [48, 12, "#f2b179", "8"], [82, 12, "#f67c5f", "16"], [14, 46, "#edc850", "32"], [48, 46, "#edc22e", "64"], [82, 46, "#3c3a32", "2048"]]
       .map(([x, y, c, t]) => `<rect x="${x}" y="${y}" width="26" height="26" rx="6" fill="${c}"/><text x="${x + 13}" y="${y + 18}" text-anchor="middle" font-size="${t.length > 3 ? 9 : 12}" font-weight="800" fill="${c === "#eee4da" ? "#776e65" : "#fff"}">${t}</text>`).join("")),
@@ -8497,6 +8502,22 @@ function mountCompound(root, { exit }) {
     const d = e.data || {};
     if (d.type === "gb-game-exit") exit();
     else if (d.type === "gb-game-score" && d.score > 0) { const r = await gmSubmit("compound", d.score); if (r.isBest) toast("New best in Compound Clash! 🏆"); }
+  };
+  window.addEventListener("message", onMsg);
+  return () => { window.removeEventListener("message", onMsg); F.dispose(); };
+}
+
+function mountBoxing(root, { exit }) {
+  const F = gmFrame(root, gmDef("boxing"), exit);
+  F.stage.classList.add("gm-3d");
+  const name = encodeURIComponent((state.me?.name || state.me?.username || "You").split(" ")[0]);
+  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?mode=box&name=${name}`, allow: "fullscreen; autoplay", title: "Boxing Arena" });
+  F.stage.appendChild(frame);
+  const onMsg = async (e) => {
+    if (e.source !== frame.contentWindow) return;
+    const d = e.data || {};
+    if (d.type === "gb-game-exit") exit();
+    else if (d.type === "gb-game-score" && d.score > 0) { const r = await gmSubmit("boxing", d.score); if (r.isBest) toast("New best in Boxing Arena! 🏆"); }
   };
   window.addEventListener("message", onMsg);
   return () => { window.removeEventListener("message", onMsg); F.dispose(); };
