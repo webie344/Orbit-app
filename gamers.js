@@ -1671,7 +1671,7 @@ function fpFrame(P, dt, eye, yaw, pit) {
   const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pit), sp = Math.sin(pit);
   _ffw.set(sy * cp, sp, cy * cp); _frt.set(-cy, 0, sy); _fup.crossVectors(_frt, _ffw); if (_fup.y < 0) _fup.negate();
   VM.bob = (VM.bob || 0) + dt * (4 + P.speed * 0.9); const mv = clamp(P.speed / CFG.RUN, 0, 1.2), bx = Math.sin(VM.bob) * 0.004 * mv, by = Math.abs(Math.cos(VM.bob)) * 0.005 * mv + Math.sin(G.t * 1.8) * 0.002, a = c.aim, r = P.m.rifle;
-  r.position.copy(eye).addScaledVector(_ffw, 0.3 - (P.kick || 0) * 1.4).addScaledVector(_frt, lerp(0.19, 0.0, a) + bx).addScaledVector(_fup, lerp(-0.2, -0.125, a) + by); r.updateMatrixWorld(true);
+  r.position.copy(eye).addScaledVector(_ffw, lerp(0.02, 0.22, a) - (P.kick || 0) * 1.4).addScaledVector(_frt, lerp(0.25, 0.0, a) + bx).addScaledVector(_fup, lerp(-0.3, -0.125, a) + by); r.updateMatrixWorld(true);
 }
 function fpToggle() {
   G.fpv = !G.fpv; store.set(BOX ? 'fpv_box' : 'fpv_cc', G.fpv); VM.init = false; feed(G.fpv ? '👁 First-person view' : '🎥 Third-person view', true);
@@ -1967,7 +1967,7 @@ function resize() { const w = innerWidth, h = innerHeight; renderer.setSize(w, h
 addEventListener('resize', resize); resize();
 
 (async function boot() {
-  { const t = document.createElement('div'); t.textContent = 'build v34 · ' + (BOX ? 'boxing' : 'compound'); t.style.cssText = 'position:fixed;left:8px;bottom:4px;font:10px sans-serif;color:#fff;opacity:.35;z-index:5;pointer-events:none'; document.body.appendChild(t); }
+  { const t = document.createElement('div'); t.textContent = 'build v36 · ' + (BOX ? 'boxing' : 'compound'); t.style.cssText = 'position:fixed;left:8px;bottom:4px;font:10px sans-serif;color:#fff;opacity:.35;z-index:5;pointer-events:none'; document.body.appendChild(t); }
   if (BOX) buildArena(); else buildWorld(); requestAnimationFrame(frame);
   if (TOUCH && innerHeight > innerWidth) U.loadt.insertAdjacentHTML('afterend', '<p style="color:#fde047;font-size:14px">📱 Turn your phone sideways for the best view.</p>');
   U.sensrow.style.display = 'flex'; U.menurow.style.display = 'flex'; U.menurow2.style.display = 'flex'; U.menurow3.style.display = 'flex'; if (!NET.on) { U.online.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.o === '0')); }
