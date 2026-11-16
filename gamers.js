@@ -161,12 +161,12 @@ function buildUI() {
     <button class="cc-btn" data-b="fire" style="right:18px;bottom:96px;width:92px;height:92px;font-size:13px"><span>🔥</span>Fire</button>
     <button class="cc-btn" data-b="aim" style="right:122px;bottom:58px;width:62px;height:62px"><span>◎</span><i data-k="zoomt" style="font-style:normal">Zoom</i></button>
     <button class="cc-btn" data-b="jump" style="right:22px;bottom:200px;width:64px;height:64px"><span>⤒</span>Jump</button>
-    <button class="cc-btn" data-b="roll" style="right:96px;bottom:176px;width:56px;height:56px"><span>↻</span>Roll</button>
-    <button class="cc-btn" data-b="reload" style="right:176px;bottom:128px;width:52px;height:52px"><span>⟲</span>Load</button>
+    <button class="cc-btn" data-b="roll" style="left:14px;bottom:calc(58% + 8px);width:60px;height:60px"><span>↻</span>Roll</button>
+    <button class="cc-btn" data-b="reload" style="left:146px;bottom:calc(58% + 10px);width:54px;height:54px"><span>⟲</span>Load</button>
     <button class="cc-btn" data-b="melee" style="right:164px;bottom:196px;width:52px;height:52px"><span>🥊</span>Hit</button>
     <button class="cc-btn" data-b="kick" style="right:228px;bottom:60px;width:48px;height:48px"><span>🦶</span>Kick</button>
-    <button class="cc-btn" data-b="view" style="right:236px;bottom:112px;width:46px;height:46px"><span>👁</span>View</button>
-    <button class="cc-btn" data-b="swap" style="right:230px;bottom:168px;width:46px;height:46px"><span>⇄</span>Swap</button>
+    <button class="cc-btn" data-b="view" style="left:82px;bottom:calc(58% + 12px);width:50px;height:50px"><span>👁</span>View</button>
+    <button class="cc-btn" data-b="swap" style="left:210px;bottom:calc(58% + 12px);width:50px;height:50px"><span>⇄</span>Swap</button>
     <button class="cc-btn" data-b="use" style="right:240px;bottom:228px;width:58px;height:58px;display:none"><span>✋</span>Use</button>
   </div>
   <div class="cc-screen on" data-s="menu">
@@ -287,6 +287,7 @@ const AU = {
     const l = c.createOscillator(), lg = c.createGain(); l.frequency.value = 0.23; lg.gain.value = 0.03; l.connect(lg); lg.connect(g.gain); l.start(); s.connect(f); f.connect(g); g.connect(this.out); s.start(); this._crowd = { s, g };
   },
 };
+for (const k of Object.keys(AU)) if (typeof AU[k] === 'function' && k !== 'init') { const fn = AU[k]; AU[k] = function (...a) { try { return fn.apply(this, a); } catch (e) { return undefined; } }; }
 
 /* ========================================================================== */
 /*  RENDERER · SKY · LIGHT                                                    */
@@ -1662,7 +1663,7 @@ function fpLimb(i, a, b, hr, glove, sleeve) {   // forearm from a (off-screen) t
 function fpFrame(P, dt, eye, yaw, pit) {
   const c = G.cam, cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pit), sp = Math.sin(pit);
   _ffw.set(sy * cp, sp, cy * cp); _frt.set(-cy, 0, sy); _fup.crossVectors(_frt, _ffw).multiplyScalar(-1); if (_fup.y < 0) _fup.negate();
-  VM.bob = (VM.bob || 0) + dt * (4 + P.speed * 0.9); const mv = clamp(P.speed / CFG.RUN, 0, 1.2), bx = Math.sin(VM.bob) * 0.008 * mv, by = Math.abs(Math.cos(VM.bob)) * 0.012 * mv + Math.sin(G.t * 1.8) * 0.003;
+  VM.bob = (VM.bob || 0) + dt * (4 + P.speed * 0.9); const mv = clamp(P.speed / CFG.RUN, 0, 1.2), bx = Math.sin(VM.bob) * 0.004 * mv, by = Math.abs(Math.cos(VM.bob)) * 0.005 * mv + Math.sin(G.t * 1.8) * 0.003;
   for (const h of VM.hands) h.fore.visible = h.hand.visible = false;
   if (!P.alive) { VM.grp.visible = false; return; }
   VM.grp.visible = true;
@@ -1811,15 +1812,16 @@ function updateCamera(dt) {
   const dead = !P.alive || G.over; if (dead) { c.yaw += dt * 0.28; c.pitch = lerp(c.pitch, -0.5, dt * 2); }   // look DOWN on the body from above
   c.aim = damp(c.aim, P.aiming ? 1 : 0, 12, dt);
   const zl = zoomLevel(), shoulder = BOX ? 0.55 : lerp(0.6, 0.78, c.aim), dist = dead ? 6 : BOX ? 5.2 : lerp(3.7, zl > 1 ? 1.7 : 2.2, c.aim), pit = c.pitch + c.recoil;
-  G.fp = !!(G.fpv && P.alive && !G.over && P.stance !== 'sword'); if (P.group) fpSetLayers(P, G.fp);
+  G.fp = !!(G.fpv && P.alive && !G.over && P.stance !== 'sword'); if (P.group) { try { fpSetLayers(P, G.fp); } catch (e) { console.error('fp', e); G.fpv = false; G.fp = false; } }
   const d = camDir(c.yaw, pit), rx = -Math.cos(c.yaw), rz = Math.sin(c.yaw);
   const px = P.x, py = P.dispY + 1.5 + (P.rollT > 0 ? -0.5 : 0), pz = P.z;
   const ox = px + rx * shoulder, oy = py, oz = pz + rz * shoulder;
   if (G.fp) {
-    const ex = P.x + d.x * 0.1, ey = P.dispY + 1.62 + (P.rollT > 0 ? -0.55 : 0), ez = P.z + d.z * 0.1; c.shake = damp(c.shake, 0, 9, dt); const shk = c.shake * 0.02;
+    let ex = P.x + d.x * 0.1, ey = P.dispY + 1.62 + (P.rollT > 0 ? -0.55 : 0), ez = P.z + d.z * 0.1;
+    if (c.fx === undefined || Math.hypot(c.fx - ex, c.fz - ez) > 1.5) { c.fx = ex; c.fy = ey; c.fz = ez; } else { c.fx = damp(c.fx, ex, 38, dt); c.fy = damp(c.fy, ey, 22, dt); c.fz = damp(c.fz, ez, 38, dt); } ex = c.fx; ey = c.fy; ez = c.fz; c.shake = damp(c.shake, 0, 9, dt); const shk = c.shake * 0.02;
     camera.position.set(ex + rnd(-shk, shk), ey + rnd(-shk, shk), ez + rnd(-shk, shk)); camera.rotation.order = 'YXZ'; camera.rotation.set(pit, c.yaw + Math.PI, 0); c.dist = 0.4; c.len = undefined;
-    fpFrame(P, dt, camera.position, c.yaw, pit);
-  } else { VM.grp.visible = false;
+    try { fpFrame(P, dt, camera.position, c.yaw, pit); } catch (e) { console.error('fp', e); G.fpv = false; }
+  } else { VM.grp.visible = false; c.fx = undefined;
   let dx = -d.x * dist, dy = -d.y * dist + 0.25, dz = -d.z * dist; const L = Math.hypot(dx, dy, dz); dx /= L; dy /= L; dz /= L;
   const t = rayWorld(ox, oy, oz, dx, dy, dz, L + 0.4), cl0 = clamp(t - 0.4, 1.25, L);   // never closer than ~1.2 m: a lens right behind the soldier makes legs look huge
   c.len = c.len === undefined || cl0 < c.len ? cl0 : damp(c.len, cl0, 6, dt); const cl = c.len;

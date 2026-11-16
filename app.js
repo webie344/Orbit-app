@@ -1,4 +1,4 @@
-// BUILD 2026-11-16 first-person view + realistic audio
+// BUILD 2026-11-16 touch layout + FP fixes
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
