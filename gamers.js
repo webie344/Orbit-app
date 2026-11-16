@@ -738,6 +738,7 @@ function makeModel(tint, onStep) {
     const box = new THREE.Box3().setFromObject(model), hgt = Math.max(0.1, box.max.y - box.min.y), s = CFG.BODY_H / hgt;
     model.position.y = -box.min.y; pivot.scale.setScalar(s); group.updateMatrixWorld(true);
     out.rig = new Rig(model, ASSETS.soldier.animations, onStep);
+    out.head = findBone(model, /^head$/i) || findBone(model, /head/i);
     const bone = findBone(model, /^wrist.?r$/i) || findBone(model, /wrist.?r|hand.?r|right.?hand|palm.?r/i);
     var swAxis = null;
     if (bone) {
@@ -1660,34 +1661,17 @@ function fpLimb(i, a, b, hr, glove, sleeve) {   // forearm from a (off-screen) t
   h.fore.position.copy(a).addScaledVector(_fb, len * 0.5); h.fore.scale.set(1, len, 1); h.fore.quaternion.setFromUnitVectors(_fy, _fb); h.fore.material = sleeve;
   h.hand.position.copy(b); h.hand.scale.set(hr, hr, hr * 1.15); h.hand.material = glove; h.fore.visible = h.hand.visible = true;
 }
+function fpHead(P, hide) {   // first-person uses the soldier's REAL arms, gloves and AK: only the head is collapsed so it never blocks the camera
+  const h = P.m && P.m.head; if (!h) return; const v = hide ? 0.001 : 1; if (h.scale.x !== v) h.scale.setScalar(v);
+}
 function fpFrame(P, dt, eye, yaw, pit) {
-  const c = G.cam, cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pit), sp = Math.sin(pit);
-  _ffw.set(sy * cp, sp, cy * cp); _frt.set(-cy, 0, sy); _fup.crossVectors(_frt, _ffw).multiplyScalar(-1); if (_fup.y < 0) _fup.negate();
-  VM.bob = (VM.bob || 0) + dt * (4 + P.speed * 0.9); const mv = clamp(P.speed / CFG.RUN, 0, 1.2), bx = Math.sin(VM.bob) * 0.004 * mv, by = Math.abs(Math.cos(VM.bob)) * 0.005 * mv + Math.sin(G.t * 1.8) * 0.003;
-  for (const h of VM.hands) h.fore.visible = h.hand.visible = false;
-  if (!P.alive) { VM.grp.visible = false; return; }
-  VM.grp.visible = true;
-  if (P.stance === 'rifle' && P.m.rifle && P.m.rifle.visible) {
-    const r = P.m.rifle, a = c.aim, L = CFG.RIFLE_LEN;
-    r.position.copy(eye).addScaledVector(_ffw, 0.3 - (P.kick || 0) * 1.4).addScaledVector(_frt, lerp(0.19, 0.0, a) + bx).addScaledVector(_fup, lerp(-0.2, -0.125, a) + by); r.updateMatrixWorld(true);
-    _fa.copy(r.position).addScaledVector(_ffw, L * CFG.GRIP_R).addScaledVector(_fup, -0.07);   // right hand on the pistol grip
-    _fb.copy(eye).addScaledVector(_frt, 0.36).addScaledVector(_fup, -0.62).addScaledVector(_ffw, -0.15); fpLimb(0, _fb.clone(), _fa, 0.052, VM.glove, VM.sleeve);
-    if (P.reloadT > 0) _fa.copy(r.position).addScaledVector(_ffw, L * 0.36).addScaledVector(_fup, -(0.26 + Math.sin(P.reloadT * 16) * 0.04)); else _fa.copy(r.position).addScaledVector(_ffw, L * CFG.GRIP_L).addScaledVector(_fup, -0.04);   // left hand on the handguard (dips to the mag on reload)
-    _fb.copy(eye).addScaledVector(_frt, -0.22).addScaledVector(_fup, -0.6).addScaledVector(_ffw, -0.1); fpLimb(1, _fb.clone(), _fa, 0.052, VM.glove, VM.sleeve);
-  } else if (P.stance === 'fist') {
-    const blk = !!P.blocking, t = G.t - (P.atkT || -9), heavy = P.atkK === 'heavy', dur = heavy ? 0.46 : 0.27, k = t >= 0 && t < dur ? Math.sin(Math.PI * t / dur) : 0, side = P.atkSide ? 1 : 0;
-    for (let i = 0; i < 2; i++) {       // i=0 right hand, i=1 left hand
-      const sg = i === 0 ? 1 : -1, mine = (i === 0) === !!side, kk = mine ? k : 0;
-      let fw = 0.44, rt = 0.2 * sg, up = -0.2;
-      if (blk) { fw = 0.34; rt = 0.085 * sg; up = 0.0; } else if (kk > 0) { fw = 0.44 + kk * (heavy ? 0.95 : 0.72); rt = 0.2 * sg - sg * kk * 0.17; up = -0.2 + kk * 0.1; }
-      else { fw += Math.sin(G.t * 2.2 + i * 2) * 0.012; up += Math.sin(G.t * 2.6 + i) * 0.008; }
-      _fa.copy(eye).addScaledVector(_ffw, fw).addScaledVector(_frt, rt + bx * sg).addScaledVector(_fup, up + by);
-      VM.pos[i].lerp(_fa, 1 - Math.exp(-(kk > 0 ? 40 : 20) * dt)); if (!VM.init) VM.pos[i].copy(_fa);
-      _fb.copy(eye).addScaledVector(_frt, 0.34 * sg).addScaledVector(_fup, -0.55).addScaledVector(_ffw, -0.1);
-      fpLimb(i, _fb.clone(), VM.pos[i], 0.115, VM.boxg, VM.boxs);
-    }
-    VM.init = true;
-  }
+  if (BOX) { VM.grp.visible = false; fpHead(P, true); return; }   // boxing: the model's real arms/gloves, head hidden
+  // Compound: only the gun is visible (body is on a hidden layer, rifle held at the shoulder like a shooter's viewmodel)
+  VM.grp.visible = false; const c = G.cam; if (!P.alive || !P.m.rifle || !P.m.rifle.visible) return;
+  const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pit), sp = Math.sin(pit);
+  _ffw.set(sy * cp, sp, cy * cp); _frt.set(-cy, 0, sy); _fup.crossVectors(_frt, _ffw); if (_fup.y < 0) _fup.negate();
+  VM.bob = (VM.bob || 0) + dt * (4 + P.speed * 0.9); const mv = clamp(P.speed / CFG.RUN, 0, 1.2), bx = Math.sin(VM.bob) * 0.004 * mv, by = Math.abs(Math.cos(VM.bob)) * 0.005 * mv + Math.sin(G.t * 1.8) * 0.002, a = c.aim, r = P.m.rifle;
+  r.position.copy(eye).addScaledVector(_ffw, 0.3 - (P.kick || 0) * 1.4).addScaledVector(_frt, lerp(0.19, 0.0, a) + bx).addScaledVector(_fup, lerp(-0.2, -0.125, a) + by); r.updateMatrixWorld(true);
 }
 function fpToggle() {
   G.fpv = !G.fpv; store.set(BOX ? 'fpv_box' : 'fpv_cc', G.fpv); VM.init = false; feed(G.fpv ? '👁 First-person view' : '🎥 Third-person view', true);
@@ -1812,7 +1796,7 @@ function updateCamera(dt) {
   const dead = !P.alive || G.over; if (dead) { c.yaw += dt * 0.28; c.pitch = lerp(c.pitch, -0.5, dt * 2); }   // look DOWN on the body from above
   c.aim = damp(c.aim, P.aiming ? 1 : 0, 12, dt);
   const zl = zoomLevel(), shoulder = BOX ? 0.55 : lerp(0.6, 0.78, c.aim), dist = dead ? 6 : BOX ? 5.2 : lerp(3.7, zl > 1 ? 1.7 : 2.2, c.aim), pit = c.pitch + c.recoil;
-  G.fp = !!(G.fpv && P.alive && !G.over && P.stance !== 'sword'); if (P.group) { try { fpSetLayers(P, G.fp); } catch (e) { console.error('fp', e); G.fpv = false; G.fp = false; } }
+  G.fp = !!(G.fpv && P.alive && !G.over && P.stance !== 'sword'); try { if (!G.fp) fpHead(P, false); fpSetLayers(P, G.fp && !BOX); } catch (e) { console.error('fp', e); }
   const d = camDir(c.yaw, pit), rx = -Math.cos(c.yaw), rz = Math.sin(c.yaw);
   const px = P.x, py = P.dispY + 1.5 + (P.rollT > 0 ? -0.5 : 0), pz = P.z;
   const ox = px + rx * shoulder, oy = py, oz = pz + rz * shoulder;
@@ -1983,6 +1967,7 @@ function resize() { const w = innerWidth, h = innerHeight; renderer.setSize(w, h
 addEventListener('resize', resize); resize();
 
 (async function boot() {
+  { const t = document.createElement('div'); t.textContent = 'build v34 · ' + (BOX ? 'boxing' : 'compound'); t.style.cssText = 'position:fixed;left:8px;bottom:4px;font:10px sans-serif;color:#fff;opacity:.35;z-index:5;pointer-events:none'; document.body.appendChild(t); }
   if (BOX) buildArena(); else buildWorld(); requestAnimationFrame(frame);
   if (TOUCH && innerHeight > innerWidth) U.loadt.insertAdjacentHTML('afterend', '<p style="color:#fde047;font-size:14px">📱 Turn your phone sideways for the best view.</p>');
   U.sensrow.style.display = 'flex'; U.menurow.style.display = 'flex'; U.menurow2.style.display = 'flex'; U.menurow3.style.display = 'flex'; if (!NET.on) { U.online.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.o === '0')); }
