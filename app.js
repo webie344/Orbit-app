@@ -1,4 +1,4 @@
-// BUILD 2026-11-15 20:40 — Boxing Arena game
+// BUILD 2026-11-16 first-person view + realistic audio
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +

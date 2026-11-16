@@ -165,6 +165,7 @@ function buildUI() {
     <button class="cc-btn" data-b="reload" style="right:176px;bottom:128px;width:52px;height:52px"><span>⟲</span>Load</button>
     <button class="cc-btn" data-b="melee" style="right:164px;bottom:196px;width:52px;height:52px"><span>🥊</span>Hit</button>
     <button class="cc-btn" data-b="kick" style="right:228px;bottom:60px;width:48px;height:48px"><span>🦶</span>Kick</button>
+    <button class="cc-btn" data-b="view" style="right:236px;bottom:112px;width:46px;height:46px"><span>👁</span>View</button>
     <button class="cc-btn" data-b="swap" style="right:230px;bottom:168px;width:46px;height:46px"><span>⇄</span>Swap</button>
     <button class="cc-btn" data-b="use" style="right:240px;bottom:228px;width:58px;height:58px;display:none"><span>✋</span>Use</button>
   </div>
@@ -199,40 +200,92 @@ function buildUI() {
 
 /* -------------------------------- audio ----------------------------------- */
 const AU = {
-  ctx: null, out: null, noise: null, on: true,
+  ctx: null, out: null, noise: null, rev: null, on: true, _crowd: null,
   init() {
     if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
     try {
-      const C = window.AudioContext || window.webkitAudioContext; this.ctx = new C();
-      this.out = this.ctx.createGain(); this.out.gain.value = 0.55; this.out.connect(this.ctx.destination);
-      const len = this.ctx.sampleRate; const b = this.ctx.createBuffer(1, len, this.ctx.sampleRate), d = b.getChannelData(0);
-      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1; this.noise = b;
+      const C = window.AudioContext || window.webkitAudioContext, c = this.ctx = new C(), sr = c.sampleRate;
+      const comp = c.createDynamicsCompressor(); comp.threshold.value = -14; comp.knee.value = 18; comp.ratio.value = 6; comp.attack.value = 0.002; comp.release.value = 0.15;
+      this.out = c.createGain(); this.out.gain.value = 0.8; this.out.connect(comp); comp.connect(c.destination);
+      const len = sr * 2, b = c.createBuffer(1, len, sr), d = b.getChannelData(0); for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1; this.noise = b;
+      // generated room/outdoor reverb: exponentially decaying stereo noise
+      const rl = Math.floor(sr * 1.7), ib = c.createBuffer(2, rl, sr);
+      for (let ch = 0; ch < 2; ch++) { const x = ib.getChannelData(ch); for (let i = 0; i < rl; i++) x[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / rl, 3.2); }
+      const cv = c.createConvolver(); cv.buffer = ib; this.rev = c.createGain(); this.rev.gain.value = 0.5; this.rev.connect(cv); cv.connect(this.out);
     } catch { this.ctx = null; }
   },
-  _n(dur, freq, q, vol, type = 'lowpass', f2 = 0) {
-    if (!this.ctx) return; const c = this.ctx, t = c.currentTime;
-    const s = c.createBufferSource(); s.buffer = this.noise; s.playbackRate.value = rnd(0.8, 1.2);
-    const f = c.createBiquadFilter(); f.type = type; f.frequency.setValueAtTime(freq, t); if (f2) f.frequency.exponentialRampToValueAtTime(f2, t + dur); f.Q.value = q;
-    const g = c.createGain(); g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    s.connect(f); f.connect(g); g.connect(this.out); s.start(t, Math.random() * 0.5, dur + 0.05);
+  // a sound "bus": v = loudness/closeness 0..1 ; distant sounds are darker and wetter
+  _bus(v = 1, wet = 0.25) {
+    const c = this.ctx, g = c.createGain(); g.gain.value = Math.max(0.0001, v);
+    const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 1200 + 17000 * Math.pow(Math.min(1, v), 0.6); g.connect(f); f.connect(this.out);
+    const w = c.createGain(); w.gain.value = wet + (1 - Math.min(1, v)) * 0.5; f.connect(w); w.connect(this.rev); return g;
   },
-  _t(freq, f2, dur, vol, type = 'sine') {
-    if (!this.ctx) return; const c = this.ctx, t = c.currentTime, o = c.createOscillator(), g = c.createGain();
+  // filtered noise burst (attack ~1.5 ms, exponential decay)
+  _n(dur, freq, q, vol, type = 'lowpass', f2 = 0, at = 0, dest = null, rate = 0) {
+    if (!this.ctx) return; const c = this.ctx, t = c.currentTime + at;
+    const s = c.createBufferSource(); s.buffer = this.noise; s.playbackRate.value = rate || rnd(0.85, 1.15);
+    const f = c.createBiquadFilter(); f.type = type; f.frequency.setValueAtTime(freq, t); if (f2) f.frequency.exponentialRampToValueAtTime(Math.max(20, f2), t + dur); f.Q.value = q;
+    const g = c.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vol, t + 0.0015); g.gain.exponentialRampToValueAtTime(0.0005, t + dur);
+    s.connect(f); f.connect(g); g.connect(dest || this.out); s.start(t, Math.random() * 0.8, dur + 0.05);
+  },
+  _t(freq, f2, dur, vol, type = 'sine', at = 0, dest = null) {
+    if (!this.ctx) return; const c = this.ctx, t = c.currentTime + at, o = c.createOscillator(), g = c.createGain();
     o.type = type; o.frequency.setValueAtTime(freq, t); o.frequency.exponentialRampToValueAtTime(Math.max(20, f2), t + dur);
-    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur); o.connect(g); g.connect(this.out); o.start(t); o.stop(t + dur + 0.02);
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vol, t + 0.002); g.gain.exponentialRampToValueAtTime(0.0005, t + dur); o.connect(g); g.connect(dest || this.out); o.start(t); o.stop(t + dur + 0.03);
   },
-  shot(v = 1) { if (v < 0.03) return; this._n(0.22, 2600, 0.7, 0.9 * v, 'lowpass', 300); this._t(160, 45, 0.16, 0.8 * v, 'triangle'); },
-  reload() { this._n(0.05, 3200, 3, 0.4, 'bandpass'); setTimeout(() => this._n(0.07, 1800, 3, 0.45, 'bandpass'), 650); setTimeout(() => this._n(0.05, 3600, 3, 0.5, 'bandpass'), 1300); },
-  hit() { this._t(900, 500, 0.06, 0.35, 'square'); },
-  head() { this._t(1500, 900, 0.1, 0.4, 'square'); this._t(2100, 1400, 0.12, 0.25, 'square'); },
-  hurt() { this._t(140, 70, 0.18, 0.5, 'sawtooth'); },
-  step(v = 1) { this._n(0.07, 420, 1, 0.12 * v, 'lowpass'); },
-  swing() { this._n(0.18, 700, 1, 0.25, 'bandpass', 2600); },
-  whack() { this._t(120, 50, 0.12, 0.7, 'triangle'); this._n(0.08, 900, 1, 0.4); },
-  pick() { this._t(660, 990, 0.12, 0.3); setTimeout(() => this._t(990, 1320, 0.14, 0.3), 90); },
-  zone() { this._t(300, 280, 0.35, 0.25, 'sawtooth'); },
-  win() { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => this._t(f, f, 0.3, 0.35, 'triangle'), i * 140)); },
-  lose() { [392, 330, 262].forEach((f, i) => setTimeout(() => this._t(f, f * 0.9, 0.4, 0.35, 'triangle'), i * 220)); },
+  // voice-like grunt / shout: sawtooth through two vowel formants
+  _voice(f0, dur, vol, at = 0, f1 = 650, f2 = 1100) {
+    if (!this.ctx) return; const c = this.ctx, t = c.currentTime + at, o = c.createOscillator(), g = c.createGain();
+    o.type = 'sawtooth'; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f0 * 0.7, t + dur);
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vol, t + 0.03); g.gain.exponentialRampToValueAtTime(0.0005, t + dur);
+    for (const [fr, q, m] of [[f1, 5, 1], [f2, 6, 0.6]]) { const b = c.createBiquadFilter(); b.type = 'bandpass'; b.frequency.value = fr; b.Q.value = q; const gg = c.createGain(); gg.gain.value = m; o.connect(b); b.connect(gg); gg.connect(g); }
+    g.connect(this.out); o.start(t); o.stop(t + dur + 0.03);
+  },
+  /* ---- gunfire ---- v = closeness (1 = your own weapon) */
+  shot(v = 1) {
+    if (v < 0.02 || !this.ctx) return; const d = this._bus(v, v > 0.9 ? 0.22 : 0.35), own = v > 0.9;
+    this._n(0.05, 2200, 0.5, 1.0, 'highpass', 0, 0, d);                        // supersonic crack
+    this._n(0.16, 1800, 0.8, 0.9, 'bandpass', 260, 0, d);                      // muzzle blast body
+    this._n(0.34, 900, 0.7, 0.55, 'lowpass', 120, 0.01, d);                    // gas roar
+    this._t(150, 42, 0.2, own ? 1.0 : 0.8, 'sine', 0, d);                      // low thump
+    this._t(95, 35, 0.3, 0.5, 'triangle', 0.005, d);
+    if (own) { this._n(0.025, 3500, 2, 0.35, 'bandpass', 0, 0.045, d); this._n(0.04, 1500, 2, 0.2, 'bandpass', 0, 0.09, d); }   // action clack + brass
+    this._n(0.55, 500, 0.6, 0.35 * (1 - v * 0.4), 'lowpass', 100, 0.1, d);    // distant slap-back echo
+  },
+  reload() {
+    this._n(0.03, 2800, 4, 0.5, 'bandpass'); this._t(900, 400, 0.04, 0.2, 'square');                                   // mag release
+    this._n(0.12, 1400, 1.5, 0.25, 'bandpass', 500, 0.12);                                                           // mag slides out
+    this._n(0.05, 900, 2, 0.5, 'bandpass', 0, 0.62); this._t(210, 90, 0.07, 0.5, 'triangle', 0.62); this._n(0.03, 3600, 4, 0.4, 'bandpass', 0, 0.68); // mag seats
+    this._n(0.04, 2400, 3, 0.45, 'bandpass', 0, 1.1); this._t(1400, 600, 0.05, 0.25, 'square', 1.1);                  // charging handle back
+    this._n(0.05, 1800, 3, 0.55, 'bandpass', 0, 1.3); this._t(300, 120, 0.06, 0.4, 'triangle', 1.3);                  // bolt forward
+  },
+  dry() { this._n(0.02, 3000, 5, 0.35, 'bandpass'); this._t(1800, 900, 0.03, 0.15, 'square'); },
+  whiz(v = 1) { if (!this.ctx) return; const p = rnd(0.9, 1.3); this._n(0.2, 5200 * p, 3, 0.35 * v, 'bandpass', 1500 * p); },
+  impact(v = 1, soft = false) { if (v < 0.03 || !this.ctx) return; const d = this._bus(v, 0.15); this._n(0.05, soft ? 500 : 2600, 1, 0.7, soft ? 'lowpass' : 'bandpass', 0, 0, d); this._t(soft ? 120 : 260, 80, 0.06, 0.3, 'sine', 0, d); if (!soft && Math.random() < 0.4) this._n(0.35, 3800, 6, 0.18, 'bandpass', 1400, 0.03, d); },  // dirt thud / ricochet zing
+  hit() { this._t(260, 110, 0.06, 0.45, 'sine'); this._n(0.045, 2000, 1.5, 0.5, 'bandpass'); },                           // you hit someone: meaty tick
+  head() { this._t(1900, 1500, 0.22, 0.28, 'sine'); this._t(2850, 2400, 0.16, 0.14, 'sine'); this._t(220, 90, 0.08, 0.5, 'sine'); this._n(0.05, 3200, 2, 0.5, 'bandpass'); },
+  hurt() { this._t(110, 50, 0.16, 0.7, 'sine'); this._n(0.09, 700, 1, 0.5, 'lowpass', 200); this._voice(rnd(105, 135), 0.28, 0.35, 0.02, 600, 1000); },
+  step(v = 1) { this._n(0.06, rnd(300, 520), 1.2, 0.2 * v, 'lowpass', 120); this._t(rnd(70, 95), 45, 0.07, 0.18 * v, 'sine'); },
+  swing(heavy) { const d = heavy ? 0.3 : 0.2; this._n(d, 450, 1.2, heavy ? 0.4 : 0.28, 'bandpass', 2600, 0, null, 1); this._n(d * 0.8, 3000, 1.5, 0.12, 'bandpass', 800, d * 0.3); },   // air whoosh
+  whack(heavy) { // fist/leather on body
+    const k = heavy ? 1 : 0.7; this._t(heavy ? 130 : 160, 48, heavy ? 0.22 : 0.14, 0.95 * k, 'sine'); this._n(0.06, 2400, 1.2, 0.55 * k, 'bandpass');
+    this._n(heavy ? 0.16 : 0.1, 700, 0.8, 0.6 * k, 'lowpass', 150); this._voice(rnd(90, 120), heavy ? 0.3 : 0.18, 0.22 * k, 0.02, 520, 900);
+  },
+  punch(heavy) { this.whack(heavy); },
+  block() { this._t(110, 60, 0.1, 0.55, 'sine'); this._n(0.07, 500, 1, 0.5, 'lowpass', 180); this._n(0.03, 1800, 2, 0.25, 'bandpass'); },
+  ko() { this._t(80, 30, 0.7, 1.0, 'sine'); this._n(0.5, 500, 0.7, 0.7, 'lowpass', 90); this._t(150, 45, 0.3, 0.8, 'sine', 0.05); this._voice(120, 0.5, 0.3, 0.05, 500, 850); },
+  pick() { this._t(660, 660, 0.09, 0.28, 'triangle'); this._t(990, 990, 0.12, 0.28, 'triangle', 0.08); this._t(1320, 1320, 0.2, 0.22, 'sine', 0.16); },
+  zone() { for (let i = 0; i < 3; i++) { this._t(440, 440, 0.18, 0.2, 'sawtooth', i * 0.3); this._t(330, 330, 0.18, 0.2, 'sawtooth', i * 0.3 + 0.15); } },
+  win() { [523, 659, 784, 1046].forEach((f, i) => { this._t(f, f, 0.45, 0.3, 'triangle', i * 0.15); this._t(f * 2, f * 2, 0.4, 0.1, 'sine', i * 0.15); }); },
+  lose() { [392, 330, 262].forEach((f, i) => { this._t(f, f * 0.92, 0.5, 0.32, 'triangle', i * 0.25); this._t(f / 2, f / 2, 0.5, 0.2, 'sine', i * 0.25); }); },
+  bell() { if (!this.ctx) return; const d = this._bus(1, 0.4); for (let k = 0; k < 3; k++) for (const [m, a, dc] of [[1, 0.35, 1.8], [2.76, 0.25, 1.2], [5.4, 0.15, 0.8], [8.9, 0.08, 0.5]]) this._t(1050 * m, 1040 * m, dc, a, 'sine', k * 0.18, d); this._n(0.03, 4000, 2, 0.4, 'highpass', 0, 0, d); },
+  cheer() { if (!this.ctx) return; const c = this.ctx, t = c.currentTime, s = c.createBufferSource(); s.buffer = this.noise; s.loop = true; const f = c.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1100; f.Q.value = 0.7; const g = c.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.5, t + 0.3); g.gain.linearRampToValueAtTime(0.35, t + 1.0); g.gain.exponentialRampToValueAtTime(0.001, t + 2.2); s.connect(f); f.connect(g); g.connect(this.out); s.start(t); s.stop(t + 2.3); for (let i = 0; i < 12; i++) this._n(0.04, 2200, 1, 0.12, 'bandpass', 0, 0.1 + Math.random() * 1.4); },   // roar + claps
+  crowd(on) { // looping arena murmur
+    if (!this.ctx) return; const c = this.ctx;
+    if (!on) { if (this._crowd) { try { this._crowd.g.gain.linearRampToValueAtTime(0.0001, c.currentTime + 0.6); this._crowd.s.stop(c.currentTime + 0.7); } catch {} this._crowd = null; } return; }
+    if (this._crowd) return; const s = c.createBufferSource(); s.buffer = this.noise; s.loop = true; const f = c.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 700; f.Q.value = 0.5; const g = c.createGain(); g.gain.value = 0.0001; g.gain.linearRampToValueAtTime(0.07, c.currentTime + 1.5);
+    const l = c.createOscillator(), lg = c.createGain(); l.frequency.value = 0.23; lg.gain.value = 0.03; l.connect(lg); lg.connect(g.gain); l.start(); s.connect(f); f.connect(g); g.connect(this.out); s.start(); this._crowd = { s, g };
+  },
 };
 
 /* ========================================================================== */
@@ -802,12 +855,12 @@ class Fighter {
   melee(kind) {
     const M = MELEE[kind]; if (!this.alive || this.meleeCd > 0 || this.rollT > 0) return false;
     if (BOX) { if (this.stun > 0 || this.blocking || this.stam < M.cost) return false; this.stam -= M.cost; this.lastAtk = G.t; }
-    this.meleeCd = M.cd * (BOX && this.spd > 0 ? 0.7 : 1); this.reloadT = 0;
+    this.atkT = G.t; this.atkK = kind; this.atkSide = kind === 'heavy' ? 1 : this.punchSide % 2; this.meleeCd = M.cd * (BOX && this.spd > 0 ? 0.7 : 1); this.reloadT = 0;
     if (kind === 'heavy') { this.rig.playOver('Punch_Right', { dur: 0.58, prio: 3, fin: 0.05, fout: 0.12 }); }
     else if (kind === 'punch') { this.rig.playOver(this.punchSide++ % 2 ? 'Punch_Right' : 'Punch_Left', { dur: BOX ? 0.3 : 0.42, prio: 3, fin: 0.04, fout: 0.1 }); }
     else if (kind === 'kick') { this.rig.playFull(this.kickSide++ % 2 ? 'Kick_Right' : 'Kick_Left', { dur: 0.8, fin: 0.06, fout: 0.16 }); this.lockT = 0.5; }
     else this.rig.playOver('Sword_Slash', { dur: 0.6, prio: 3, fin: 0.04, fout: 0.12 });
-    AU.swing(); if (this.isPlayer) netEmit(kind); later(M.delay, () => meleeHit(this, kind)); return true;
+    AU.swing(kind === 'heavy'); if (this.isPlayer) netEmit(kind); later(M.delay, () => meleeHit(this, kind)); return true;
   }
   flinch() { this.rig.playOver(Math.random() < 0.5 ? 'HitRecieve' : 'HitRecieve_2', { dur: 0.4, prio: 1, fin: 0.03, fout: 0.14 }); }
   interact(cb) { if (!this.alive || this.rollT > 0) return; this.rig.playFull('Interact', { dur: 0.9, fin: 0.1, fout: 0.2 }); this.lockT = 0.9; later(0.45, cb); }
@@ -964,7 +1017,8 @@ function shootBullet(f, o, d, isBot) {
   if (r.who) {
     const dmg = (isBot ? rnd(5.5, 8.5) * G.diff : WEAPON.dmg) * (r.head ? (isBot ? 1.5 : WEAPON.head) : 1) * (isBot ? 1 : 1 - clamp((r.t - 45) / 160, 0, 0.35));
     damage(r.who, dmg, f, { head: r.head, kind: 'rifle' }); fxBurst(end, '#ff5d73', 6, 3);
-  } else fxBurst(end, '#ffd9a0', 5, 3.2, 1);
+  } else { fxBurst(end, '#ffd9a0', 5, 3.2, 1); AU.impact(Math.pow(clamp(1 - distToPlayer(end.x, end.z) / 40, 0, 1), 1.5)); }
+  if (isBot && !r.who) { const dp = distToPlayer(f.x, f.z); if (dp < 45 && Math.random() < 0.35) AU.whiz(1 - dp / 60); }
   return r;
 }
 function playerFire() {
@@ -1293,8 +1347,6 @@ Object.assign(PK, {
   heal: { color: '#34d399', name: 'HEAL +35' }, iron: { color: '#a855f7', name: 'IRON FIST · 3 mega punches' },
 });
 const PKI = { rage: '🔥', shield: '🛡️', speed: '⚡', heal: '❤️', iron: '💥' };
-AU.bell = function () { this._t(1500, 1480, 0.9, 0.22, 'triangle'); setTimeout(() => this._t(1500, 1480, 0.9, 0.22, 'triangle'), 170); };
-AU.cheer = function () { this._n(1.0, 1800, 0.6, 0.35, 'bandpass', 900); };
 
 /* ---------------------------------- ring ---------------------------------- */
 function buildArena() {
@@ -1399,7 +1451,7 @@ function bxBeginRound(n) {
   const b = G.bx, P = G.player; b.round = n; b.phase = 'intro'; b.pt = BXC.INTRO; b.time = BXC.RTIME; b.spawnN = 0; b.spawnT = 5; b.decided = false;
   for (const p of pickups) scene.remove(p.g); pickups.length = 0;
   bxResetFighter(P); if (b.opp && !b.opp.remote) bxResetFighter(b.opp); bxPlaceFighters(); P.lockT = 0;
-  banner(`ROUND ${n}`, '#fde047'); AU.bell(); bxMsg('');
+  banner(`ROUND ${n}`, '#fde047'); AU.bell(); AU.crowd(true); bxMsg('');
 }
 
 /* ----------------------------------- match -------------------------------- */
@@ -1416,7 +1468,7 @@ function startBoxing() {
   try { if (TOUCH) { document.documentElement.requestFullscreen?.().catch(() => {}); screen.orientation?.lock?.('landscape').catch(() => {}); } else lockPointer(); } catch {}
 }
 function bxEnd(won, why) {
-  const b = G.bx; if (b.phase === 'over') return; b.phase = 'over'; G.over = true; const P = G.player;
+  const b = G.bx; if (b.phase === 'over') return; b.phase = 'over'; G.over = true; AU.crowd(false); const P = G.player;
   const score = Math.round(b.wins[0] * 300 + b.dealt * 2 + (won ? 400 : 0) + b.ko * 150 + (won && b.pvp ? 250 : 0));
   if (won) AU.win(); else AU.lose(); fireHeld = aimHeld = false; try { document.exitPointerLock?.(); } catch {}
   later(0.6, netLeave);
@@ -1438,7 +1490,7 @@ function bxTimeUp() {
   bxRoundOver(win, 'time');
 }
 function bxKO(t, att, kind) {
-  t.alive = false; t.hp = 0; t.blocking = false; t.rig.playFull('Death', { hold: true, fin: 0.08 }); AU.whack();
+  t.alive = false; t.hp = 0; t.blocking = false; t.rig.playFull('Death', { hold: true, fin: 0.08 }); AU.ko();
   feed(`<b>${att && att !== t ? att.name : 'Knockout'}</b> 🥊 ${t.name}`, true);
   if (t.isPlayer) { if (G.bx.pvp) netDeath(att, 'ko'); bxRoundOver(false, 'KO'); } else bxRoundOver(true, 'KO');
 }
@@ -1457,7 +1509,7 @@ function bxHit(t, amt, att, o) {
   t.hp = Math.max(0, t.hp - a); t.lastHit = G.t; t.pushX = -dx / dl; t.pushZ = -dz / dl; t.pushV = blocked ? 3 : heavy ? 11 : 5;
   if (!blocked) { t.stun = Math.max(t.stun || 0, heavy ? 0.35 : 0.05); t.rig.playOver(Math.random() < 0.5 ? 'HitRecieve' : 'HitRecieve_2', { dur: heavy ? 0.5 : 0.26, prio: heavy ? 4 : 3, fin: 0.03, fout: 0.12 }); }
   fxBurst({ x: t.x - dx / dl * 0.3, y: t.y + 1.45, z: t.z - dz / dl * 0.3 }, blocked ? '#7dd3fc' : heavy ? '#fde047' : '#ff6b6b', blocked ? 6 : heavy ? 16 : 9, 3);
-  blocked ? AU.hit() : AU.whack();
+  blocked ? AU.block() : AU.whack(heavy);
   if (att && att.isPlayer) { b.dealt += a; dmgNumber(t.x, t.y + 2, t.z, Math.round(a), heavy && !blocked); G.cam.shake = Math.min(1, G.cam.shake + (heavy ? 0.45 : 0.18)); }
   if (t.isPlayer) { G.cam.shake = Math.min(1, G.cam.shake + (heavy ? 0.5 : 0.2)); if (!blocked) { U.hurt.style.opacity = 0.8; setTimeout(() => { U.hurt.style.opacity = 0; }, 150); AU.hurt(); } }
   if (t.ai && !blocked && Math.random() < 0.35) t.ai.blockT = 0.5;
@@ -1587,6 +1639,60 @@ function stepBox(dt) {
 }
 
 /* ========================================================================== */
+/*  FIRST-PERSON VIEW  (camera at the eyes; you only see your hands + weapon) */
+/* ========================================================================== */
+G.fpv = store.get(BOX ? 'fpv_box' : 'fpv_cc', BOX); G.fp = false;
+if (sun.shadow && sun.shadow.camera && sun.shadow.camera.layers) sun.shadow.camera.layers.enable(1);   // body is hidden from the camera (layer 1) but still casts its shadow
+const VM = { grp: new THREE.Group(), hands: [], k: [0, 0], bob: 0, pos: [new THREE.Vector3(), new THREE.Vector3()], sleeve: new THREE.MeshStandardMaterial({ color: '#3a4538', roughness: 0.85 }), glove: new THREE.MeshStandardMaterial({ color: '#1c222b', roughness: 0.6 }), boxg: new THREE.MeshStandardMaterial({ color: '#e11d48', roughness: 0.4, metalness: 0.05 }), boxs: new THREE.MeshStandardMaterial({ color: '#f5f5f5', roughness: 0.6 }) };
+for (let i = 0; i < 2; i++) {
+  const fore = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.052, 1, 10), VM.sleeve), hand = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), VM.glove);
+  fore.frustumCulled = hand.frustumCulled = false; VM.grp.add(fore, hand); VM.hands.push({ fore, hand });
+}
+VM.grp.visible = false; scene.add(VM.grp);
+const _fa = new THREE.Vector3(), _fb = new THREE.Vector3(), _fy = new THREE.Vector3(0, 1, 0), _fup = new THREE.Vector3(), _ffw = new THREE.Vector3(), _frt = new THREE.Vector3(), _fq = new THREE.Quaternion();
+function fpSetLayers(P, on) {
+  if (P._fpL === on) return; P._fpL = on;
+  P.group.traverse((o) => { if (o.layers && o.layers.set) o.layers.set(on ? 1 : 0); });   // whole soldier -> invisible to the camera, shadow remains
+}
+function fpLimb(i, a, b, hr, glove, sleeve) {   // forearm from a (off-screen) to b (hand/glove)
+  const h = VM.hands[i]; _fb.copy(b).sub(a); const len = _fb.length() || 0.01; _fb.multiplyScalar(1 / len);
+  h.fore.position.copy(a).addScaledVector(_fb, len * 0.5); h.fore.scale.set(1, len, 1); h.fore.quaternion.setFromUnitVectors(_fy, _fb); h.fore.material = sleeve;
+  h.hand.position.copy(b); h.hand.scale.set(hr, hr, hr * 1.15); h.hand.material = glove; h.fore.visible = h.hand.visible = true;
+}
+function fpFrame(P, dt, eye, yaw, pit) {
+  const c = G.cam, cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pit), sp = Math.sin(pit);
+  _ffw.set(sy * cp, sp, cy * cp); _frt.set(-cy, 0, sy); _fup.crossVectors(_frt, _ffw).multiplyScalar(-1); if (_fup.y < 0) _fup.negate();
+  VM.bob = (VM.bob || 0) + dt * (4 + P.speed * 0.9); const mv = clamp(P.speed / CFG.RUN, 0, 1.2), bx = Math.sin(VM.bob) * 0.008 * mv, by = Math.abs(Math.cos(VM.bob)) * 0.012 * mv + Math.sin(G.t * 1.8) * 0.003;
+  for (const h of VM.hands) h.fore.visible = h.hand.visible = false;
+  if (!P.alive) { VM.grp.visible = false; return; }
+  VM.grp.visible = true;
+  if (P.stance === 'rifle' && P.m.rifle && P.m.rifle.visible) {
+    const r = P.m.rifle, a = c.aim, L = CFG.RIFLE_LEN;
+    r.position.copy(eye).addScaledVector(_ffw, 0.3 - (P.kick || 0) * 1.4).addScaledVector(_frt, lerp(0.19, 0.0, a) + bx).addScaledVector(_fup, lerp(-0.2, -0.125, a) + by); r.updateMatrixWorld(true);
+    _fa.copy(r.position).addScaledVector(_ffw, L * CFG.GRIP_R).addScaledVector(_fup, -0.07);   // right hand on the pistol grip
+    _fb.copy(eye).addScaledVector(_frt, 0.36).addScaledVector(_fup, -0.62).addScaledVector(_ffw, -0.15); fpLimb(0, _fb.clone(), _fa, 0.052, VM.glove, VM.sleeve);
+    if (P.reloadT > 0) _fa.copy(r.position).addScaledVector(_ffw, L * 0.36).addScaledVector(_fup, -(0.26 + Math.sin(P.reloadT * 16) * 0.04)); else _fa.copy(r.position).addScaledVector(_ffw, L * CFG.GRIP_L).addScaledVector(_fup, -0.04);   // left hand on the handguard (dips to the mag on reload)
+    _fb.copy(eye).addScaledVector(_frt, -0.22).addScaledVector(_fup, -0.6).addScaledVector(_ffw, -0.1); fpLimb(1, _fb.clone(), _fa, 0.052, VM.glove, VM.sleeve);
+  } else if (P.stance === 'fist') {
+    const blk = !!P.blocking, t = G.t - (P.atkT || -9), heavy = P.atkK === 'heavy', dur = heavy ? 0.46 : 0.27, k = t >= 0 && t < dur ? Math.sin(Math.PI * t / dur) : 0, side = P.atkSide ? 1 : 0;
+    for (let i = 0; i < 2; i++) {       // i=0 right hand, i=1 left hand
+      const sg = i === 0 ? 1 : -1, mine = (i === 0) === !!side, kk = mine ? k : 0;
+      let fw = 0.44, rt = 0.2 * sg, up = -0.2;
+      if (blk) { fw = 0.34; rt = 0.085 * sg; up = 0.0; } else if (kk > 0) { fw = 0.44 + kk * (heavy ? 0.95 : 0.72); rt = 0.2 * sg - sg * kk * 0.17; up = -0.2 + kk * 0.1; }
+      else { fw += Math.sin(G.t * 2.2 + i * 2) * 0.012; up += Math.sin(G.t * 2.6 + i) * 0.008; }
+      _fa.copy(eye).addScaledVector(_ffw, fw).addScaledVector(_frt, rt + bx * sg).addScaledVector(_fup, up + by);
+      VM.pos[i].lerp(_fa, 1 - Math.exp(-(kk > 0 ? 40 : 20) * dt)); if (!VM.init) VM.pos[i].copy(_fa);
+      _fb.copy(eye).addScaledVector(_frt, 0.34 * sg).addScaledVector(_fup, -0.55).addScaledVector(_ffw, -0.1);
+      fpLimb(i, _fb.clone(), VM.pos[i], 0.115, VM.boxg, VM.boxs);
+    }
+    VM.init = true;
+  }
+}
+function fpToggle() {
+  G.fpv = !G.fpv; store.set(BOX ? 'fpv_box' : 'fpv_cc', G.fpv); VM.init = false; feed(G.fpv ? '👁 First-person view' : '🎥 Third-person view', true);
+}
+
+/* ========================================================================== */
 /*  INPUT                                                                     */
 /* ========================================================================== */
 const keys = {}; let fireHeld = false, aimHeld = false, exhausted = false, idleT = 0;
@@ -1609,12 +1715,13 @@ function act(name) {
   else if (name === 'rifle') { P.setStance('rifle'); P.reloadT = 0; } else if (name === 'sword') { P.setStance('sword'); P.reloadT = 0; G.zoom = 0; }
   else if (name === 'swap') { P.setStance(P.stance === 'rifle' ? 'sword' : 'rifle'); P.reloadT = 0; G.zoom = 0; }
   else if (name === 'zoom') { if (P.stance === 'rifle') G.zoom = (G.zoom + 1) % 3; }
+  else if (name === 'view') fpToggle();
   else if (name === 'wave') { if (P.speed < 1) P.wave(); }
   idleT = 0;
 }
 addEventListener('keydown', (e) => {
   if (e.repeat) return; keys[e.code] = true; if (!playing()) return;
-  const m = { Space: 'jump', KeyC: 'roll', KeyR: 'reload', KeyF: 'melee', KeyV: 'kick', KeyE: 'use', Digit1: 'rifle', Digit2: 'sword', KeyG: 'wave', KeyZ: 'zoom' }[e.code];
+  const m = { Space: 'jump', KeyC: 'roll', KeyR: 'reload', KeyF: 'melee', KeyV: 'kick', KeyE: 'use', Digit1: 'rifle', Digit2: 'sword', KeyG: 'wave', KeyZ: 'zoom', KeyT: 'view' }[e.code];
   if (m) { act(m); e.preventDefault(); }
 });
 addEventListener('keyup', (e) => { keys[e.code] = false; });
@@ -1687,7 +1794,7 @@ function playerControl(dt) {
   P.inp.mx = mx; P.inp.mz = mz; P.inp.speed = mag > 0 ? base : 0; P.inp.sprint = wantSprint;
   // Free-Fire style: run facing where you go; face the camera while aiming / shooting
   const firing = fireHeld || G.t - (P.lastFire || -9) < 0.7;
-  if (P.rollT <= 0) { const ty = P.aiming || firing ? c.yaw : mag > 0.05 ? Math.atan2(mx, mz) : P.yaw; P.yaw = dampAng(P.yaw, ty, P.aiming || firing ? 26 : 16, dt); }
+  if (P.rollT <= 0) { const ty = G.fp || P.aiming || firing ? c.yaw : mag > 0.05 ? Math.atan2(mx, mz) : P.yaw; P.yaw = dampAng(P.yaw, ty, P.aiming || firing ? 26 : 16, dt); }
   P.aimPitch = clamp(c.pitch + c.recoil, -0.5, 0.7);
   if (fireHeld) { idleT = 0; if (P.stance === 'rifle') playerFire(); else meleeKey(); }
   idleT = mag > 0 || P.aiming || fireHeld ? 0 : idleT + dt; P.relax = idleT > 5;
@@ -1704,15 +1811,22 @@ function updateCamera(dt) {
   const dead = !P.alive || G.over; if (dead) { c.yaw += dt * 0.28; c.pitch = lerp(c.pitch, -0.5, dt * 2); }   // look DOWN on the body from above
   c.aim = damp(c.aim, P.aiming ? 1 : 0, 12, dt);
   const zl = zoomLevel(), shoulder = BOX ? 0.55 : lerp(0.6, 0.78, c.aim), dist = dead ? 6 : BOX ? 5.2 : lerp(3.7, zl > 1 ? 1.7 : 2.2, c.aim), pit = c.pitch + c.recoil;
+  G.fp = !!(G.fpv && P.alive && !G.over && P.stance !== 'sword'); if (P.group) fpSetLayers(P, G.fp);
   const d = camDir(c.yaw, pit), rx = -Math.cos(c.yaw), rz = Math.sin(c.yaw);
   const px = P.x, py = P.dispY + 1.5 + (P.rollT > 0 ? -0.5 : 0), pz = P.z;
   const ox = px + rx * shoulder, oy = py, oz = pz + rz * shoulder;
+  if (G.fp) {
+    const ex = P.x + d.x * 0.1, ey = P.dispY + 1.62 + (P.rollT > 0 ? -0.55 : 0), ez = P.z + d.z * 0.1; c.shake = damp(c.shake, 0, 9, dt); const shk = c.shake * 0.02;
+    camera.position.set(ex + rnd(-shk, shk), ey + rnd(-shk, shk), ez + rnd(-shk, shk)); camera.rotation.order = 'YXZ'; camera.rotation.set(pit, c.yaw + Math.PI, 0); c.dist = 0.4; c.len = undefined;
+    fpFrame(P, dt, camera.position, c.yaw, pit);
+  } else { VM.grp.visible = false;
   let dx = -d.x * dist, dy = -d.y * dist + 0.25, dz = -d.z * dist; const L = Math.hypot(dx, dy, dz); dx /= L; dy /= L; dz /= L;
   const t = rayWorld(ox, oy, oz, dx, dy, dz, L + 0.4), cl0 = clamp(t - 0.4, 1.25, L);   // never closer than ~1.2 m: a lens right behind the soldier makes legs look huge
   c.len = c.len === undefined || cl0 < c.len ? cl0 : damp(c.len, cl0, 6, dt); const cl = c.len;
   c.dist = cl; c.shake = damp(c.shake, 0, 9, dt); const sh = c.shake * 0.05;
   camera.position.set(ox + dx * cl + rnd(-sh, sh), oy + dy * cl + rnd(-sh, sh), oz + dz * cl + rnd(-sh, sh));
-  camera.rotation.order = 'YXZ'; camera.rotation.set(pit - (dy < 0 ? 0 : 0), c.yaw + Math.PI, 0);
+  camera.rotation.order = 'YXZ'; camera.rotation.set(pit - (dy < 0 ? 0 : 0), c.yaw + Math.PI, 0); }
+  { const nr = G.fp ? 0.05 : 0.1; if (camera.near !== nr) { camera.near = nr; camera.updateProjectionMatrix(); } }
   const aspect = innerWidth / innerHeight, baseFov = aspect < 1 ? 80 : 70, zf = zl > 1 ? 0.3 : 0.55;
   const tf = lerp(baseFov, baseFov * zf, c.aim) + (P.inp.sprint && P.speed > 11 ? 7 : 0) + (P.rollT > 0 ? 6 : 0) + Math.min(10, c.shake * 6);
   c.fov = damp(c.fov, tf, 12, dt); if (Math.abs(camera.fov - c.fov) > 0.01) { camera.fov = c.fov; camera.updateProjectionMatrix(); }
