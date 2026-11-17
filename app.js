@@ -1,4 +1,4 @@
-// BUILD 2026-11-16 gun viewmodel anchored off-screen
+// BUILD 2026-11-17 war-torn town + tanks
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
@@ -8495,7 +8495,7 @@ function mountCompound(root, { exit }) {
   const F = gmFrame(root, gmDef("compound"), exit);
   F.stage.classList.add("gm-3d");
   const name = encodeURIComponent((state.me?.name || state.me?.username || "You").split(" ")[0]);
-  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=36&name=${name}`, allow: "fullscreen; autoplay", title: "Compound Clash" });
+  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=37&name=${name}`, allow: "fullscreen; autoplay", title: "Compound Clash" });
   F.stage.appendChild(frame);
   const onMsg = async (e) => {
     if (e.source !== frame.contentWindow) return;
@@ -8511,7 +8511,7 @@ function mountBoxing(root, { exit }) {
   const F = gmFrame(root, gmDef("boxing"), exit);
   F.stage.classList.add("gm-3d");
   const name = encodeURIComponent((state.me?.name || state.me?.username || "You").split(" ")[0]);
-  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=36&mode=box&name=${name}`, allow: "fullscreen; autoplay", title: "Boxing Arena" });
+  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=37&mode=box&name=${name}`, allow: "fullscreen; autoplay", title: "Boxing Arena" });
   F.stage.appendChild(frame);
   const onMsg = async (e) => {
     if (e.source !== frame.contentWindow) return;
