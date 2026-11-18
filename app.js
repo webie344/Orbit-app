@@ -1,4 +1,4 @@
-// BUILD 2026-11-17 war-torn town + tanks
+// BUILD 2026-11-18 get better world (life mode)
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
@@ -7905,6 +7905,11 @@ function _gbInit() {
 const _gmSvg = (inner) => `<svg viewBox="0 0 120 90">${inner}</svg>`;
 const GAMES = [
   {
+    id: "life", tips: ["Walk to an empty house and tap Use to claim it", "Decorate it, then invite friends over", "Call your car and cruise the town", "Chat, take photos and post them to the feed"], name: "Get Better World", tagline: "Your house, your car, your friends. A shared town to hang out in.", gline: "Claim a house, decorate it, drive, chat and visit other players.", fmt: (s) => `${Number(s).toLocaleString()} pts`,
+    art: () => _gmSvg('<rect width="120" height="90" fill="#7dc4ff"/><rect y="58" width="120" height="32" fill="#6db35a"/><rect y="66" width="120" height="14" fill="#4b5563"/><rect x="14" y="30" width="34" height="30" fill="#f4ead6"/><polygon points="10,32 31,14 52,32" fill="#8a3b2b"/><rect x="26" y="42" width="10" height="18" fill="#b23a3a"/><rect x="70" y="52" width="34" height="11" rx="5" fill="#e11d48"/><rect x="78" y="45" width="18" height="9" rx="4" fill="#fde047"/><circle cx="79" cy="64" r="4" fill="#111"/><circle cx="96" cy="64" r="4" fill="#111"/><circle cx="92" cy="18" r="9" fill="#fde047"/>'),
+    mount: (root, ctx) => mountLife(root, ctx),
+  },
+  {
     id: "bubble", tips: ["Drag to aim, release to shoot", "Match 3+ bubbles of one colour to pop them", "Tap the NEXT bubble to swap it"], name: "Bubble Pop", tagline: "Aim, shoot and pop the bubbles. 24 levels.", fmt: (s) => `${s}★`,
     art: () => '<svg viewBox="0 0 120 90"><defs><radialGradient id="gbp1" cx="35%" cy="30%"><stop offset="0" stop-color="#fff" stop-opacity=".9"/><stop offset=".25" stop-color="#fff" stop-opacity=".1"/></radialGradient></defs>' +
       [[20,18,"#ef4444"],[44,18,"#facc15"],[68,18,"#22c55e"],[92,18,"#3b82f6"],[32,40,"#3b82f6"],[56,40,"#ef4444"],[80,40,"#a855f7"],[44,62,"#22c55e"],[68,62,"#facc15"]]
@@ -8495,7 +8500,7 @@ function mountCompound(root, { exit }) {
   const F = gmFrame(root, gmDef("compound"), exit);
   F.stage.classList.add("gm-3d");
   const name = encodeURIComponent((state.me?.name || state.me?.username || "You").split(" ")[0]);
-  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=37&name=${name}`, allow: "fullscreen; autoplay", title: "Compound Clash" });
+  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=38&name=${name}`, allow: "fullscreen; autoplay", title: "Compound Clash" });
   F.stage.appendChild(frame);
   const onMsg = async (e) => {
     if (e.source !== frame.contentWindow) return;
@@ -8507,11 +8512,39 @@ function mountCompound(root, { exit }) {
   return () => { window.removeEventListener("message", onMsg); F.dispose(); };
 }
 
+function mountLife(root, { exit }) {
+  const F = gmFrame(root, gmDef("life"), exit);
+  F.stage.classList.add("gm-3d");
+  const name = encodeURIComponent((state.me?.name || state.me?.username || "You").split(" ")[0]);
+  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=38&mode=life&name=${name}`, allow: "fullscreen; autoplay", title: "Get Better World" });
+  F.stage.appendChild(frame);
+  const onMsg = async (e) => {
+    if (e.source !== frame.contentWindow) return;
+    const d = e.data || {};
+    if (d.type === "gb-game-exit") exit();
+    else if (d.type === "gb-life-photo" && typeof d.data === "string" && d.data.startsWith("data:image/")) {
+      try {
+        toast("Posting your photo…");
+        const blob = await (await fetch(d.data)).blob();
+        const file = new File([blob], "world.jpg", { type: "image/jpeg" });
+        const up = await uploadToCloudinary(file, "image");
+        const text = "📸 Hanging out in Get Better World #getbetterworld";
+        await addDoc(collection(db, "posts"), { authorUid: state.uid, kind: "voice", text, hashtags: extractHashtags(text),
+          cover: { url: up.url, fit: "4:5", fx: "none", ...(up.width ? { width: up.width } : {}), ...(up.height ? { height: up.height } : {}) },
+          orbits: [], orbitCount: 0, commentCount: 0, createdAt: serverTimestamp() });
+        toast("Posted to your feed 📸");
+      } catch (err) { toast("Couldn't post the photo"); }
+    }
+  };
+  window.addEventListener("message", onMsg);
+  return () => { window.removeEventListener("message", onMsg); F.dispose(); };
+}
+
 function mountBoxing(root, { exit }) {
   const F = gmFrame(root, gmDef("boxing"), exit);
   F.stage.classList.add("gm-3d");
   const name = encodeURIComponent((state.me?.name || state.me?.username || "You").split(" ")[0]);
-  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=37&mode=box&name=${name}`, allow: "fullscreen; autoplay", title: "Boxing Arena" });
+  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=38&mode=box&name=${name}`, allow: "fullscreen; autoplay", title: "Boxing Arena" });
   F.stage.appendChild(frame);
   const onMsg = async (e) => {
     if (e.source !== frame.contentWindow) return;
