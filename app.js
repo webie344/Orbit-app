@@ -1,4 +1,4 @@
-// BUILD 2026-11-18 get better world (life mode)
+// BUILD 2026-11-19 alien invasion
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
@@ -7910,6 +7910,11 @@ const GAMES = [
     mount: (root, ctx) => mountLife(root, ctx),
   },
   {
+    id: "alien", tips: ["Pick a gang (or go Lone Wolf) before you drop in", "Walk over guns, health and ammo to grab them", "Steal a rover, or fly a ship from a glowing pad to the next island", "Drones guard the Nova crash site"], name: "Alien Invasion", tagline: "The sky fell. Three islands, three gangs. Survive.", gline: "Loot guns, fight rival gangs, drive rovers and fly ships between islands.", fmt: (s) => `${Number(s).toLocaleString()} pts`,
+    art: () => _gmSvg('<rect width="120" height="90" fill="#e3b48c"/><circle cx="92" cy="22" r="10" fill="#fde68a"/><rect y="60" width="120" height="30" fill="#1b6c8a"/><ellipse cx="40" cy="62" rx="40" ry="9" fill="#d6c28c"/><ellipse cx="62" cy="24" rx="30" ry="7" fill="#3b4252"/><ellipse cx="62" cy="20" rx="12" ry="6" fill="#67e8f9"/><rect x="26" y="46" width="6" height="16" fill="#431407"/><circle cx="29" cy="42" r="6" fill="#c2410c"/><rect x="42" y="50" width="16" height="8" rx="3" fill="#8a8f98"/>'),
+    mount: (root, ctx) => mountAlien(root, ctx),
+  },
+  {
     id: "bubble", tips: ["Drag to aim, release to shoot", "Match 3+ bubbles of one colour to pop them", "Tap the NEXT bubble to swap it"], name: "Bubble Pop", tagline: "Aim, shoot and pop the bubbles. 24 levels.", fmt: (s) => `${s}★`,
     art: () => '<svg viewBox="0 0 120 90"><defs><radialGradient id="gbp1" cx="35%" cy="30%"><stop offset="0" stop-color="#fff" stop-opacity=".9"/><stop offset=".25" stop-color="#fff" stop-opacity=".1"/></radialGradient></defs>' +
       [[20,18,"#ef4444"],[44,18,"#facc15"],[68,18,"#22c55e"],[92,18,"#3b82f6"],[32,40,"#3b82f6"],[56,40,"#ef4444"],[80,40,"#a855f7"],[44,62,"#22c55e"],[68,62,"#facc15"]]
@@ -8500,7 +8505,7 @@ function mountCompound(root, { exit }) {
   const F = gmFrame(root, gmDef("compound"), exit);
   F.stage.classList.add("gm-3d");
   const name = encodeURIComponent((state.me?.name || state.me?.username || "You").split(" ")[0]);
-  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=38&name=${name}`, allow: "fullscreen; autoplay", title: "Compound Clash" });
+  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=39&name=${name}`, allow: "fullscreen; autoplay", title: "Compound Clash" });
   F.stage.appendChild(frame);
   const onMsg = async (e) => {
     if (e.source !== frame.contentWindow) return;
@@ -8512,11 +8517,22 @@ function mountCompound(root, { exit }) {
   return () => { window.removeEventListener("message", onMsg); F.dispose(); };
 }
 
+function mountAlien(root, { exit }) {
+  const F = gmFrame(root, gmDef("alien"), exit);
+  F.stage.classList.add("gm-3d");
+  const name = encodeURIComponent((state.me?.name || state.me?.username || "You").split(" ")[0]);
+  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=39&mode=alien&name=${name}`, allow: "fullscreen; autoplay", title: "Alien Invasion" });
+  F.stage.appendChild(frame);
+  const onMsg = (e) => { if (e.source === frame.contentWindow && (e.data || {}).type === "gb-game-exit") exit(); };
+  window.addEventListener("message", onMsg);
+  return () => { window.removeEventListener("message", onMsg); F.dispose(); };
+}
+
 function mountLife(root, { exit }) {
   const F = gmFrame(root, gmDef("life"), exit);
   F.stage.classList.add("gm-3d");
   const name = encodeURIComponent((state.me?.name || state.me?.username || "You").split(" ")[0]);
-  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=38&mode=life&name=${name}`, allow: "fullscreen; autoplay", title: "Get Better World" });
+  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=39&mode=life&name=${name}`, allow: "fullscreen; autoplay", title: "Get Better World" });
   F.stage.appendChild(frame);
   const onMsg = async (e) => {
     if (e.source !== frame.contentWindow) return;
@@ -8544,7 +8560,7 @@ function mountBoxing(root, { exit }) {
   const F = gmFrame(root, gmDef("boxing"), exit);
   F.stage.classList.add("gm-3d");
   const name = encodeURIComponent((state.me?.name || state.me?.username || "You").split(" ")[0]);
-  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=38&mode=box&name=${name}`, allow: "fullscreen; autoplay", title: "Boxing Arena" });
+  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=39&mode=box&name=${name}`, allow: "fullscreen; autoplay", title: "Boxing Arena" });
   F.stage.appendChild(frame);
   const onMsg = async (e) => {
     if (e.source !== frame.contentWindow) return;
