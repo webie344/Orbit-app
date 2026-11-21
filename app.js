@@ -1,4 +1,4 @@
-// BUILD 2026-11-19 alien invasion
+// BUILD 2026-11-21 v44 multi-media posts
 // =========================================================================
 // Get better — app.js
 // Firebase init + Auth + Cloudinary + Router + Feed + Groups +
@@ -17,7 +17,7 @@ import {
 import {
   getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, getDoc, getDocFromCache, updateDoc, addDoc, deleteDoc,
   collection, query, where, orderBy, limit, startAfter, onSnapshot, getDocs,
-  serverTimestamp, increment, arrayUnion, arrayRemove, writeBatch,
+  serverTimestamp, increment, arrayUnion, arrayRemove, writeBatch, deleteField,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 
 // =========================================================================
@@ -1002,8 +1002,8 @@ export const toast = (msg, ms = 2200) => {
 // =========================================================================
 const CHAR = {
   ink: "#1e1b4b",
-  colors: ["#8b5cf6", "#f472b6", "#fb923c", "#2dd4bf", "#fde047", "#60a5fa", "#34d399", "#f87171", "#a78bfa", "#94a3b8"],
-  bgs: ["#ede9fe", "#fce7f3", "#ffedd5", "#ccfbf1", "#fef9c3", "#dbeafe", "#dcfce7", "#e2e8f0"],
+  colors: ["#d2866a", "#f472b6", "#fb923c", "#2dd4bf", "#fde047", "#60a5fa", "#34d399", "#f87171", "#d38669", "#94a3b8"],
+  bgs: ["#f8f2ef", "#fce7f3", "#ffedd5", "#ccfbf1", "#fef9c3", "#dbeafe", "#dcfce7", "#e2e8f0"],
   eyes: { round: "Round", dots: "Dots", happy: "Happy", sleepy: "Sleepy", wink: "Wink", hearts: "Hearts" },
   mouth: { smile: "Smile", grin: "Grin", open: "Open", cat: "Cat", meh: "Calm" },
   acc: { none: "None", glasses: "Glasses", cap: "Cap", headphones: "Headphones", crown: "Crown", bow: "Bow", sprout: "Sprout",
@@ -1014,9 +1014,9 @@ const SPECIALS = [
   { id: "firstpost",    name: "Echo",   hint: "Make your first post",                 item: ["acc", "party"],   look: { color: "#2dd4bf", bg: "#fef9c3", eyes: "happy",  mouth: "grin",  acc: "party" } },
   { id: "firstcomment", name: "Chatty", hint: "Write your first reply",               item: ["acc", "bubble"],  look: { color: "#fb923c", bg: "#dbeafe", eyes: "round",  mouth: "open",  acc: "bubble" } },
   { id: "firstlike",    name: "Lovey",  hint: "Like your first post",                 item: ["eyes", "hearts"], look: { color: "#f472b6", bg: "#fce7f3", eyes: "hearts", mouth: "smile", acc: "bow" } },
-  { id: "likerun",      name: "Zap",    hint: "Like 10 posts in a row",               item: ["acc", "bolt"],    look: { color: "#fde047", bg: "#ede9fe", eyes: "dots",   mouth: "grin",  acc: "bolt" } },
+  { id: "likerun",      name: "Zap",    hint: "Like 10 posts in a row",               item: ["acc", "bolt"],    look: { color: "#fde047", bg: "#f8f2ef", eyes: "dots",   mouth: "grin",  acc: "bolt" } },
   { id: "week",         name: "Blaze",  hint: "Keep a 7-day streak",                  item: ["acc", "flame"],   look: { color: "#f87171", bg: "#ffedd5", eyes: "round",  mouth: "grin",  acc: "flame" } },
-  { id: "daily",        name: "Sage",   hint: "Answer the daily question",            item: ["acc", "wizard"],  look: { color: "#a78bfa", bg: "#dbeafe", eyes: "sleepy", mouth: "smile", acc: "wizard" } },
+  { id: "daily",        name: "Sage",   hint: "Answer the daily question",            item: ["acc", "wizard"],  look: { color: "#d38669", bg: "#dbeafe", eyes: "sleepy", mouth: "smile", acc: "wizard" } },
   { id: "react",        name: "Beat",   hint: "Send your first voice reaction",       item: ["acc", "mic"],     look: { color: "#60a5fa", bg: "#ccfbf1", eyes: "wink",   mouth: "open",  acc: "mic" } },
   { id: "video",        name: "Star",   hint: "Post your first video note",           item: ["acc", "shades"],  look: { color: "#94a3b8", bg: "#fef9c3", eyes: "dots",   mouth: "cat",   acc: "shades" } },
   { id: "story",        name: "Bard",   hint: "Write a post of 100+ words",           item: ["acc", "beret"],   look: { color: "#34d399", bg: "#fce7f3", eyes: "happy",  mouth: "smile", acc: "beret" } },
@@ -1054,11 +1054,11 @@ function characterSVG(c = {}, size = 100) {
     headphones: `<path d="M19 54 Q19 14 50 14 Q81 14 81 54" fill="none" stroke="${k}" stroke-width="4.5" stroke-linecap="round"/><rect x="13" y="47" width="10" height="20" rx="5" fill="#f472b6" stroke="${k}" stroke-width="3"/><rect x="77" y="47" width="10" height="20" rx="5" fill="#f472b6" stroke="${k}" stroke-width="3"/>`,
     crown: `<path d="M32 28 L35 11 L44 22 L50 8 L56 22 L65 11 L68 28 Z" fill="#fde047" stroke="${k}" stroke-width="2.8" stroke-linejoin="round"/>`,
     bow: `<path d="M64 22 L78 13 L78 31 Z M64 22 L50 13 L50 31 Z" fill="#f472b6" stroke="${k}" stroke-width="2.6" stroke-linejoin="round"/><circle cx="64" cy="22" r="4.5" fill="#ec4899" stroke="${k}" stroke-width="2.4"/>`,
-    party: `<path d="M37 29 L50 4 L63 29 Z" fill="#8b5cf6" stroke="${k}" stroke-width="2.8" stroke-linejoin="round"/><path d="M42 21 H58 M45 14 H55" stroke="#fde047" stroke-width="3"/><circle cx="50" cy="5" r="4.2" fill="#fde047" stroke="${k}" stroke-width="2"/>`,
+    party: `<path d="M37 29 L50 4 L63 29 Z" fill="#d2866a" stroke="${k}" stroke-width="2.8" stroke-linejoin="round"/><path d="M42 21 H58 M45 14 H55" stroke="#fde047" stroke-width="3"/><circle cx="50" cy="5" r="4.2" fill="#fde047" stroke="${k}" stroke-width="2"/>`,
     bubble: `<path d="M54 4 h30 a6 6 0 0 1 6 6 v11 a6 6 0 0 1 -6 6 h-16 l-8 8 v-8 h-6 a6 6 0 0 1 -6 -6 v-11 a6 6 0 0 1 6 -6z" fill="#fff" stroke="${k}" stroke-width="2.6" stroke-linejoin="round"/><circle cx="62" cy="16" r="2.2" fill="${k}"/><circle cx="70" cy="16" r="2.2" fill="${k}"/><circle cx="78" cy="16" r="2.2" fill="${k}"/>`,
     bolt: `<path d="M54 1 L38 21 H49 L44 35 L63 12 H52 Z" fill="#fde047" stroke="${k}" stroke-width="2.6" stroke-linejoin="round"/>`,
     flame: `<path d="M50 1 C57 13 68 15 63 29 C60 36 40 36 37 29 C32 17 45 15 50 1Z" fill="#fb923c" stroke="${k}" stroke-width="2.6" stroke-linejoin="round"/><path d="M50 15 C54 21 58 22 56 29 C54 33 46 33 44 29 C43 23 47 21 50 15Z" fill="#fde047"/>`,
-    wizard: `<path d="M30 33 L50 2 L70 33 Z" fill="#6d28d9" stroke="${k}" stroke-width="2.8" stroke-linejoin="round"/><ellipse cx="50" cy="33" rx="28" ry="6" fill="#5b21b6" stroke="${k}" stroke-width="2.8"/><circle cx="49" cy="20" r="2.4" fill="#fde047"/><circle cx="56" cy="27" r="1.8" fill="#fde047"/>`,
+    wizard: `<path d="M30 33 L50 2 L70 33 Z" fill="#ba7156" stroke="${k}" stroke-width="2.8" stroke-linejoin="round"/><ellipse cx="50" cy="33" rx="28" ry="6" fill="#98573f" stroke="${k}" stroke-width="2.8"/><circle cx="49" cy="20" r="2.4" fill="#fde047"/><circle cx="56" cy="27" r="1.8" fill="#fde047"/>`,
     mic: `<path d="M72 78 L84 90" stroke="${k}" stroke-width="3.5" stroke-linecap="round"/><rect x="62" y="58" width="14" height="20" rx="7" fill="#94a3b8" stroke="${k}" stroke-width="2.8"/><path d="M64 66 H74 M64 71 H74" stroke="${k}" stroke-width="1.8"/>`,
     shades: `<path d="M27 45 h19 v9 a7 7 0 0 1 -7 7 h-5 a7 7 0 0 1 -7 -7z M54 45 h19 v9 a7 7 0 0 1 -7 7 h-5 a7 7 0 0 1 -7 -7z" fill="${k}"/><path d="M46 47 h8" stroke="${k}" stroke-width="3"/><path d="M31 48 h6 M58 48 h6" stroke="#fff" stroke-width="2" opacity=".6" stroke-linecap="round"/>`,
     beret: `<ellipse cx="46" cy="27" rx="28" ry="11" transform="rotate(-8 46 27)" fill="#ef4444" stroke="${k}" stroke-width="3"/><circle cx="52" cy="14" r="3.4" fill="${k}"/>`,
@@ -1133,7 +1133,7 @@ function showUnlock(sp) {
   return new Promise((resolve) => {
     try { sfxPost(); } catch {}
     const confetti = el("div", { class: "gbu-confetti" });
-    const cols = ["#fde047", "#f472b6", "#8b5cf6", "#2dd4bf", "#fb923c", "#60a5fa"];
+    const cols = ["#fde047", "#f472b6", "#d2866a", "#2dd4bf", "#fb923c", "#60a5fa"];
     for (let i = 0; i < 44; i++) {
       const p = el("i", { style: `left:${Math.random() * 100}%;--dx:${(Math.random() - .5) * 160}px;--rot:${Math.round(Math.random() * 720 - 360)}deg;--dl:${(1.0 + Math.random() * .7).toFixed(2)}s;--du:${(2.2 + Math.random() * 1.6).toFixed(2)}s;background:${cols[i % cols.length]};width:${6 + Math.random() * 6}px;height:${8 + Math.random() * 8}px;border-radius:${Math.random() > .5 ? "50%" : "2px"}` });
       confetti.appendChild(p);
@@ -1471,7 +1471,7 @@ const GB_LOADER_SVG = `<svg class="gbl" viewBox="0 0 240 140" aria-hidden="true"
 <ellipse cx="0" cy="28" rx="20.8" ry="6" fill="#1e1b4b" opacity=".12" class="ob-shadow"/>
 <ellipse cx="-12" cy="24" rx="9" ry="6" fill="#1e1b4b"/><ellipse cx="12" cy="24" rx="9" ry="6" fill="#1e1b4b"/>
 
-<circle r="26" fill="#8b5cf6" stroke="#1e1b4b" stroke-width="3.5"/>
+<circle r="26" fill="#d2866a" stroke="#1e1b4b" stroke-width="3.5"/>
 <path d="M-22 -16 Q-14 -28 -2 -27" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" opacity=".55"/>
 <g class="ob-eyes" style="--d:0.0s"><ellipse cx="-12" cy="-6" rx="7" ry="9" fill="#fff" stroke="#1e1b4b" stroke-width="2.5"/><ellipse cx="12" cy="-6" rx="7" ry="9" fill="#fff" stroke="#1e1b4b" stroke-width="2.5"/>
 <circle cx="-10" cy="-4" r="3.6" fill="#1e1b4b"/><circle cx="14" cy="-4" r="3.6" fill="#1e1b4b"/></g>
@@ -1672,7 +1672,7 @@ const ensureUserDoc = async (user, extras = {}) => {
     // Welcome notification for new users
     await addDoc(collection(db, "notifications", user.uid, "items"), {
       type: "welcome",
-      text: `Welcome to Get better, ${profile.name.split(" ")[0]}! 👋 Explore groups, join spaces, and connect with people who share your interests.`,
+      text: `Welcome to Get better, ${profile.name.split(" ")[0]}! 👋 Explore communities, join spaces, and connect with people who share your interests.`,
       read: false,
       createdAt: serverTimestamp(),
     }).catch(() => {});
@@ -1941,7 +1941,7 @@ $("#notifBtn").addEventListener("click", () => { location.hash = "#notifications
 // 7. ROUTER
 // =========================================================================
 // "reels" removed — videos live in the feed as regular posts
-const routes = ["feed", "chats", "ai-chat", "groups", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn", "character", "prompt", "games", "bro"];
+const routes = ["feed", "chats", "ai-chat", "groups", "communities", "community", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn", "character", "prompt", "games", "bro"];
 
 // Feed DOM caching — lets us restore the feed instantly when navigating
 // back from a post without re-rendering or re-shuffling.
@@ -1955,7 +1955,7 @@ const router = () => {
   const target = routes.includes(route) ? route : "feed";
   const prevRoute = content._currentRoute;
 
-  $$(".nav-item, .bn").forEach((b) => b.classList.toggle("active", b.dataset.route === target));
+  $$(".nav-item, .bn").forEach((b) => b.classList.toggle("active", b.dataset.route === (target === "community" ? "communities" : target)));
 
   // Hide bottom nav in post detail, restore on all other routes
   const _bnEl = document.querySelector(".bottomnav");
@@ -2024,7 +2024,9 @@ const router = () => {
       }
       break;
     case "ai-chat":    renderAIChat(content); break;
-    case "groups":     renderGroups(content); break;
+    case "groups":     location.replace("#communities"); break;
+    case "communities": content._unsub = gb().renderCommunities(content); break;
+    case "community":  content._unsub = gb().renderCommunity(content, rest[0]); break;
     case "explore":    renderExplore(content, rest[0] === "tag" ? rest[1] : null); break;
     case "character":  renderCharacterPage(content); break;
     case "games":      content._unsub = renderGames(content, rest[0]); break;
@@ -3551,276 +3553,6 @@ const toggleSave = async (postId, shouldSave = null) => {
 // =========================================================================
 // 10. GROUPS
 // =========================================================================
-const renderGroups = (root) => {
-  const wrap = el("div", { class: "grp-wrap" });
-  root.appendChild(wrap);
-
-  // 1. Header ──────────────────────────────────────────────────────────────
-  const searchBox   = el("div", { class: "grp-search-box hidden" });
-  const searchInput = el("input", { type: "text", placeholder: "Search groups…" });
-  searchBox.appendChild(searchInput);
-
-  const searchIcon = el("span", { class: "grp-search" }, "🔍");
-  searchIcon.onclick = () => {
-    searchBox.classList.toggle("hidden");
-    if (!searchBox.classList.contains("hidden")) searchInput.focus();
-  };
-
-  wrap.appendChild(el("div", { class: "grp-header" },
-    el("span", { class: "grp-back", onclick: () => history.back() }, "←"),
-    el("h1", {}, "Groups"),
-    el("div", { style: "display:flex;align-items:center;gap:14px;" },
-      searchIcon,
-      el("button", { class: "grp-new-btn", onclick: () => openCompose("group") },
-        el("i", { class: "ri-add-line" }),
-      ),
-    ),
-  ));
-  wrap.appendChild(searchBox);
-
-  // 2. Filter tabs ──────────────────────────────────────────────────────────
-  const GRP_CATEGORIES = ["Tech", "Gaming", "Music", "Art", "Sports", "Lifestyle", "Business", "Education", "Food", "Travel", "Science"];
-  let allGroups     = [];
-  let activeFilter  = "all";
-  let activeCategory = null;
-
-  const listContainer = el("div", { class: "grp-list-container" });
-  const catChips      = el("div", { class: "grp-cat-chips hidden" });
-
-  const getFilteredGroups = (q = "") => {
-    let groups = allGroups;
-    const lq = q.trim().toLowerCase();
-    if (lq) groups = groups.filter((g) => (g.name || "").toLowerCase().includes(lq) || (g.description || "").toLowerCase().includes(lq));
-    switch (activeFilter) {
-      case "trending":  return groups.filter((g) => g.isTrending);
-      case "categories": return activeCategory ? groups.filter((g) => (g.category || "").toLowerCase() === activeCategory.toLowerCase()) : groups;
-      case "mygroups":  return groups.filter((g) => (g.members || []).includes(state.uid));
-      default:          return groups;
-    }
-  };
-
-  const buildGroupRow = (g) => {
-    const member = (g.members || []).includes(state.uid);
-    const canManage = (g.admins || []).includes(state.uid) || g.ownerUid === state.uid;
-    const icon = g.iconUrl
-      ? el("img", { class: "grp-icon", src: g.iconUrl })
-      : el("div", { class: "grp-icon grp-icon-letter" }, (g.name || "?")[0].toUpperCase());
-
-    const joinBtn = el("button", {
-      class: "grp-join-btn",
-      "data-group-id": g.id,
-      "data-joined": member ? "true" : "false",
-      style: member ? "opacity:0.55;" : "",
-    }, member ? "Joined" : "Join");
-
-    joinBtn.onclick = async () => {
-      const wasMember = (g.members || []).includes(state.uid);
-      const ref = doc(db, "groups", g.id);
-      const actionsDiv = joinBtn.parentElement;
-      if (wasMember) {
-        g.members = (g.members || []).filter((id) => id !== state.uid);
-        joinBtn.textContent = "Join";
-        joinBtn.dataset.joined = "false";
-        joinBtn.style.opacity = "";
-        actionsDiv.querySelector(".grp-open-btn")?.remove();
-        await updateDoc(ref, { members: arrayRemove(state.uid) }).catch(() => {});
-        toast("Left group");
-      } else {
-        g.members = [...(g.members || []), state.uid];
-        joinBtn.textContent = "Joined";
-        joinBtn.dataset.joined = "true";
-        joinBtn.style.opacity = "0.55";
-        if (!actionsDiv.querySelector(".grp-open-btn")) {
-          actionsDiv.appendChild(el("button", {
-            class: "grp-open-btn",
-            onclick: () => location.hash = `#chats/${g.id}`,
-          }, el("i", { class: "ri-chat-3-line" })));
-        }
-        await updateDoc(ref, { members: arrayUnion(state.uid) }).catch(() => {});
-        toast("Joined!");
-      }
-      countEl.textContent = `${g.members.length} member${g.members.length !== 1 ? "s" : ""}`;
-      if (activeFilter === "mygroups") renderGroupList();
-    };
-
-    const countEl = el("span", { class: "grp-members" }, `${(g.members || []).length} member${(g.members || []).length !== 1 ? "s" : ""}`);
-
-    const row = el("div", { class: "grp-row" },
-      icon,
-      el("div", { class: "grp-info" },
-        el("span", { class: "grp-name" }, g.name || "Unnamed group"),
-        countEl,
-        g.about ? el("span", { class: "grp-desc" }, g.about.slice(0, 80)) : null,
-        g.groupLink ? el("a", {
-          class: "grp-link",
-          href: g.groupLink,
-          target: "_blank",
-          rel: "noopener noreferrer",
-          onclick: (e) => e.stopPropagation(),
-        }, el("i", { class: "ri-link" }), " Group link") : null,
-      ),
-      el("div", { class: "grp-row-actions" },
-        joinBtn,
-        canManage ? el("button", {
-          class: "grp-open-btn",
-          title: "Manage group",
-          onclick: () => openGroupAdmin(g.id),
-        }, el("i", { class: "ri-admin-line" })) : null,
-        (g.members || []).includes(state.uid)
-          ? el("button", { class: "grp-open-btn", onclick: () => location.hash = `#chats/${g.id}` },
-              el("i", { class: "ri-chat-3-line" })) : null,
-      ),
-    );
-    return row;
-  };
-
-  const renderGroupList = () => {
-    const q = searchInput.value;
-    const groups = getFilteredGroups(q);
-    listContainer.innerHTML = "";
-    if (!groups.length) {
-      listContainer.appendChild(el("div", { class: "grp-empty-state" },
-        el("i", { class: "ri-group-2-line" }),
-        el("div", {}, activeFilter === "mygroups" ? "You haven't joined any groups yet." : "No groups here yet."),
-      ));
-      return;
-    }
-
-    // If "All" or non-category filter: Popular Right Now + New & Growing split
-    if (activeFilter === "all" || activeFilter === "trending") {
-      const sorted = [...groups].sort((a, b) => (b.members?.length || 0) - (a.members?.length || 0));
-      const popular = sorted.slice(0, Math.ceil(sorted.length / 2));
-      const growing = sorted.slice(Math.ceil(sorted.length / 2));
-
-      if (popular.length) {
-        listContainer.appendChild(el("div", { class: "grp-section-header" },
-          el("h3", {}, activeFilter === "trending" ? "Trending Groups 🔥" : "Popular Right Now"),
-          el("span", { class: "grp-see-all" }, "See all"),
-        ));
-        popular.forEach((g) => listContainer.appendChild(buildGroupRow(g)));
-      }
-      if (growing.length && activeFilter !== "trending") {
-        listContainer.appendChild(el("div", { class: "grp-section-header", style: "margin-top:8px;" },
-          el("h3", {}, "New & Growing"),
-          el("span", { class: "grp-see-all" }, "See all"),
-        ));
-        growing.forEach((g) => listContainer.appendChild(buildGroupRow(g)));
-      }
-    } else {
-      // My Groups / Categories: flat list
-      const header = activeFilter === "mygroups" ? "My Groups"
-        : activeCategory ? `#${activeCategory}` : "All Categories";
-      listContainer.appendChild(el("div", { class: "grp-section-header" },
-        el("h3", {}, header),
-      ));
-      groups.forEach((g) => listContainer.appendChild(buildGroupRow(g)));
-    }
-  };
-
-  // Tab row
-  const tabDefs = [
-    { label: "All",        filter: "all" },
-    { label: "Trending",   filter: "trending" },
-    { label: "Categories", filter: "categories" },
-    { label: "My Groups",  filter: "mygroups" },
-  ];
-  const tabEls = tabDefs.map(({ label, filter }) => {
-    const tab = el("button", { class: "grp-tab" + (filter === "all" ? " active" : ""), "data-filter": filter }, label);
-    tab.onclick = () => {
-      tabEls.forEach((t) => t.classList.remove("active"));
-      tab.classList.add("active");
-      activeFilter = filter;
-      activeCategory = null;
-      if (filter === "categories") {
-        catChips.classList.remove("hidden");
-      } else {
-        catChips.classList.add("hidden");
-      }
-      renderGroupList();
-    };
-    return tab;
-  });
-  const tabRow = el("div", { class: "grp-tabs" });
-  tabEls.forEach((t) => tabRow.appendChild(t));
-  wrap.appendChild(tabRow);
-
-  // Category chips (shown when "Categories" tab is active)
-  GRP_CATEGORIES.forEach((cat) => {
-    const chip = el("span", { class: "grp-cat-chip" }, cat);
-    chip.onclick = () => {
-      catChips.querySelectorAll(".grp-cat-chip").forEach((c) => c.classList.remove("active"));
-      chip.classList.add("active");
-      activeCategory = cat;
-      renderGroupList();
-    };
-    catChips.appendChild(chip);
-  });
-  wrap.appendChild(catChips);
-
-  // Search input wires to live-filter
-  let _sd = null;
-  searchInput.addEventListener("input", () => { clearTimeout(_sd); _sd = setTimeout(renderGroupList, 180); });
-
-  // 3. Hero banner ──────────────────────────────────────────────────────────
-  const heroAvatarGrid = el("div", { class: "grp-hero-avatars" });
-  const hero = el("div", { class: "grp-hero" },
-    el("div", { class: "grp-hero-text" },
-      el("h2", {}, "Find your people.\nJoin the conversation."),
-      el("p", {}, "Thousands of communities around everything you love."),
-    ),
-    heroAvatarGrid,
-  );
-  wrap.appendChild(hero);
-
-  // Pull 4 real user avatars for hero
-  getDocs(query(collection(db, "users"), limit(8))).then((snap) => {
-    snap.docs.slice(0, 4).forEach((d) => {
-      const u = { uid: d.id, ...d.data() };
-      heroAvatarGrid.appendChild(el("img", { src: avatarFor(u), alt: u.name || "user" }));
-    });
-  }).catch(() => {});
-
-  // 4 & 5. Group list ───────────────────────────────────────────────────────
-  wrap.appendChild(listContainer);
-
-  // Skeleton while loading
-  for (let i = 0; i < 5; i++) {
-    listContainer.appendChild(el("div", { class: "grp-row grp-skel-row" },
-      el("div", { class: "grp-skel-icon" }),
-      el("div", { class: "grp-skel-info" },
-        el("div", { class: "grp-skel-line w60" }),
-        el("div", { class: "grp-skel-line w40" }),
-      ),
-      el("div", { class: "grp-skel-btn" }),
-    ));
-  }
-
-  // Firestore: one-time fetch (groups don't need real-time for this page)
-  getDocs(query(collection(db, "groups"), orderBy("createdAt", "desc"), limit(80)))
-    .then((snap) => {
-      listContainer.innerHTML = "";
-      allGroups = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      // Compute isTrending: top-third by member count
-      const sorted = [...allGroups].sort((a, b) => (b.members?.length || 0) - (a.members?.length || 0));
-      const trendCutoff = sorted[Math.floor(sorted.length / 3)]?.members?.length || 1;
-      allGroups.forEach((g) => { g.isTrending = (g.members?.length || 0) >= trendCutoff; });
-      renderGroupList();
-    })
-    .catch(() => {
-      listContainer.innerHTML = "";
-      listContainer.appendChild(el("div", { class: "grp-empty-state" },
-        el("i", { class: "ri-wifi-off-line" }),
-        el("div", {}, "Could not load groups. Check your connection."),
-      ));
-    });
-
-  // FAB — create new group
-  const fab = el("button", { class: "grp-fab", onclick: () => openCompose("group") },
-    el("i", { class: "ri-add-line" }),
-  );
-  wrap.appendChild(fab);
-};
-
 // =========================================================================
 // 11. EXPLORE / SAVED
 // =========================================================================
@@ -3852,7 +3584,7 @@ const renderExplore = (root, hashtagFilter = null) => {
     } }, label);
     pills.appendChild(b);
   });
-  col.append(head, pills, list);
+  col.append(head, ...(hashtagFilter ? [] : [gb().buildTrendingRail()]), pills, list);
   root.appendChild(col);
   const q = hashtagFilter
     ? query(collection(db, "posts"), where("hashtags", "array-contains", hashtagFilter.toLowerCase()), limit(80))
@@ -4923,7 +4655,7 @@ $("#groupForm").addEventListener("submit", async (e) => {
 // Music search uses the Internet Archive's public catalog — no API key,
 // signup, or billing required (see crSearchMusic below).
 const CR_STICKERS = ["🔥","❤️","⭐","👍","🎉","😂","💯","✨","🙌","😍","👏","🥳","😎","💜","🎶","⚡"];
-const CR_TEXT_COLORS = ["#ffffff","#000000","#ff5c7a","#ffb04a","#3fdca0","#5cd3ff","#8b6cff","#ff5cae"];
+const CR_TEXT_COLORS = ["#ffffff","#000000","#ff5c7a","#ffb04a","#3fdca0","#5cd3ff","#d88464","#ff5cae"];
 
 let crState = null;
 const _crFreshState = () => ({
@@ -5662,12 +5394,12 @@ const renderInlineGroupSuggestion = () => {
   const scroller = el("div", { class: "feed-sugg-scroller" });
   const card = el("div", { class: "feed-suggestion-card" },
     el("div", { class: "feed-sugg-head" },
-      el("span", {}, el("i", { class: "ri-group-2-line" }), " Groups you might like"),
-      el("span", { class: "feed-sugg-see-all", onclick: () => location.hash = "#groups" }, "See all")
+      el("span", {}, el("i", { class: "ri-group-2-line" }), " Communities you might like"),
+      el("span", { class: "feed-sugg-see-all", onclick: () => location.hash = "#communities" }, "See all")
     ),
     scroller
   );
-  getDocs(query(collection(db, "groups"), orderBy("createdAt", "desc"), limit(24))).then((snap) => {
+  getDocs(query(collection(db, "communities"), orderBy("createdAt", "desc"), limit(24))).then((snap) => {
     if (snap.empty) { card.remove(); return; }
     const _all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     for (let i = _all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [_all[i], _all[j]] = [_all[j], _all[i]]; }
@@ -5676,12 +5408,8 @@ const renderInlineGroupSuggestion = () => {
       const btn = el("button", {
         class: `btn sm ${member ? "ghost" : "primary"}`,
         onclick: async () => {
-          const ref = doc(db, "groups", g.id);
-          if (member) {
-            await updateDoc(ref, { members: arrayRemove(state.uid) });
-          } else {
-            await updateDoc(ref, { members: arrayUnion(state.uid) });
-          }
+          const ref = doc(db, "communities", g.id);
+          await updateDoc(ref, { members: member ? arrayRemove(state.uid) : arrayUnion(state.uid), memberCount: increment(member ? -1 : 1) });
           member = !member;
           btn.textContent = member ? "Joined" : "Join";
           btn.className = `btn sm ${member ? "ghost" : "primary"}`;
@@ -5689,7 +5417,7 @@ const renderInlineGroupSuggestion = () => {
       }, member ? "Joined" : "Join");
       scroller.appendChild(el("div", { class: "feed-sugg-group" },
         el("div", { class: "feed-sugg-group-cover" }, (g.name || "?")[0].toUpperCase()),
-        el("div", { class: "feed-sugg-name" }, g.name),
+        el("div", { class: "feed-sugg-name" }, `g/${g.slug || g.id}`),
         el("div", { class: "feed-sugg-meta" }, `${(g.members || []).length} member${(g.members || []).length !== 1 ? "s" : ""}`),
         btn
       ));
@@ -5797,7 +5525,7 @@ const showOnboardingGuide = () => {
       const load = async () => {
         const source = step === 1
           ? await getDocs(query(collection(db, "users"), orderBy("createdAt", "desc"), limit(6)))
-          : await getDocs(query(collection(db, "groups"), orderBy("createdAt", "desc"), limit(6)));
+          : await getDocs(query(collection(db, "communities"), orderBy("createdAt", "desc"), limit(6)));
         list.innerHTML = "";
         source.docs.forEach((d) => {
           const item = { id: d.id, ...d.data() };
@@ -5810,7 +5538,7 @@ const showOnboardingGuide = () => {
               await updateDoc(doc(db, "users", state.uid), { following: selected ? arrayUnion(item.id) : arrayRemove(item.id) });
               state.me.following = selected ? [...new Set([...(state.me.following || []), item.id])] : (state.me.following || []).filter((id) => id !== item.id);
             } else {
-              await updateDoc(doc(db, "groups", item.id), { members: selected ? arrayUnion(state.uid) : arrayRemove(state.uid) });
+              await updateDoc(doc(db, "communities", item.id), { members: selected ? arrayUnion(state.uid) : arrayRemove(state.uid), memberCount: increment(selected ? 1 : -1) });
             }
             button.textContent = selected ? "Selected" : "Select";
             button.classList.toggle("selected", selected);
@@ -5917,10 +5645,10 @@ const showOnboardingModal = () => {
   // ── Groups section ──────────────────────────────────────────────────────
   const groupList = el("div", { class: "onboard-section-list" });
   modal.appendChild(el("div", { class: "onboard-section" },
-    el("div", { class: "onboard-section-title" }, el("i", { class: "ri-group-2-line" }), " Groups to join"),
+    el("div", { class: "onboard-section-title" }, el("i", { class: "ri-group-2-line" }), " Communities to join"),
     groupList
   ));
-  getDocs(query(collection(db, "groups"), orderBy("createdAt", "desc"), limit(4))).then((snap) => {
+  getDocs(query(collection(db, "communities"), orderBy("createdAt", "desc"), limit(4))).then((snap) => {
     if (snap.empty) return;
     snap.docs.forEach((d) => {
       const g = { id: d.id, ...d.data() };
@@ -5928,12 +5656,8 @@ const showOnboardingModal = () => {
       const btn = el("button", {
         class: "btn sm primary",
         onclick: async () => {
-          const ref = doc(db, "groups", g.id);
-          if (member) {
-            await updateDoc(ref, { members: arrayRemove(state.uid) });
-          } else {
-            await updateDoc(ref, { members: arrayUnion(state.uid) });
-          }
+          const ref = doc(db, "communities", g.id);
+          await updateDoc(ref, { members: member ? arrayRemove(state.uid) : arrayUnion(state.uid), memberCount: increment(member ? -1 : 1) });
           member = !member;
           btn.textContent = member ? "✓ Joined" : "Join";
           btn.className = `btn sm ${member ? "ghost" : "primary"}`;
@@ -5942,7 +5666,7 @@ const showOnboardingModal = () => {
       groupList.appendChild(el("div", { class: "onboard-row" },
         el("div", { class: "onboard-group-icon" }, (g.name || "?")[0].toUpperCase()),
         el("div", { class: "onboard-row-meta" },
-          el("div", { class: "onboard-row-name" }, g.name),
+          el("div", { class: "onboard-row-name" }, `g/${g.slug || g.id}`),
           el("div", { class: "onboard-row-sub" }, `${(g.members || []).length} members`)
         ),
         btn
@@ -6764,12 +6488,13 @@ function _gbInit() {
     input.addEventListener("input", grow);
     const mic = el("button", { class: "gb-icon-btn gb-mic", type: "button", title: "Record a voice note" }, el("i", { class: "ri-mic-fill" }));
     const send = el("button", { class: "gb-send hidden", type: "button", title: "Send" }, el("i", { class: "ri-send-plane-fill" }));
-    const imgBtn = allowImage ? el("button", { class: "gb-icon-btn", type: "button", title: "Add a cover image" }, el("i", { class: "ri-image-add-line" })) : null;
-    const fileIn = allowImage ? el("input", { type: "file", accept: "image/*", class: "hidden" }) : null;
-    const vidBtn = allowVideo ? el("button", { class: "gb-icon-btn", type: "button", title: "Add a video note" }, el("i", { class: "ri-video-add-line" })) : null;
-    const vidIn = allowVideo ? el("input", { type: "file", accept: "video/*", class: "hidden" }) : null;
+    const imgBtn = allowImage ? el("button", { class: "gb-icon-btn", type: "button", title: "Add photos" }, el("i", { class: "ri-image-add-line" })) : null;
+    const fileIn = allowImage ? el("input", { type: "file", accept: "image/*", multiple: true, class: "hidden" }) : null;
+    const vidBtn = allowVideo ? el("button", { class: "gb-icon-btn", type: "button", title: "Add videos" }, el("i", { class: "ri-video-add-line" })) : null;
+    const vidIn = allowVideo ? el("input", { type: "file", accept: "video/*", multiple: true, class: "hidden" }) : null;
     const attach = el("div", { class: "gb-attach hidden" });
-    let image = null, imageUrl = null, imageEdit = null, video = null, videoEdit = null, videoUrl = null, promptCtx = null;
+    const MAX_MEDIA = 10, MAX_VIDEOS = 4;
+    let items = [], promptCtx = null;   // items: { kind, file, url, edit }
     const extras = [];
     if (imgBtn) extras.push(imgBtn, fileIn);
     if (vidBtn) extras.push(vidBtn, vidIn);
@@ -6783,73 +6508,68 @@ function _gbInit() {
     let session = null, timer = null, onClear = null;
     const setBusy = (b) => root.classList.toggle("busy", b);
     const syncButtons = () => {
-      const has = input.value.trim().length > 0 || !!video;
+      const has = input.value.trim().length > 0 || items.length > 0;
       send.classList.toggle("hidden", !has);
       mic.classList.toggle("hidden", has);
     };
     input.addEventListener("input", syncButtons);
 
-    const clearImage = () => {
-      image = null; imageEdit = null; if (imageUrl) URL.revokeObjectURL(imageUrl); imageUrl = null;
-      if (video) return;
-      attach.classList.add("hidden"); attach.innerHTML = ""; if (fileIn) fileIn.value = "";
-    };
-    const clearVideo = () => {
-      video = null; videoEdit = null; if (videoUrl) URL.revokeObjectURL(videoUrl); videoUrl = null;
-      attach.classList.add("hidden"); attach.innerHTML = ""; if (vidIn) vidIn.value = ""; syncButtons();
-    };
-    const showAttach = (kind) => {
+    const dropItems = () => { items.forEach((it) => URL.revokeObjectURL(it.url)); items = []; };
+    const showAttach = () => {
       attach.innerHTML = "";
-      const thumb = kind === "video"
-        ? el("video", { src: videoUrl + "#t=" + ((videoEdit?.poster ?? videoEdit?.start ?? 0) + 0.1), muted: "", playsinline: "", preload: "metadata" })
-        : el("img", { src: imageUrl, alt: "", style: FX[imageEdit?.fx]?.css ? `filter:${FX[imageEdit.fx].css}` : "" });
-      const label = kind === "video"
-        ? `Video note · ${fmtDur((videoEdit.end || 0) - (videoEdit.start || 0))}${videoEdit.muted ? " · muted" : ""}`
-        : "Cover image · write something to go over it";
-      const editBtn = el("button", { class: "gb-icon-btn sm", type: "button", title: "Edit" , onclick: async () => {
-        const e = await openStudio({ kind, file: kind === "video" ? video : image, edit: kind === "video" ? videoEdit : imageEdit });
-        if (!e) return;
-        if (kind === "video") videoEdit = e; else imageEdit = e;
-        showAttach(kind);
-      } }, el("i", { class: "ri-scissors-2-line" }));
-      const x = el("button", { class: "gb-icon-btn sm", type: "button", title: "Remove", onclick: kind === "video" ? clearVideo : () => { clearImage(); attach.classList.add("hidden"); attach.innerHTML = ""; if (fileIn) fileIn.value = ""; } }, el("i", { class: "ri-close-line" }));
-      attach.append(thumb, el("span", { class: "gb-attach-t" }, label), editBtn, x);
-      attach.classList.remove("hidden");
+      if (!items.length) { attach.classList.add("hidden"); syncButtons(); return; }
+      attach.classList.remove("hidden"); attach.classList.add("multi");
+      const strip = el("div", { class: "gb-th-strip" });
+      items.forEach((it, i) => {
+        const thumb = it.kind === "video"
+          ? el("video", { src: it.url + "#t=" + ((it.edit?.poster ?? it.edit?.start ?? 0) + 0.1), muted: "", playsinline: "", preload: "metadata" })
+          : el("img", { src: it.url, alt: "", style: FX[it.edit?.fx]?.css ? `filter:${FX[it.edit.fx].css}` : "" });
+        const edit = el("button", { class: "gb-th-b e", type: "button", title: "Edit", onclick: async () => {
+          const e = await openStudio({ kind: it.kind, file: it.file, edit: it.edit });
+          if (e) { it.edit = e; showAttach(); }
+        } }, el("i", { class: "ri-scissors-2-line" }));
+        const x = el("button", { class: "gb-th-b x", type: "button", title: "Remove", onclick: () => { URL.revokeObjectURL(it.url); items.splice(i, 1); showAttach(); } }, el("i", { class: "ri-close-line" }));
+        strip.appendChild(el("div", { class: "gb-th" }, thumb, it.kind === "video" ? el("i", { class: "ri-play-circle-fill gb-th-play" }) : null, edit, x));
+      });
+      if (items.length < MAX_MEDIA) strip.appendChild(el("button", { class: "gb-th add", type: "button", title: "Add more", onclick: () => (fileIn || vidIn).click() }, el("i", { class: "ri-add-line" })));
+      attach.append(strip, el("span", { class: "gb-attach-t" }, `${items.length} of ${MAX_MEDIA} · swipe through them in the post`));
+      syncButtons();
     };
     const pick = (inp, kind) => async () => {
-      const f = inp.files?.[0]; inp.value = "";
-      if (!f) return;
-      if (kind === "image") {
-        if (!f.type.startsWith("image/")) { toast("Please choose an image"); return; }
-        if (f.size > 10 * 1024 * 1024) { toast("Image is too large (max 10 MB)"); return; }
-      } else {
-        if (!f.type.startsWith("video/")) { toast("Please choose a video"); return; }
-        if (f.size > 100 * 1024 * 1024) { toast("Video is too large (max 100 MB)"); return; }
+      const files = [...(inp.files || [])]; inp.value = "";
+      if (!files.length) return;
+      let added = 0;
+      for (const f of files) {
+        if (items.length >= MAX_MEDIA) { toast(`Up to ${MAX_MEDIA} photos or videos per post`); break; }
+        if (kind === "image") {
+          if (!f.type.startsWith("image/")) { toast("Please choose an image"); continue; }
+          if (f.size > 10 * 1024 * 1024) { toast("An image is too large (max 10 MB)"); continue; }
+        } else {
+          if (!f.type.startsWith("video/")) { toast("Please choose a video"); continue; }
+          if (f.size > 100 * 1024 * 1024) { toast("A video is too large (max 100 MB)"); continue; }
+          if (items.filter((x) => x.kind === "video").length >= MAX_VIDEOS) { toast(`Up to ${MAX_VIDEOS} videos per post`); break; }
+        }
+        let e;
+        if (files.length === 1) { e = await openStudio({ kind, file: f }); if (!e) continue; }
+        else e = kind === "video" ? { start: 0, end: 0, muted: false, fit: "4:5", poster: 0 } : { fit: "4:5", fx: "none" };
+        items.push({ kind, file: f, edit: e, url: URL.createObjectURL(f) }); added++;
       }
-      const e = await openStudio({ kind, file: f });
-      if (!e) return;
-      if (kind === "image") {
-        clearVideo(); image = f; imageEdit = e; if (imageUrl) URL.revokeObjectURL(imageUrl); imageUrl = URL.createObjectURL(f);
-      } else {
-        clearImage(); video = f; videoEdit = e; if (videoUrl) URL.revokeObjectURL(videoUrl); videoUrl = URL.createObjectURL(f);
-      }
-      showAttach(kind); syncButtons(); input.focus();
+      if (added) { showAttach(); input.focus(); }
     };
     if (imgBtn) { imgBtn.addEventListener("click", () => fileIn.click()); fileIn.addEventListener("change", pick(fileIn, "image")); }
     if (vidBtn) { vidBtn.addEventListener("click", () => vidIn.click()); vidIn.addEventListener("change", pick(vidIn, "video")); }
 
     const sendText = async () => {
       const text = input.value.trim();
-      if ((!text && !video) || root.classList.contains("busy")) return;
+      if ((!text && !items.length) || root.classList.contains("busy")) return;
       setBusy(true);
       const label = attach.querySelector(".gb-attach-t");
       const progress = (f) => { if (label) label.textContent = `Uploading ${Math.round(f * 100)}%…`; };
       try {
-        await onSend({ text, voice: null, image, imageEdit, video, videoEdit, progress, prompt: promptCtx }); root.setPrompt(null);
-        input.value = ""; grow(); image = null; imageEdit = null; if (imageUrl) URL.revokeObjectURL(imageUrl); imageUrl = null;
-        clearVideo(); attach.classList.add("hidden"); attach.innerHTML = ""; syncButtons();
+        await onSend({ text, voice: null, media: items.map((it) => ({ kind: it.kind, file: it.file, edit: it.edit })), progress, prompt: promptCtx }); root.setPrompt(null);
+        input.value = ""; grow(); dropItems(); attach.classList.add("hidden"); attach.innerHTML = ""; syncButtons();
       }
-      catch (err) { toast("Couldn't send: " + (err.message || "try again")); if (video) showAttach("video"); }
+      catch (err) { toast("Couldn't send: " + (err.message || "try again")); showAttach(); }
       finally { setBusy(false); }
     };
     send.addEventListener("click", sendText);
@@ -6916,55 +6636,64 @@ function _gbInit() {
       input.focus();
     };
     root.focusInput = () => input.focus();
-    root.dispose = () => { clearImage(); if (videoUrl) URL.revokeObjectURL(videoUrl); clearInterval(timer); session?.cancel(); session = null; };
+    root.dispose = () => { dropItems(); clearInterval(timer); session?.cancel(); session = null; };
     return root;
   };
 
   // -------------------------------------------------------------------------
-  // SERVER RAIL — joined groups, Discord-style
+  // SERVER RAIL — joined communities
   // -------------------------------------------------------------------------
   const buildRail = () => {
     const groupsBox = el("div", { class: "gb-rail-groups" });
-    const add = el("button", { class: "gb-srv gb-add", type: "button", title: "Find or create groups", onclick: () => { location.hash = "#groups"; } },
+    const add = el("button", { class: "gb-srv gb-add", type: "button", title: "Find or create communities", onclick: () => { location.hash = "#communities"; } },
       el("i", { class: "ri-add-line" }));
-    const rail = el("nav", { class: "gb-rail", "aria-label": "Your groups" }, groupsBox, add);
-
-    getDocs(query(collection(db, "groups"), where("members", "array-contains", state.uid), limit(40)))
-      .then((snap) => {
-        const gs = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
-          .sort((a, b) => (b.lastMessageAt?.seconds || 0) - (a.lastMessageAt?.seconds || 0));
-        gs.forEach((g) => {
-          const icon = g.iconUrl || g.photoURL;
-          groupsBox.appendChild(el("button", {
-            class: "gb-srv", type: "button", title: g.name || "Group",
-            onclick: () => { location.hash = `#chats/${g.id}`; },
-          }, icon ? el("img", { src: icon, alt: g.name || "" }) : el("span", {}, (g.name || "?").trim().slice(0, 2).toUpperCase())));
-        });
-      }).catch(() => {});
+    const rail = el("nav", { class: "gb-rail", "aria-label": "Your communities" }, groupsBox, add);
+    myComms().then((cs) => {
+      cs.forEach((g) => {
+        groupsBox.appendChild(el("button", {
+          class: "gb-srv", type: "button", title: `g/${g.slug || g.id}`,
+          onclick: () => { location.hash = `#community/${encodeURIComponent(g.id)}`; },
+        }, g.iconUrl ? el("img", { src: optImg(g.iconUrl, 120), alt: g.name || "" }) : el("span", {}, (g.slug || g.id || "?").slice(0, 2).toUpperCase())));
+      });
+    });
     return rail;
   };
 
   // -------------------------------------------------------------------------
   // POST CREATION / COMMENT CREATION
   // -------------------------------------------------------------------------
-  const createPost = async ({ text, voice, image, imageEdit, video, videoEdit, progress, prompt }) => {
+  const createPost = async ({ text, voice, media = [], progress, prompt }) => {
     const data = { authorUid: state.uid, kind: "voice", text: text || "", hashtags: extractHashtags(text || "") };
     if (voice) data.audio = await uploadVoice(voice);
-    if (image && text) {
-      const up = await uploadXHR(image, "image", progress);
-      data.cover = { url: up.url, fit: imageEdit?.fit || "4:5", fx: imageEdit?.fx || "none", ...(up.width ? { width: up.width } : {}), ...(up.height ? { height: up.height } : {}) };
-    }
     if (prompt?.day) data.prompt = { day: prompt.day, q: prompt.q };
-    if (video) {
-      const up = await uploadXHR(video, "video", progress);
-      const e = videoEdit || {};
-      const dur = up.duration || e.duration || 0;
-      data.video = { url: up.url, publicId: up.publicId, duration: Math.round(dur * 10) / 10,
-        start: e.start || 0, end: Math.min(e.end || dur, dur) || dur, muted: !!e.muted, fit: e.fit || "4:5",
-        poster: e.poster ?? e.start ?? 0, width: up.width || e.width || 0, height: up.height || e.height || 0 };
+    const gallery = [];
+    for (let i = 0; i < media.length; i++) {
+      const m = media[i], e = m.edit || {};
+      const up = await uploadXHR(m.file, m.kind, (f) => progress?.((i + f) / media.length));
+      if (m.kind === "image") {
+        gallery.push({ type: "image", url: up.url, fit: e.fit || "4:5", fx: e.fx || "none", ...(up.width ? { width: up.width } : {}), ...(up.height ? { height: up.height } : {}) });
+      } else {
+        const dur = up.duration || e.duration || 0;
+        gallery.push({ type: "video", url: up.url, publicId: up.publicId, duration: Math.round(dur * 10) / 10,
+          start: e.start || 0, end: Math.min(e.end || dur, dur) || dur, muted: !!e.muted, fit: e.fit || "4:5",
+          poster: e.poster ?? e.start ?? 0, width: up.width || e.width || 0, height: up.height || e.height || 0 });
+      }
     }
+    if (gallery.length) {
+      data.gallery = gallery;   // swipe order
+      const firstImg = gallery.find((g) => g.type === "image"), firstVid = gallery.find((g) => g.type === "video");
+      if (firstImg) { const { type, ...c } = firstImg; data.cover = c; }
+      if (firstVid) { const { type, ...v } = firstVid; data.video = v; }
+    }
+    const video = gallery.some((g) => g.type === "video");
+    const target = _postTarget;
+    if (target) Object.assign(data, { communityId: target.id, communitySlug: target.slug || target.id, communityName: target.name || target.slug || target.id });
     Object.assign(data, { orbits: [], orbitCount: 0, commentCount: 0, createdAt: serverTimestamp() });
     const ref = await addDoc(collection(db, "posts"), data);
+    if (target) {
+      updateDoc(doc(db, "communities", target.id), { postCount: increment(1), lastPostAt: serverTimestamp() }).catch(() => {});
+      if (!_targetLocked) { _postTarget = null; repaintChips(); }
+    }
     sfxPost();
     toast("Posted");
     trackAction("post", { video: !!video, prompt: !!prompt, words: (text || "").trim().split(/\s+/).filter(Boolean).length });
@@ -7221,7 +6950,7 @@ function _gbInit() {
   // VIDEO NOTE — rounded frame, muted autoplay in view, tap to pause, sound toggle, seek bar
   // -------------------------------------------------------------------------
   let _soundVid = null;
-  const buildVideoNote = (v, ctx = null) => {
+  const buildVideoNote = (v, ctx = null, openAll = null) => {
     const ar = arOf(v.fit || "4:5", v.width, v.height);
     const vid = el("video", { playsinline: "", loop: "", preload: "metadata", poster: vidPoster(v) });
     vid.muted = true; vid.src = vidSrc(v);
@@ -7251,6 +6980,7 @@ function _gbInit() {
       if (ctx && !e.target.closest(".gb-vid-prog,.gb-vid-play")) {
         try { vid.pause(); } catch {} vid._manual = false;
         const _tx = v.url.includes("/video/upload/") ? [`so_${(v.start || 0).toFixed(1)}`, v.end ? `eo_${v.end.toFixed(1)}` : null, "vc_h264", "q_auto"].filter(Boolean).join(",") : "";
+        if (openAll) { openAll(); return; }
         openVideoViewer([{ type: "video", url: _tx ? v.url.replace("/video/upload/", `/video/upload/${_tx}/`).replace(/\.\w+$/, ".mp4") : v.url }], 0, ctx); return;
       }
       if (e.target.closest(".gb-vid-prog")) {
@@ -7378,7 +7108,7 @@ function _gbInit() {
     };
     if (detail || p.vreactCount > 0) load().catch(() => {});
 
-    const btn = el("button", { class: "gb-act", type: "button", title: "React with your voice" }, el("i", { class: "ri-mic-line" }), el("span", {}, "React"));
+    const btn = el("button", { class: "gb-act", type: "button", title: "React with your voice" }, el("i", { class: "ri-mic-line" }), el("span", {}, "Voice"));
     let session = null, timer = null;
     const close = () => { clearInterval(timer); session?.cancel?.(); session = null; rec.classList.add("hidden"); rec.innerHTML = ""; btn.classList.remove("on"); };
     btn.addEventListener("click", async (e) => {
@@ -7472,32 +7202,123 @@ function _gbInit() {
     return wrap;
   };
 
+  // -------------------------------------------------------------------------
+  // DROP-STYLE POST CARD — header / swipe media / actions / reactions / caption
+  // -------------------------------------------------------------------------
+  const EMOJI = [["fire", "🔥"], ["love", "❤️"], ["lol", "😂"], ["wow", "😮"], ["clap", "👏"]];
+
+  const vidViewerUrl = (v) => {
+    if (!v.url.includes("/video/upload/")) return v.url;
+    const tx = [`so_${(v.start || 0).toFixed(1)}`, v.end ? `eo_${v.end.toFixed(1)}` : null, "vc_h264", "q_auto"].filter(Boolean).join(",");
+    return v.url.replace("/video/upload/", `/video/upload/${tx}/`).replace(/\.\w+$/, ".mp4");
+  };
+
+  // Horizontal swipe carousel: image cover and video note are slides of the same strip.
+  const buildMedia = (p, ctx) => {
+    const items = [];
+    const src = p.gallery?.length ? p.gallery : [p.cover?.url ? { type: "image", ...p.cover } : null, p.video?.url ? { type: "video", ...p.video } : null].filter(Boolean);
+    src.forEach((g) => {
+      if (g.type === "image") items.push({ type: "image", src: coverUrl(g, 1000), full: coverUrl(g, 1800, { crop: false }), ar: arOf(g.fit || "4:5", g.width, g.height) });
+      else items.push({ type: "video", v: g, ar: arOf(g.fit || "4:5", g.width, g.height) });
+    });
+    if (!items.length) return null;
+    const viewerItems = items.map((it) => it.type === "video" ? { type: "video", url: vidViewerUrl(it.v) } : { type: "image", url: it.full });
+    const openAt = (i) => {
+      if (items.length === 1 && items[0].type === "image") openImageZoom(items[0].full, ctx);
+      else openVideoViewer(viewerItems, i, ctx);
+    };
+    const track = el("div", { class: "dp-track" });
+    items.forEach((it, i) => {
+      track.appendChild(el("div", { class: "dp-slide" }, it.type === "image"
+        ? el("img", { src: it.src, alt: "", loading: "lazy", draggable: "false", onclick: (e) => { e.stopPropagation(); openAt(i); } })
+        : buildVideoNote(it.v, ctx, () => openAt(i))));
+    });
+    const wrap = el("div", { class: `dp-media${items.length > 1 ? " multi" : ""}`, style: `aspect-ratio:${items[0].ar}` }, track);
+    if (items.length > 1) {
+      const counter = el("div", { class: "dp-counter" }, `1/${items.length}`);
+      const dots = items.map((_, i) => el("span", { class: `dp-dot${i ? "" : " active"}` }));
+      const idxNow = () => Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
+      track.addEventListener("scroll", () => {
+        const i = Math.min(items.length - 1, Math.max(0, idxNow()));
+        counter.textContent = `${i + 1}/${items.length}`;
+        dots.forEach((d, k) => d.classList.toggle("active", k === i));
+        prev.classList.toggle("hidden", i === 0); next.classList.toggle("hidden", i === items.length - 1);
+      }, { passive: true });
+      const go = (d) => (e) => { e.stopPropagation(); track.scrollTo({ left: (idxNow() + d) * track.clientWidth, behavior: "smooth" }); };
+      const prev = el("button", { class: "dp-arrow l hidden", type: "button", "aria-label": "Previous", onclick: go(-1) }, el("i", { class: "ri-arrow-left-s-line" }));
+      const next = el("button", { class: "dp-arrow r", type: "button", "aria-label": "Next", onclick: go(1) }, el("i", { class: "ri-arrow-right-s-line" }));
+      wrap.append(counter, el("div", { class: "dp-dots" }, ...dots), prev, next);
+    }
+    return wrap;
+  };
+
+  // Emoji reaction chips + picker (Drop). Voice reactions stay in buildReactions().
+  const buildEmoji = (p, author) => {
+    let my = (p.userReactions || {})[state.uid] || null;
+    const counts = { ...(p.reactions || {}) };
+    const row = el("div", { class: "dp-reacts" });
+    const showPop = (anchor) => {
+      document.getElementById("dp-pop")?.remove();
+      const pop = el("div", { class: "dp-pop", id: "dp-pop" }, ...EMOJI.map(([k, e]) =>
+        el("button", { type: "button", onclick: (ev) => { ev.stopPropagation(); pop.remove(); toggle(k); } }, e)));
+      document.body.appendChild(pop);
+      const r = anchor.getBoundingClientRect();
+      pop.style.top = Math.max(8, r.top - pop.offsetHeight - 8) + "px";
+      pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 8)) + "px";
+      setTimeout(() => document.addEventListener("click", () => pop.remove(), { once: true }), 0);
+    };
+    const draw = () => {
+      row.innerHTML = "";
+      EMOJI.forEach(([k, e]) => {
+        const c = Math.max(0, counts[k] || 0);
+        if (!c && my !== k) return;
+        row.appendChild(el("button", { class: `dp-chip${my === k ? " active" : ""}`, type: "button", onclick: (ev) => { ev.stopPropagation(); toggle(k); } },
+          el("span", { class: "emoji" }, e), c ? el("span", { class: "count" }, String(c)) : null));
+      });
+      const pick = el("button", { class: "dp-picker", type: "button", "aria-label": "Add reaction" }, el("span", {}, "😊"), el("span", { class: "plus" }, "+"));
+      pick.addEventListener("click", (ev) => { ev.stopPropagation(); showPop(pick); });
+      row.appendChild(pick);
+    };
+    const toggle = (k) => {
+      const prevKey = my, upd = {};
+      if (prevKey === k) {
+        counts[k] = Math.max(0, (counts[k] || 0) - 1); my = null;
+        upd[`reactions.${k}`] = increment(-1); upd[`userReactions.${state.uid}`] = deleteField();
+      } else {
+        if (prevKey) { counts[prevKey] = Math.max(0, (counts[prevKey] || 0) - 1); upd[`reactions.${prevKey}`] = increment(-1); }
+        counts[k] = (counts[k] || 0) + 1; my = k;
+        upd[`reactions.${k}`] = increment(1); upd[`userReactions.${state.uid}`] = k;
+        sfxOrbit(); trackAction("react");
+        if (author?.uid && author.uid !== state.uid && !prevKey) {
+          writeNotif(author.uid, "orbit", { postId: p.id, text: `${state.me?.name || "Someone"} reacted ${EMOJI.find((x) => x[0] === k)[1]} to your post` }).catch(() => {});
+        }
+      }
+      draw();
+      updateDoc(doc(db, "posts", p.id), upd).catch(() => toast("Couldn't save reaction"));
+    };
+    draw();
+    return row;
+  };
+
   const renderVoicePost = (p, author, { detail = false } = {}) => {
     const mine = p.authorUid === state.uid;
     let liked = (p.orbits || []).includes(state.uid);
     const _vctx = {};   // used by the full-screen media viewer (Like / Comment / React)
-    const post = el("article", { class: `gb-post${detail ? " detail" : ""}`, data: { postId: p.id } });
-    const hasThread = !detail && (p.commentCount || 0) > 0;
+    const post = el("article", { class: `gb-post dp-card${detail ? " detail" : ""}`, data: { postId: p.id } });
+    const openPost = () => { location.hash = `#post/${p.id}`; };
 
-    const avline = hasThread ? el("div", { class: "gb-avline" }) : null;
-    const avcol = el("div", { class: "gb-avcol" },
-      el("img", { class: "gb-av", src: avatarFor(author), alt: "", onclick: () => goProfile(author?.uid) }), avline);
-
-    // tools (copy link / delete)
-    const tools = el("div", { class: "gb-tools" },
-      el("button", { class: "gb-icon-btn sm", type: "button", title: "Copy link", onclick: async (e) => {
-        e.stopPropagation();
-        try { await navigator.clipboard.writeText(postPublicUrl(p.id)); toast("Link copied"); }
-        catch { window.prompt("Copy this link:", postPublicUrl(p.id)); }
-      } }, el("i", { class: "ri-link" })),
-      mine ? el("button", { class: "gb-icon-btn sm danger", type: "button", title: "Delete", onclick: async (e) => {
+    // header: avatar · name  g/community · @user · time · tools
+    const commSlug = p.communitySlug || p.communityId;
+    const comm = p.communityId ? el("a", { class: "dp-comm", href: `#community/${encodeURIComponent(p.communityId)}`, onclick: (e) => e.stopPropagation() }, `g/${commSlug}`) : null;
+    const tools = el("div", { class: "dp-tools" },
+      mine ? el("button", { class: "dp-ibtn danger", type: "button", title: "Delete", onclick: async (e) => {
         e.stopPropagation();
         if (!confirm("Delete this post for everyone?")) return;
         await deleteDoc(doc(db, "posts", p.id)).catch(() => {});
         toast("Post deleted");
         if (detail) location.hash = "#feed"; else post.remove();
       } }, el("i", { class: "ri-delete-bin-line" })) : null,
-      !mine && !detail ? el("button", { class: "gb-icon-btn sm", type: "button", title: "Hide this post", onclick: async (e) => {
+      !mine && !detail ? el("button", { class: "dp-ibtn", type: "button", title: "Hide this post", onclick: async (e) => {
         e.stopPropagation();
         await updateDoc(doc(db, "users", state.uid), { hiddenPosts: arrayUnion(p.id) }).catch(() => {});
         state.me.hiddenPosts = [...new Set([...(state.me.hiddenPosts || []), p.id])];
@@ -7505,19 +7326,30 @@ function _gbInit() {
         toast("You won't see this again");
       } }, el("i", { class: "ri-eye-off-line" })) : null,
     );
+    const head = el("header", { class: "dp-head" },
+      el("img", { class: "dp-av", src: avatarFor(author), alt: "", onclick: (e) => { e.stopPropagation(); goProfile(author?.uid); } }),
+      el("div", { class: "dp-head-t" },
+        el("div", { class: "dp-un-line" },
+          el("span", { class: "dp-un", onclick: (e) => { e.stopPropagation(); goProfile(author?.uid); } },
+            author?.name || "User",
+            author?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null),
+          comm),
+        el("span", { class: "dp-time" }, `@${author?.username || "user"} · ${when(p.createdAt)}`)),
+      tools);
 
     // actions
     const likeIcon = el("i", { class: liked ? "ri-heart-3-fill" : "ri-heart-3-line" });
-    const likeCount = el("span", {}, p.orbitCount ? String(p.orbitCount) : "");
-    const likeBtn = el("button", { class: `gb-act${liked ? " on" : ""}`, type: "button", title: "Like" }, likeIcon, likeCount);
+    const likeCount = el("span", { class: "dp-count" }, String(p.orbitCount || 0));
+    const likeBtn = el("button", { class: `dp-act${liked ? " liked" : ""}`, type: "button", title: "Like" }, likeIcon, likeCount);
     likeBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
       liked = !liked;
       if (liked) sfxOrbit();
       likeIcon.className = liked ? "ri-heart-3-fill" : "ri-heart-3-line";
-      likeBtn.classList.toggle("on", liked);
+      likeBtn.classList.toggle("liked", liked);
+      likeBtn.classList.remove("pulse"); void likeBtn.offsetWidth; if (liked) likeBtn.classList.add("pulse");
       p.orbitCount = Math.max(0, (p.orbitCount || 0) + (liked ? 1 : -1));
-      likeCount.textContent = p.orbitCount ? String(p.orbitCount) : "";
+      likeCount.textContent = String(p.orbitCount);
       trackAction("like", { on: liked });
       await updateDoc(doc(db, "posts", p.id), {
         orbits: liked ? arrayUnion(state.uid) : arrayRemove(state.uid),
@@ -7527,61 +7359,289 @@ function _gbInit() {
         writeNotif(author.uid, "orbit", { postId: p.id, text: `${state.me?.name || "Someone"} liked your post` }).catch(() => {});
       }
     });
-    const replyBtn = el("button", { class: "gb-act", type: "button", title: "Replies", onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; } },
-      el("i", { class: "ri-chat-1-line" }), el("span", {}, p.commentCount ? String(p.commentCount) : ""));
+    const commentBtn = el("button", { class: "dp-act", type: "button", title: "Comments", onclick: (e) => { e.stopPropagation(); if (!detail) openPost(); else document.querySelector(".gb-composer textarea")?.focus(); } },
+      el("i", { class: "ri-chat-1-line" }), el("span", { class: "dp-count" }, String(p.commentCount || 0)));
+    const shareBtn = el("button", { class: "dp-act", type: "button", title: "Share", onclick: async (e) => {
+      e.stopPropagation();
+      const url = postPublicUrl(p.id);
+      try { if (navigator.share) { await navigator.share({ url, text: (p.text || "").slice(0, 100) }); return; } } catch { return; }
+      try { await navigator.clipboard.writeText(url); toast("Link copied"); } catch { window.prompt("Copy this link:", url); }
+    } }, el("i", { class: "ri-share-forward-line" }));
     const vr = buildReactions(p, author, detail);
-    const actions = el("div", { class: "gb-actions" }, likeBtn, replyBtn, vr.btn);
+    vr.btn.className = "dp-act voice";
+    const actions = el("div", { class: "dp-actions" }, likeBtn, commentBtn, shareBtn, vr.btn);
     Object.assign(_vctx, {
       likeIcons: ["ri-heart-3-fill", "ri-heart-3-line"],
       isLiked: () => liked,
       likeCount: () => p.orbitCount || 0,
       like: () => likeBtn.click(),
       commentCount: () => p.commentCount || 0,
-      comment: () => { if (!detail) location.hash = `#post/${p.id}`; },
+      comment: () => { if (!detail) openPost(); },
       react: () => vr.btn.click(),
+      share: () => shareBtn.click(),
     });
 
-    const main = el("div", { class: "gb-main" },
-      el("div", { class: "gb-headrow" }, nameLine(author, p.createdAt, detail), tools),
-      p.prompt?.q ? el("a", { class: "gb-ptag", href: `#prompt/${p.prompt.day}`, onclick: (e) => e.stopPropagation() }, el("i", { class: "ri-chat-quote-line" }), ` ${p.prompt.q}`) : null,
-      p.cover?.url && p.text ? buildCover(p, detail, _vctx) : (p.text ? longText(p, detail) : null),
-      p.audio?.url ? buildVoicePlayer(p.audio) : null,
-      p.video?.url ? buildVideoNote(p.video, _vctx) : null,
-      actions, vr.rec, vr.row,
-    );
-    post.append(avcol, main);
-    if (!detail) main.addEventListener("click", (e) => { if (!e.target.closest("button,a,.gb-voice,.gb-vid,.gb-cover")) location.hash = `#post/${p.id}`; });
-
-    // thread preview (last 3 replies) with connector lines
-    if (hasThread) {
-      const box = el("div", { class: "gb-replies" });
-      post.appendChild(box);
-      getDocs(query(collection(db, "posts", p.id, "comments"), orderBy("createdAt", "desc"), limit(2)))
-        .then(async (snap) => {
-          const cs = snap.docs.map((d) => ({ id: d.id, ...d.data() })).reverse();
-          if (!cs.length) { avline?.remove(); return; }
-          const users = await Promise.all([...new Set(cs.map((c) => c.authorUid))].map(fetchUser));
-          const map = Object.fromEntries(users.filter(Boolean).map((u) => [u.uid, u]));
-          cs.forEach((c) => {
-            const u = map[c.authorUid];
-            box.appendChild(el("div", { class: "gb-reply", onclick: (e) => { if (!e.target.closest("button,a,.gb-voice")) location.hash = `#post/${p.id}`; } },
-              el("img", { class: "gb-av sm", src: avatarFor(u), alt: "", onclick: (e) => { e.stopPropagation(); goProfile(u?.uid); } }),
-              el("div", { class: "gb-rmain" },
-                el("div", { class: "gb-line" },
-                  el("span", { class: "gb-name sm" }, u?.name || "User"),
-                  el("span", { class: "gb-sub" }, when(c.createdAt))),
-                c.text ? el("div", { class: "gb-text sm" }, c.text) : null,
-                c.audio?.url ? buildVoicePlayer(c.audio, { compact: true }) : null,
-              )));
-          });
-          const more = (p.commentCount || 0) - cs.length;
-          if (more > 0) {
-            box.appendChild(el("div", { class: "gb-reply gb-more", onclick: () => { location.hash = `#post/${p.id}`; } },
-              el("span", {}, `View ${more} more ${more === 1 ? "reply" : "replies"}`)));
-          }
-        }).catch(() => {});
+    // body
+    const hasMedia = !!(p.gallery?.length || p.cover?.url || p.video?.url);
+    const media = hasMedia ? buildMedia(p, _vctx) : null;
+    let bodyText = null, caption = null;
+    if (p.text && !hasMedia) bodyText = longText(p, detail);
+    if (p.text && hasMedia) {
+      const txt = el("span", { class: `dp-cap-text allow-select${detail ? "" : " clamp"}`, html: linkify(p.text) });
+      caption = el("p", { class: "dp-caption" }, el("b", { class: "dp-cap-un", onclick: (e) => { e.stopPropagation(); goProfile(author?.uid); } }, author?.name || "User"), " ", txt);
+      if (!detail && (p.text.length > 120 || p.text.includes("\n"))) {
+        const more = el("button", { class: "dp-more", type: "button", onclick: (e) => { e.stopPropagation(); const on = txt.classList.toggle("clamp"); more.textContent = on ? "more" : "less"; } }, "more");
+        caption.append(" ", more);
+      }
     }
+    const stats = detail ? el("div", { class: "dp-stats" },
+      el("span", {}, el("strong", {}, String(p.orbitCount || 0)), " likes"),
+      el("span", {}, el("strong", {}, String(p.commentCount || 0)), " comments"),
+      p.vreactCount ? el("span", {}, el("strong", {}, String(p.vreactCount)), " voice reactions") : null) : null;
+
+    post.append(...[
+      head,
+      p.prompt?.q ? el("a", { class: "gb-ptag dp-ptag", href: `#prompt/${p.prompt.day}`, onclick: (e) => e.stopPropagation() }, el("i", { class: "ri-chat-quote-line" }), ` ${p.prompt.q}`) : null,
+      bodyText ? el("div", { class: "dp-body" }, bodyText) : null,
+      media,
+      p.audio?.url ? el("div", { class: "dp-voice" }, buildVoicePlayer(p.audio)) : null,
+      actions, vr.rec, buildEmoji(p, author), vr.row,
+      caption,
+      stats,
+      !detail && (p.commentCount || 0) > 0 ? el("button", { class: "dp-viewall", type: "button", onclick: (e) => { e.stopPropagation(); openPost(); } },
+        `View all ${p.commentCount} comment${p.commentCount === 1 ? "" : "s"}`) : el("div", { class: "dp-pad" }),
+    ].filter(Boolean));
+    if (!detail) post.addEventListener("click", (e) => { if (!e.target.closest("button,a,.gb-voice,.dp-media,.dp-reacts,.gb-vr,.gb-vr-rec,input,textarea")) openPost(); });
     return post;
+  };
+
+  // -------------------------------------------------------------------------
+  // COMMUNITIES (Reddit-style) — replaces Groups. Doc id = lowercase slug.
+  //   communities/{slug}: { name, slug, description, iconUrl, createdBy, members[], memberCount, postCount, createdAt, lastPostAt }
+  //   posts get: communityId, communitySlug, communityName
+  // -------------------------------------------------------------------------
+  let _postTarget = null, _targetLocked = false, _myComms = null;
+  const _chips = new Set();
+  const repaintChips = () => _chips.forEach((f) => f());
+  const slugify = (s) => (s || "").toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 21);
+  const commHue = (s) => { let h = 0; for (const c of s || "x") h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+  const isMember = (c) => (c.members || []).includes(state.uid);
+  const trendScore = (c) => {
+    const ageD = c.lastPostAt?.seconds ? (Date.now() / 1000 - c.lastPostAt.seconds) / 86400 : 99;
+    return (c.memberCount || 0) + (c.postCount || 0) * 2 + Math.max(0, 7 - ageD) * 5;
+  };
+  const commIcon = (c, size = 44) => c.iconUrl
+    ? el("img", { class: "cm-ico", src: optImg(c.iconUrl, 160), alt: "", style: `width:${size}px;height:${size}px` })
+    : el("span", { class: "cm-ico ph", style: `width:${size}px;height:${size}px;font-size:${Math.round(size * 0.42)}px;background:linear-gradient(135deg,hsl(${commHue(c.slug || c.id)} 75% 52%),hsl(${(commHue(c.slug || c.id) + 40) % 360} 75% 42%))` }, (c.name || c.slug || "?").slice(0, 1).toUpperCase());
+  const myComms = () => _myComms || (_myComms = getDocs(query(collection(db, "communities"), where("members", "array-contains", state.uid), limit(60)))
+    .then((s) => s.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (b.lastPostAt?.seconds || 0) - (a.lastPostAt?.seconds || 0)))
+    .catch(() => { _myComms = null; return []; }));
+
+  const toggleJoin = async (c, btn) => {
+    const was = isMember(c);
+    c.members = was ? (c.members || []).filter((u) => u !== state.uid) : [...(c.members || []), state.uid];
+    c.memberCount = Math.max(0, (c.memberCount || 0) + (was ? -1 : 1));
+    const paint = () => { btn.textContent = isMember(c) ? "Joined" : "Join"; btn.classList.toggle("joined", isMember(c)); };
+    paint(); _myComms = null;
+    try {
+      await updateDoc(doc(db, "communities", c.id), { members: was ? arrayRemove(state.uid) : arrayUnion(state.uid), memberCount: increment(was ? -1 : 1) });
+      if (!was) trackAction("join");
+    } catch {
+      c.members = was ? [...(c.members || []), state.uid] : (c.members || []).filter((u) => u !== state.uid);
+      c.memberCount = Math.max(0, (c.memberCount || 0) + (was ? 1 : -1)); paint(); toast("Couldn't update. Try again.");
+    }
+    return isMember(c);
+  };
+  const joinBtn = (c, onChange) => {
+    const b = el("button", { class: `cm-join${isMember(c) ? " joined" : ""}`, type: "button" }, isMember(c) ? "Joined" : "Join");
+    b.addEventListener("click", async (e) => { e.stopPropagation(); b.disabled = true; const now = await toggleJoin(c, b); b.disabled = false; onChange?.(now); });
+    return b;
+  };
+
+  // "Posting to" chip that lives in the composer
+  const openSheet = (title, bodyNode) => {
+    const close = () => ov.remove();
+    const ov = el("div", { class: "cm-ov", onclick: (e) => { if (e.target === ov) close(); } },
+      el("div", { class: "cm-sheet" }, el("div", { class: "cm-sheet-h" }, el("strong", {}, title), el("button", { class: "dp-ibtn", type: "button", onclick: close }, el("i", { class: "ri-close-line" }))), bodyNode));
+    document.body.appendChild(ov);
+    return close;
+  };
+  const buildTargetChip = () => {
+    const label = el("span", {}, "Everyone");
+    const chip = el("button", { class: "cm-target", type: "button", title: "Choose where to post" }, el("i", { class: "ri-group-2-line" }), label, el("i", { class: "ri-arrow-down-s-line" }));
+    const paint = () => {
+      label.textContent = _postTarget ? `g/${_postTarget.slug || _postTarget.id}` : "Everyone";
+      chip.classList.toggle("on", !!_postTarget);
+      chip.disabled = _targetLocked;
+      chip.classList.toggle("locked", _targetLocked);
+    };
+    _chips.add(() => { if (chip.isConnected) paint(); });
+    chip.addEventListener("click", async () => {
+      const box = el("div", { class: "cm-pick" });
+      const close = openSheet("Post to", box);
+      const row = (c) => el("button", { class: "cm-pick-row", type: "button", onclick: () => { _postTarget = c; paint(); close(); } },
+        c ? commIcon(c, 34) : el("span", { class: "cm-ico ph all", style: "width:34px;height:34px" }, el("i", { class: "ri-earth-line" })),
+        el("span", {}, c ? `g/${c.slug || c.id}` : "Everyone", el("small", {}, c ? `${c.memberCount || 0} members` : "No community, just your followers")));
+      box.appendChild(row(null));
+      (await myComms()).forEach((c) => box.appendChild(row(c)));
+      box.appendChild(el("a", { class: "cm-pick-find", href: "#communities", onclick: close }, el("i", { class: "ri-compass-3-line" }), " Find or create communities"));
+    });
+    paint();
+    return chip;
+  };
+
+  // Create dialog
+  const openCreateCommunity = () => {
+    const name = el("input", { type: "text", maxlength: "21", placeholder: "community_name", autocomplete: "off", autocapitalize: "off" });
+    const about = el("textarea", { rows: "3", maxlength: "200", placeholder: "What is this community about?" });
+    const file = el("input", { type: "file", accept: "image/*", class: "hidden" });
+    const prev = el("button", { class: "cm-pickicon", type: "button" }, el("i", { class: "ri-image-add-line" }));
+    let iconFile = null;
+    prev.onclick = () => file.click();
+    file.onchange = () => { iconFile = file.files[0] || null; if (iconFile) { prev.innerHTML = ""; prev.appendChild(el("img", { src: URL.createObjectURL(iconFile), alt: "" })); } };
+    const err = el("div", { class: "cm-err" });
+    const go = el("button", { class: "cm-primary", type: "submit" }, "Create community");
+    const form = el("form", { class: "cm-form" },
+      el("div", { class: "cm-form-top" }, prev, file, el("div", { class: "cm-nameWrap" }, el("span", {}, "g/"), name)),
+      about, err, go);
+    const close = openSheet("Create a community", form);
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault(); err.textContent = "";
+      const slug = slugify(name.value);
+      if (slug.length < 3) { err.textContent = "Name needs at least 3 letters, numbers or underscores."; return; }
+      go.disabled = true; go.textContent = "Creating…";
+      try {
+        const ref = doc(db, "communities", slug);
+        if ((await getDoc(ref)).exists()) { err.textContent = `g/${slug} is already taken.`; go.disabled = false; go.textContent = "Create community"; return; }
+        let iconUrl = "";
+        if (iconFile) { try { iconUrl = (await uploadToCloudinary(iconFile, "image")).url; } catch { /* icon is optional */ } }
+        await setDoc(ref, { name: slug, slug, description: about.value.trim(), iconUrl, createdBy: state.uid, members: [state.uid], memberCount: 1, postCount: 0, createdAt: serverTimestamp(), lastPostAt: null });
+        _myComms = null; trackAction("community"); toast(`g/${slug} created`); close();
+        location.hash = `#community/${encodeURIComponent(slug)}`;
+      } catch (ex) { err.textContent = "Couldn't create it: " + (ex.message || "try again"); go.disabled = false; go.textContent = "Create community"; }
+    });
+    setTimeout(() => name.focus(), 50);
+  };
+
+  const commRow = (c) => el("div", { class: "cm-row", onclick: () => { location.hash = `#community/${encodeURIComponent(c.id)}`; } },
+    commIcon(c, 46),
+    el("div", { class: "cm-row-t" },
+      el("strong", {}, `g/${c.slug || c.id}`),
+      el("small", {}, `${c.memberCount || 0} member${c.memberCount === 1 ? "" : "s"} · ${c.postCount || 0} post${c.postCount === 1 ? "" : "s"}`),
+      c.description ? el("p", {}, c.description) : null),
+    joinBtn(c));
+
+  const renderCommunities = (root) => {
+    const col = el("div", { class: "gb-col gb-page" });
+    const head = el("div", { class: "gb-head" }, el("i", { class: "ri-group-2-fill gb-head-ic" }),
+      el("div", { class: "gb-head-t" }, el("strong", {}, "Communities")),
+      el("button", { class: "cm-create", type: "button", onclick: openCreateCommunity }, el("i", { class: "ri-add-line" }), " Create"));
+    const search = el("input", { class: "cm-search", type: "search", placeholder: "Search communities", autocomplete: "off" });
+    const pills = el("div", { class: "gb-pills" });
+    const list = el("div", { class: "cm-list" }, el("div", { class: "gb-empty small" }, gbLoader("", true)));
+    let all = [], tab = "trending";
+    const draw = () => {
+      const q = search.value.trim().toLowerCase().replace(/^g\//, "");
+      let rows = all.filter((c) => !q || (c.slug || c.id).includes(q) || (c.description || "").toLowerCase().includes(q));
+      if (tab === "joined") rows = rows.filter(isMember);
+      if (tab === "trending") rows = [...rows].sort((a, b) => trendScore(b) - trendScore(a));
+      if (tab === "new") rows = [...rows].sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      list.innerHTML = "";
+      if (!rows.length) {
+        list.appendChild(el("div", { class: "gb-empty" }, el("i", { class: "ri-group-2-line" }),
+          el("div", { class: "t" }, tab === "joined" ? "You haven't joined any communities" : "No communities yet"),
+          el("div", {}, "Start one — it takes ten seconds."),
+          el("button", { class: "cm-primary", type: "button", onclick: openCreateCommunity }, "Create a community")));
+        return;
+      }
+      rows.forEach((c) => list.appendChild(commRow(c)));
+    };
+    [["trending", "🔥 Trending"], ["joined", "Joined"], ["new", "New"]].forEach(([k, label]) => {
+      const b = el("button", { class: `gb-pill${k === tab ? " on" : ""}`, type: "button", onclick: () => { tab = k; [...pills.children].forEach((x) => x.classList.toggle("on", x === b)); draw(); } }, label);
+      pills.appendChild(b);
+    });
+    search.addEventListener("input", draw);
+    col.append(head, el("div", { class: "cm-searchwrap" }, search), pills, list);
+    root.appendChild(col);
+    let dead = false;
+    getDocs(query(collection(db, "communities"), orderBy("createdAt", "desc"), limit(120)))
+      .then((s) => { if (dead) return; all = s.docs.map((d) => ({ id: d.id, ...d.data() })); draw(); })
+      .catch(() => { list.innerHTML = ""; list.appendChild(el("div", { class: "gb-empty" }, el("i", { class: "ri-wifi-off-line" }), el("div", { class: "t" }, "Couldn't load communities"))); });
+    return () => { dead = true; };
+  };
+
+  // Trending rail for Explore
+  const buildTrendingRail = () => {
+    const rail = el("div", { class: "cm-trend-rail" });
+    const sec = el("section", { class: "cm-trend hidden" },
+      el("div", { class: "cm-trend-h" }, el("strong", {}, "🔥 Trending communities"), el("a", { href: "#communities" }, "See all ›")), rail);
+    getDocs(query(collection(db, "communities"), orderBy("memberCount", "desc"), limit(40))).then((s) => {
+      const rows = s.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => trendScore(b) - trendScore(a)).slice(0, 10);
+      if (!rows.length) { sec.appendChild(el("div", { class: "cm-trend-empty" }, "No communities yet. ", el("a", { href: "#communities" }, "Start the first one"))); sec.classList.remove("hidden"); rail.remove(); return; }
+      rows.forEach((c, i) => rail.appendChild(el("div", { class: "cm-card", onclick: () => { location.hash = `#community/${encodeURIComponent(c.id)}`; } },
+        el("span", { class: "cm-rank" }, `#${i + 1}`), commIcon(c, 48),
+        el("strong", {}, `g/${c.slug || c.id}`), el("small", {}, `${c.memberCount || 0} members`), joinBtn(c))));
+      sec.classList.remove("hidden");
+    }).catch(() => {});
+    return sec;
+  };
+
+  // Community page
+  const renderCommunity = (root, id) => {
+    if (!id) { location.hash = "#communities"; return () => {}; }
+    id = decodeURIComponent(id);
+    const col = el("div", { class: "gb-col gb-page" });
+    const head = el("div", { class: "gb-head" },
+      el("button", { class: "gb-icon-btn", type: "button", onclick: () => history.back() }, el("i", { class: "ri-arrow-left-line" })),
+      el("div", { class: "gb-head-t" }, el("strong", {}, `g/${id}`)));
+    const top = el("div", { class: "cm-top" });
+    const list = el("div", { class: "gb-list" }, skeletonRow(), skeletonRow());
+    const dock = el("div", { class: "cm-dock" });
+    col.append(head, top, list, dock);
+    root.appendChild(col);
+    let dead = false, unsub = null, fab = null, c = null;
+    const setDock = () => {
+      if (!c) return;
+      fab?.dispose(); fab = null; dock.innerHTML = "";
+      if (isMember(c)) {
+        _postTarget = c; _targetLocked = true; repaintChips();
+        fab?.dispose(); fab = buildFab((close) => buildComposer({ placeholder: `Post to g/${c.slug || c.id}…`, maxSec: MAX_POST_SEC, onSend: async (p) => { await createPost(p); close(); }, allowImage: true, allowVideo: true, maxChars: 2500 }), "community");
+        document.body.append(fab.ov, fab.btn);
+      } else {
+        _postTarget = null; _targetLocked = false;
+        dock.appendChild(el("div", { class: "cm-joinbar" }, el("span", {}, "Join to post in this community"), joinBtn(c, () => { paintTop(); setDock(); })));
+      }
+    };
+    const paintTop = () => {
+      top.innerHTML = "";
+      const hue = commHue(c.slug || c.id);
+      top.append(...[
+        el("div", { class: "cm-banner", style: `background:linear-gradient(135deg,hsl(${hue} 75% 50%),hsl(${(hue + 50) % 360} 70% 38%))` }),
+        el("div", { class: "cm-info" },
+          commIcon(c, 64),
+          el("div", { class: "cm-info-t" }, el("h2", {}, `g/${c.slug || c.id}`), el("small", {}, `${c.memberCount || 0} members · ${c.postCount || 0} posts`)),
+          joinBtn(c, () => { paintTop(); setDock(); })),
+        c.description ? el("p", { class: "cm-desc" }, c.description) : null].filter(Boolean));
+    };
+    const unsubDoc = onSnapshot(doc(db, "communities", id), (s) => {
+      if (dead) return;
+      if (!s.exists()) { top.innerHTML = ""; list.innerHTML = ""; list.appendChild(el("div", { class: "gb-empty" }, el("i", { class: "ri-ghost-line" }), el("div", { class: "t" }, `g/${id} doesn't exist`), el("button", { class: "cm-primary", type: "button", onclick: openCreateCommunity }, "Create it"))); return; }
+      const first = !c; c = { id: s.id, ...s.data() };
+      paintTop(); if (first) setDock();
+    }, () => {});
+    let sig = "";
+    unsub = onSnapshot(query(collection(db, "posts"), where("communityId", "==", id), limit(60)), async (snap) => {
+      const posts = snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((p) => !postHidden(p)).sort((a, b) => (b.createdAt?.seconds || 9e9) - (a.createdAt?.seconds || 9e9));
+      const s2 = posts.map((p) => p.id).join(",");
+      if (s2 === sig) return; sig = s2;
+      const users = await Promise.all([...new Set(posts.map((p) => p.authorUid))].map(fetchUser));
+      if (dead) return;
+      const map = Object.fromEntries(users.filter(Boolean).map((u) => [u.uid, u]));
+      list.innerHTML = "";
+      if (!posts.length) { list.appendChild(el("div", { class: "gb-empty" }, el("i", { class: "ri-chat-smile-3-line" }), el("div", { class: "t" }, "No posts yet"), el("div", {}, "Be the first to post here."))); return; }
+      posts.forEach((p) => list.appendChild(renderVoicePost(p, map[p.authorUid])));
+    }, () => { list.innerHTML = ""; list.appendChild(el("div", { class: "gb-empty" }, el("i", { class: "ri-wifi-off-line" }), el("div", { class: "t" }, "Couldn't load posts"))); });
+    return () => { dead = true; unsub?.(); unsubDoc(); fab?.dispose(); stopAllAudio(); _postTarget = null; _targetLocked = false; repaintChips(); };
   };
 
   // -------------------------------------------------------------------------
@@ -7637,15 +7697,40 @@ function _gbInit() {
     return out;
   };
 
+  // Floating feather button + bottom-sheet composer (replaces the fixed input bar)
+  const buildFab = (makeComposer, where = "feed") => {
+    let composer = null;
+    const ov = el("div", { class: "fab-ov" });
+    const sheet = el("div", { class: "fab-sheet" });
+    const close = () => { ov.classList.remove("open"); stopAllAudio(); };
+    const open = () => {
+      if (!composer) {
+        composer = makeComposer(close);
+        sheet.append(el("div", { class: "fab-sheet-h" }, el("span", {}, "New post"), el("button", { class: "dp-ibtn", type: "button", onclick: close }, el("i", { class: "ri-close-line" }))), composer);
+      }
+      ov.classList.add("open"); setTimeout(() => composer.focusInput?.(), 60);
+    };
+    ov.appendChild(sheet);
+    ov.addEventListener("click", (e) => { if (e.target === ov) close(); });
+    const btn = el("button", { class: `fab-feather on-${where}`, type: "button", title: "New post", "aria-label": "New post", onclick: open }, el("i", { class: "ri-quill-pen-fill" }));
+    return { btn, ov, open, close, get composer() { return composer; }, dispose: () => { composer?.dispose?.(); ov.remove(); btn.remove(); } };
+  };
+
   const renderVoiceFeed = (root) => {
     const shell = el("div", { class: "gb-shell" });
     const col = el("div", { class: "gb-col" });
     const list = el("div", { class: "gb-list" });
     [1, 2, 3, 4].forEach(() => list.appendChild(skeletonRow()));
     const sentinel = el("div", { class: "gb-sentinel" });
-    const composer = buildComposer({ placeholder: "Share a thought, or tap the mic…", maxSec: MAX_POST_SEC, onSend: createPost, allowImage: true, allowVideo: true, maxChars: 2500 });
-    col.append(buildPromptCard(composer), list, composer);
-    shell.append(buildRail(), col);
+    const fab = buildFab((close) => {
+      const c = buildComposer({ placeholder: "Share a thought, or tap the mic…", maxSec: MAX_POST_SEC, onSend: async (p) => { await createPost(p); close(); }, allowImage: true, allowVideo: true, maxChars: 2500 });
+      c.insertBefore(buildTargetChip(), c.querySelector(".gb-attach"));
+      return c;
+    });
+    const composer = { setPrompt: (pr) => { fab.open(); fab.composer?.setPrompt(pr); }, dispose: () => fab.dispose() };
+    col.append(buildPromptCard(composer), list);
+    shell.append(col);
+    document.body.append(fab.ov, fab.btn);
     root.appendChild(shell);
 
     let lastDoc = null, loading = false, allLoaded = false, renderSeq = 0, lastIds = "";
@@ -7753,13 +7838,13 @@ function _gbInit() {
     let dead = false, unsubComments = null, composerRef = null;
     const dispose = () => { dead = true; unsubComments?.(); composerRef?.dispose(); stopAllAudio(); };
 
-    const col = el("div", { class: "gb-col" });
+    const col = el("div", { class: "gb-col dp-detail" });
     const head = el("div", { class: "gb-head" },
       el("button", { class: "gb-icon-btn", type: "button", onclick: () => history.back() }, el("i", { class: "ri-arrow-left-line" })),
-      el("div", { class: "gb-head-t" }, el("strong", {}, "Voice note"), el("span", {}, "Thread")));
+      el("div", { class: "gb-head-t" }, el("strong", {}, "Post")));
     const body = el("div", { class: "gb-list" }, skeletonRow());
     col.append(head, body);
-    root.appendChild(el("div", { class: "gb-shell" }, buildRail(), col));
+    root.appendChild(el("div", { class: "gb-shell dp-shell" }, col));
 
     (async () => {
       const snap = await getDoc(doc(db, "posts", postId)).catch(() => null);
@@ -7775,7 +7860,7 @@ function _gbInit() {
       body.innerHTML = "";
       body.appendChild(renderVoicePost(p, author, { detail: true }));
 
-      const section = el("div", { class: "gb-section" }, el("span", { class: "gb-section-t" }, "Replies"));
+      const section = el("div", { class: "gb-section" }, el("span", { class: "gb-section-t" }, "Comments"));
       const tree = el("div", { class: "gb-tree" });
       body.append(section, tree);
 
@@ -7859,10 +7944,10 @@ function _gbInit() {
           const users = await Promise.all([...new Set(comments.map((c) => c.authorUid))].map(fetchUser));
           if (dead || sig !== lastSig) return;
           authors = Object.fromEntries(users.filter(Boolean).map((u) => [u.uid, u]));
-          section.querySelector(".gb-section-t").textContent = comments.length ? `Replies · ${comments.length}` : "Replies";
+          section.querySelector(".gb-section-t").textContent = comments.length ? `Comments · ${comments.length}` : "Comments";
           tree.innerHTML = "";
           if (!comments.length) {
-            tree.appendChild(el("div", { class: "gb-empty small" }, el("div", {}, "No replies yet — say something or leave a voice note.")));
+            tree.appendChild(el("div", { class: "gb-empty small" }, el("div", {}, "No comments yet. Be the first, with text or a voice note.")));
             return;
           }
           const byId = new Map(comments.map((c) => [c.id, { c, kids: [] }]));
@@ -7879,7 +7964,7 @@ function _gbInit() {
 
     return dispose;
   };
-  return { renderVoiceFeed, renderVoiceDetail, renderVoicePost, renderPromptPage, stopAllAudio, buildGameStrip, buildGameStrips };
+  return { renderCommunities, renderCommunity, buildTrendingRail, openCreateCommunity, renderVoiceFeed, renderVoiceDetail, renderVoicePost, renderPromptPage, stopAllAudio, buildGameStrip, buildGameStrips };
 }
 
 // =========================================================================
@@ -7905,26 +7990,16 @@ function _gbInit() {
 const _gmSvg = (inner) => `<svg viewBox="0 0 120 90">${inner}</svg>`;
 const GAMES = [
   {
-    id: "life", tips: ["Walk to an empty house and tap Use to claim it", "Decorate it, then invite friends over", "Call your car and cruise the town", "Chat, take photos and post them to the feed"], name: "Get Better World", tagline: "Your house, your car, your friends. A shared town to hang out in.", gline: "Claim a house, decorate it, drive, chat and visit other players.", fmt: (s) => `${Number(s).toLocaleString()} pts`,
-    art: () => _gmSvg('<rect width="120" height="90" fill="#7dc4ff"/><rect y="58" width="120" height="32" fill="#6db35a"/><rect y="66" width="120" height="14" fill="#4b5563"/><rect x="14" y="30" width="34" height="30" fill="#f4ead6"/><polygon points="10,32 31,14 52,32" fill="#8a3b2b"/><rect x="26" y="42" width="10" height="18" fill="#b23a3a"/><rect x="70" y="52" width="34" height="11" rx="5" fill="#e11d48"/><rect x="78" y="45" width="18" height="9" rx="4" fill="#fde047"/><circle cx="79" cy="64" r="4" fill="#111"/><circle cx="96" cy="64" r="4" fill="#111"/><circle cx="92" cy="18" r="9" fill="#fde047"/>'),
-    mount: (root, ctx) => mountLife(root, ctx),
-  },
-  {
-    id: "alien", tips: ["Pick a gang (or go Lone Wolf) before you drop in", "Walk over guns, health and ammo to grab them", "Steal a rover, or fly a ship from a glowing pad to the next island", "Drones guard the Nova crash site"], name: "Alien Invasion", tagline: "The sky fell. Three islands, three gangs. Survive.", gline: "Loot guns, fight rival gangs, drive rovers and fly ships between islands.", fmt: (s) => `${Number(s).toLocaleString()} pts`,
-    art: () => _gmSvg('<rect width="120" height="90" fill="#e3b48c"/><circle cx="92" cy="22" r="10" fill="#fde68a"/><rect y="60" width="120" height="30" fill="#1b6c8a"/><ellipse cx="40" cy="62" rx="40" ry="9" fill="#d6c28c"/><ellipse cx="62" cy="24" rx="30" ry="7" fill="#3b4252"/><ellipse cx="62" cy="20" rx="12" ry="6" fill="#67e8f9"/><rect x="26" y="46" width="6" height="16" fill="#431407"/><circle cx="29" cy="42" r="6" fill="#c2410c"/><rect x="42" y="50" width="16" height="8" rx="3" fill="#8a8f98"/>'),
-    mount: (root, ctx) => mountAlien(root, ctx),
-  },
-  {
     id: "bubble", tips: ["Drag to aim, release to shoot", "Match 3+ bubbles of one colour to pop them", "Tap the NEXT bubble to swap it"], name: "Bubble Pop", tagline: "Aim, shoot and pop the bubbles. 24 levels.", fmt: (s) => `${s}★`,
     art: () => '<svg viewBox="0 0 120 90"><defs><radialGradient id="gbp1" cx="35%" cy="30%"><stop offset="0" stop-color="#fff" stop-opacity=".9"/><stop offset=".25" stop-color="#fff" stop-opacity=".1"/></radialGradient></defs>' +
-      [[20,18,"#ef4444"],[44,18,"#facc15"],[68,18,"#22c55e"],[92,18,"#3b82f6"],[32,40,"#3b82f6"],[56,40,"#ef4444"],[80,40,"#a855f7"],[44,62,"#22c55e"],[68,62,"#facc15"]]
+      [[20,18,"#ef4444"],[44,18,"#facc15"],[68,18,"#22c55e"],[92,18,"#3b82f6"],[32,40,"#3b82f6"],[56,40,"#ef4444"],[80,40,"#d38669"],[44,62,"#22c55e"],[68,62,"#facc15"]]
         .map(([x, y, c]) => `<circle cx="${x}" cy="${y}" r="12" fill="${c}" stroke="#1e1b4b" stroke-width="2.4"/><circle cx="${x}" cy="${y}" r="12" fill="url(#gbp1)"/>`).join("") +
       '<circle cx="60" cy="84" r="6" fill="#fb923c" stroke="#1e1b4b" stroke-width="2.4"/></svg>',
     mount: (root, ctx) => mountBubblePop(root, ctx),
   },
   {
     id: "compound", tips: ["Be the last fighter standing in the compound", "Stay inside the purple safe zone as it shrinks", "Roll to dodge bullets, climb stairs to rooftops and towers", "Pick up medkits, armor and ammo"], name: "Compound Clash", tagline: "3D battle in a walled compound. 15 bots, one winner.", fmt: (s) => `${Number(s).toLocaleString()} pts`,
-    art: () => _gmSvg('<rect width="120" height="90" fill="#25205a"/><rect x="8" y="8" width="104" height="74" rx="6" fill="#3b4a6b" stroke="#c4a1ff" stroke-width="3" stroke-dasharray="6 4"/><rect x="18" y="16" width="30" height="20" fill="#9c5b45"/><rect x="70" y="20" width="32" height="14" fill="#7d90b0"/><rect x="22" y="52" width="36" height="22" fill="#8d96a8"/><rect x="74" y="50" width="22" height="22" fill="#d94c4c"/><circle cx="60" cy="45" r="7" fill="#fde047" stroke="#1e1b4b" stroke-width="2"/><path d="M60 45 L84 30" stroke="#fde047" stroke-width="2" stroke-dasharray="3 3"/>'),
+    art: () => _gmSvg('<rect width="120" height="90" fill="#25205a"/><rect x="8" y="8" width="104" height="74" rx="6" fill="#3b4a6b" stroke="#d88364" stroke-width="3" stroke-dasharray="6 4"/><rect x="18" y="16" width="30" height="20" fill="#8b6456"/><rect x="70" y="20" width="32" height="14" fill="#7d90b0"/><rect x="22" y="52" width="36" height="22" fill="#8d96a8"/><rect x="74" y="50" width="22" height="22" fill="#d94c4c"/><circle cx="60" cy="45" r="7" fill="#fde047" stroke="#1e1b4b" stroke-width="2"/><path d="M60 45 L84 30" stroke="#fde047" stroke-width="2" stroke-dasharray="3 3"/>'),
     mount: (root, ctx) => mountCompound(root, ctx),
   },
   {
@@ -7934,7 +8009,7 @@ const GAMES = [
   },
   {
     id: "g2048", tips: ["Swipe to slide every tile", "Equal numbers merge into one", "Reach 2048 (and beyond!)"], name: "2048", tagline: "Slide and merge tiles. Chase the big one.", fmt: (s) => Number(s).toLocaleString(),
-    art: () => _gmSvg([[14, 12, "#eee4da", "2"], [48, 12, "#f2b179", "8"], [82, 12, "#f67c5f", "16"], [14, 46, "#edc850", "32"], [48, 46, "#edc22e", "64"], [82, 46, "#3c3a32", "2048"]]
+    art: () => _gmSvg([[14, 12, "#eee4da", "2"], [48, 12, "#f2b179", "8"], [82, 12, "#d27e6a", "16"], [14, 46, "#edc850", "32"], [48, 46, "#edc22e", "64"], [82, 46, "#3c3a32", "2048"]]
       .map(([x, y, c, t]) => `<rect x="${x}" y="${y}" width="26" height="26" rx="6" fill="${c}"/><text x="${x + 13}" y="${y + 18}" text-anchor="middle" font-size="${t.length > 3 ? 9 : 12}" font-weight="800" fill="${c === "#eee4da" ? "#776e65" : "#fff"}">${t}</text>`).join("")),
     mount: (root, ctx) => mountG2048(root, ctx),
   },
@@ -7945,7 +8020,7 @@ const GAMES = [
   },
   {
     id: "memory", tips: ["Flip two cards at a time", "Find all 8 pairs", "Fewer moves and less time = more points"], name: "Memory Match", tagline: "Find all the pairs in the fewest moves.", fmt: (s) => `${s} pts`,
-    art: () => _gmSvg([[12, 10], [44, 10], [76, 10], [12, 48], [44, 48], [76, 48]].map(([x, y], i) => `<rect x="${x}" y="${y}" width="30" height="32" rx="7" fill="${i === 1 || i === 4 ? "#fde047" : "#6d4aff"}" stroke="#1e1b4b" stroke-width="2.4"/><text x="${x + 15}" y="${y + 22}" text-anchor="middle" font-size="16" font-weight="800" fill="${i === 1 || i === 4 ? "#1e1b4b" : "#fff"}">${i === 1 || i === 4 ? "★" : "?"}</text>`).join("")),
+    art: () => _gmSvg([[12, 10], [44, 10], [76, 10], [12, 48], [44, 48], [76, 48]].map(([x, y], i) => `<rect x="${x}" y="${y}" width="30" height="32" rx="7" fill="${i === 1 || i === 4 ? "#fde047" : "#d88364"}" stroke="#1e1b4b" stroke-width="2.4"/><text x="${x + 15}" y="${y + 22}" text-anchor="middle" font-size="16" font-weight="800" fill="${i === 1 || i === 4 ? "#1e1b4b" : "#fff"}">${i === 1 || i === 4 ? "★" : "?"}</text>`).join("")),
     mount: (root, ctx) => mountMemory(root, ctx),
   },
   {
@@ -8505,7 +8580,7 @@ function mountCompound(root, { exit }) {
   const F = gmFrame(root, gmDef("compound"), exit);
   F.stage.classList.add("gm-3d");
   const name = encodeURIComponent((state.me?.name || state.me?.username || "You").split(" ")[0]);
-  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=39&name=${name}`, allow: "fullscreen; autoplay", title: "Compound Clash" });
+  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=40&name=${name}`, allow: "fullscreen; autoplay", title: "Compound Clash" });
   F.stage.appendChild(frame);
   const onMsg = async (e) => {
     if (e.source !== frame.contentWindow) return;
@@ -8517,50 +8592,11 @@ function mountCompound(root, { exit }) {
   return () => { window.removeEventListener("message", onMsg); F.dispose(); };
 }
 
-function mountAlien(root, { exit }) {
-  const F = gmFrame(root, gmDef("alien"), exit);
-  F.stage.classList.add("gm-3d");
-  const name = encodeURIComponent((state.me?.name || state.me?.username || "You").split(" ")[0]);
-  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=39&mode=alien&name=${name}`, allow: "fullscreen; autoplay", title: "Alien Invasion" });
-  F.stage.appendChild(frame);
-  const onMsg = (e) => { if (e.source === frame.contentWindow && (e.data || {}).type === "gb-game-exit") exit(); };
-  window.addEventListener("message", onMsg);
-  return () => { window.removeEventListener("message", onMsg); F.dispose(); };
-}
-
-function mountLife(root, { exit }) {
-  const F = gmFrame(root, gmDef("life"), exit);
-  F.stage.classList.add("gm-3d");
-  const name = encodeURIComponent((state.me?.name || state.me?.username || "You").split(" ")[0]);
-  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=39&mode=life&name=${name}`, allow: "fullscreen; autoplay", title: "Get Better World" });
-  F.stage.appendChild(frame);
-  const onMsg = async (e) => {
-    if (e.source !== frame.contentWindow) return;
-    const d = e.data || {};
-    if (d.type === "gb-game-exit") exit();
-    else if (d.type === "gb-life-photo" && typeof d.data === "string" && d.data.startsWith("data:image/")) {
-      try {
-        toast("Posting your photo…");
-        const blob = await (await fetch(d.data)).blob();
-        const file = new File([blob], "world.jpg", { type: "image/jpeg" });
-        const up = await uploadToCloudinary(file, "image");
-        const text = "📸 Hanging out in Get Better World #getbetterworld";
-        await addDoc(collection(db, "posts"), { authorUid: state.uid, kind: "voice", text, hashtags: extractHashtags(text),
-          cover: { url: up.url, fit: "4:5", fx: "none", ...(up.width ? { width: up.width } : {}), ...(up.height ? { height: up.height } : {}) },
-          orbits: [], orbitCount: 0, commentCount: 0, createdAt: serverTimestamp() });
-        toast("Posted to your feed 📸");
-      } catch (err) { toast("Couldn't post the photo"); }
-    }
-  };
-  window.addEventListener("message", onMsg);
-  return () => { window.removeEventListener("message", onMsg); F.dispose(); };
-}
-
 function mountBoxing(root, { exit }) {
   const F = gmFrame(root, gmDef("boxing"), exit);
   F.stage.classList.add("gm-3d");
   const name = encodeURIComponent((state.me?.name || state.me?.username || "You").split(" ")[0]);
-  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=39&mode=box&name=${name}`, allow: "fullscreen; autoplay", title: "Boxing Arena" });
+  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=40&mode=box&name=${name}`, allow: "fullscreen; autoplay", title: "Boxing Arena" });
   F.stage.appendChild(frame);
   const onMsg = async (e) => {
     if (e.source !== frame.contentWindow) return;
@@ -8585,7 +8621,7 @@ const BP_LEVELS = [
   { rows: 10, colors: 6, shape: "pillars", stone: .14, bombs: 4 }, { rows: 10, colors: 6, shape: "diamond", stone: .14, bombs: 4 }, { rows: 10, colors: 6, shape: "full", stone: .16, bombs: 5 },
   { rows: 10, colors: 6, shape: "heart", stone: .16, bombs: 5 }, { rows: 10, colors: 6, shape: "triangle", stone: .18, bombs: 5 }, { rows: 11, colors: 6, shape: "stripes", stone: .18, bombs: 6 },
 ];
-const BP_COLORS = ["#ef4444", "#facc15", "#22c55e", "#3b82f6", "#a855f7", "#fb923c"];
+const BP_COLORS = ["#ef4444", "#facc15", "#22c55e", "#3b82f6", "#d38669", "#fb923c"];
 const BP = { W: 360, H: 600, R: 18, COLS: 10, TOP: 6 };
 BP.ROWH = BP.R * Math.sqrt(3);
 BP.CX = BP.W / 2; BP.CY = BP.H - 48; BP.DEAD = BP.H - 112;
@@ -8903,10 +8939,10 @@ function mountBubblePop(root, { exit }) {
       if ((state_ === "aim") && (aiming || true)) { guide().forEach(([x, y], i) => { ctx.fillStyle = `rgba(255,255,255,${Math.max(.15, .8 - i * .03)})`; ctx.beginPath(); ctx.arc(x, y, 2.6, 0, 7); ctx.fill(); }); }
       // cannon
       ctx.save(); ctx.translate(BP.CX, BP.CY); ctx.rotate(Math.PI / 2 - angle);
-      const bar = ctx.createLinearGradient(-12, 0, 12, 0); bar.addColorStop(0, "#6d28d9"); bar.addColorStop(.5, "#a78bfa"); bar.addColorStop(1, "#6d28d9");
+      const bar = ctx.createLinearGradient(-12, 0, 12, 0); bar.addColorStop(0, "#ba7156"); bar.addColorStop(.5, "#d38669"); bar.addColorStop(1, "#ba7156");
       ctx.fillStyle = bar; ctx.strokeStyle = "#1e1b4b"; ctx.lineWidth = 3; ctx.beginPath(); ctx.roundRect(-12, -52, 24, 52, 8); ctx.fill(); ctx.stroke();
       ctx.restore();
-      ctx.fillStyle = "#4c1d95"; ctx.strokeStyle = "#1e1b4b"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(BP.CX, BP.CY, 28, 0, 7); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = "#7d4835"; ctx.strokeStyle = "#1e1b4b"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(BP.CX, BP.CY, 28, 0, 7); ctx.fill(); ctx.stroke();
       if (face.complete && face.naturalWidth) { ctx.save(); ctx.beginPath(); ctx.arc(BP.CX, BP.CY, 24, 0, 7); ctx.clip(); ctx.drawImage(face, BP.CX - 24, BP.CY - 24, 48, 48); ctx.restore(); }
       if (cur && state_ === "aim") put(cur, BP.CX + Math.cos(angle) * 34, BP.CY - Math.sin(angle) * 34);
       if (shot) put(shot.b, shot.x, shot.y);
@@ -8932,7 +8968,7 @@ function mountBubblePop(root, { exit }) {
 // 18. GET BETTER BRO — a virtual account that "posts" 3 animated stories a day
 //     (music + voice + captions). Scripts rotate by date; nothing to host.
 // =========================================================================
-const BRO_AVATAR = "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c5cff"/><stop offset="1" stop-color="#ff5cae"/></linearGradient></defs><circle cx="50" cy="50" r="50" fill="url(#g)"/><rect x="17" y="37" width="66" height="21" rx="10" fill="#111827"/><rect x="21" y="40" width="27" height="14" rx="7" fill="#475569"/><rect x="52" y="40" width="27" height="14" rx="7" fill="#475569"/><path d="M31 69 Q50 85 69 69" stroke="#fff" stroke-width="5" fill="none" stroke-linecap="round"/></svg>');
+const BRO_AVATAR = "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#d88364"/><stop offset="1" stop-color="#ff5cae"/></linearGradient></defs><circle cx="50" cy="50" r="50" fill="url(#g)"/><rect x="17" y="37" width="66" height="21" rx="10" fill="#111827"/><rect x="21" y="40" width="27" height="14" rx="7" fill="#475569"/><rect x="52" y="40" width="27" height="14" rx="7" fill="#475569"/><path d="M31 69 Q50 85 69 69" stroke="#fff" stroke-width="5" fill="none" stroke-linecap="round"/></svg>');
 const BRO_HOURS = [8, 13, 19];
 
 // scene: t=headline, s=sub, say=spoken+caption, art=visual, lines=chat lines, q=prompt
