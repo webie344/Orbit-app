@@ -1,0 +1,9234 @@
+// BUILD 2026-11-21 v41 drop layout + communities
+// =========================================================================
+// Get better — app.js
+// Firebase init + Auth + Cloudinary + Router + Feed + Groups +
+// Profile + Settings + Theme + Verified-by-location.
+// Chat + DM logic lives in chat.js (it imports state from this file).
+// =========================================================================
+
+import { sfxOrbit, sfxComment, sfxPost } from "./sounds.js";
+
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
+import {
+  getAuth, onAuthStateChanged, signInWithEmailAndPassword,
+  createUserWithEmailAndPassword, signOut, GoogleAuthProvider,
+  signInWithPopup, updateProfile, sendPasswordResetEmail,
+} from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
+import {
+  getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, getDoc, getDocFromCache, updateDoc, addDoc, deleteDoc,
+  collection, query, where, orderBy, limit, startAfter, onSnapshot, getDocs,
+  serverTimestamp, increment, arrayUnion, arrayRemove, writeBatch, deleteField,
+} from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+
+// =========================================================================
+// 1. CONFIG — REPLACE THESE BEFORE HOSTING
+// =========================================================================
+
+// Firebase: get from https://console.firebase.google.com → Project Settings → Your apps
+export const firebaseConfig = {
+  apiKey: "AIzaSyC9jF-ocy6HjsVzWVVlAyXW-4aIFgA79-A",
+    authDomain: "crypto-6517d.firebaseapp.com",
+    projectId: "crypto-6517d",
+    storageBucket: "crypto-6517d.firebasestorage.app",
+    messagingSenderId: "60263975159",
+    appId: "1:60263975159:web:bd53dcaad86d6ed9592bf2"
+};
+
+// Cloudinary: get from https://cloudinary.com → Settings → Upload → Upload presets
+// 1) Create an UNSIGNED preset (recommended for client-side uploads)
+// 2) Put your cloud name + the preset name below
+export const cloudinaryConfig = {
+  cloudName:    "ddtdqrh1b",
+  uploadPreset: "profile-pictures",
+};
+
+// =========================================================================
+// 2. INIT
+// =========================================================================
+
+// ── Translation helper ────────────────────────────────────────────────────
+// 1. Persists the language choice via the googtrans cookie (Google Translate
+//    reads this cookie automatically on every page load).
+// 2. Tries to trigger the Google Translate widget's <select> directly — with
+//    InlineLayout.SIMPLE the combo is in the page DOM, not an iframe.
+// 3. Falls back to a page reload only if the widget is not ready yet.
+const orbitTranslate = (code) => {
+  // Set / clear the persistence cookie (no domain= so it matches current host)
+  if (code === "en") {
+    document.cookie = "googtrans=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+    document.cookie = "googtrans=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=" + location.hostname;
+  } else {
+    const val = "/en/" + code;
+    document.cookie = "googtrans=" + val + "; path=/;";
+    document.cookie = "googtrans=" + val + "; path=/; domain=" + location.hostname;
+  }
+
+  // Try to drive the hidden widget select directly (no reload needed)
+  const tryDirect = (attempts = 0) => {
+    const combo = document.querySelector("#google_translate_element select");
+    if (combo) {
+      combo.value = code === "en" ? combo.options[0]?.value || "" : code;
+      combo.dispatchEvent(new Event("change"));
+    } else if (attempts < 25) {
+      // Widget still initialising — retry up to ~2.5 s
+      setTimeout(() => tryDirect(attempts + 1), 100);
+    } else {
+      // Widget never appeared — fall back to a full reload
+      location.reload();
+    }
+  };
+  tryDirect();
+};
+
+const app = initializeApp(firebaseConfig);
+export const auth = getAuth(app);
+// Offline-first: Firestore keeps a local copy of what you've seen, so feeds open without data.
+export const db = (() => {
+  try { return initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }); }
+  catch { return getFirestore(app); }
+})();
+
+// Globals shared with chat.js
+export const state = {
+  me: null,           // current user profile doc (from /users/{uid})
+  uid: null,          // current uid
+  chatsUnsub: null,   // unsubscribe for chats list listener
+  chatUnsub: null,    // unsubscribe for active chat messages listener
+  activeChat: null,   // currently open chat doc id
+  cache: {
+    users: new Map(), // uid -> profile snapshot
+  },
+  // AI assistant settings (persisted in localStorage)
+  aiName:   localStorage.getItem("orbit:ai_name")   || "Aria",
+  aiAvatar: localStorage.getItem("orbit:ai_avatar") || "🤖",
+  aiTone:   localStorage.getItem("orbit:ai_tone")   || "friendly",
+};
+
+// =========================================================================
+// AI ASSISTANT CONSTANTS
+// =========================================================================
+// Set your Groq API key here or assign window.GROQ_API_KEY before this file loads.
+// Get a free key at https://console.groq.com
+window.GROQ_API_KEY = window.GROQ_API_KEY || "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";
+window.GROQ_MODEL   = window.GROQ_MODEL   || "llama-3.3-70b-versatile";
+
+const AI_TONES = {
+  friendly:   { label: "Friendly & Warm",    emoji: "😊" },
+  witty:      { label: "Witty & Playful",    emoji: "😄" },
+  thoughtful: { label: "Thoughtful & Deep",  emoji: "🧠" },
+  calm:       { label: "Calm & Supportive",  emoji: "🌿" },
+  bold:       { label: "Bold & Direct",      emoji: "⚡" },
+};
+
+const AI_AVATARS = ["🤖","✨","🌟","💫","🎯","🧠","🌙","🔮","💡","🎭","🌊","🦋"];
+
+function getAIChatSystem() {
+  const name = state.aiName || "Aria";
+  const tone = state.aiTone || "friendly";
+  const styles = {
+    friendly:   "warm, supportive, and upbeat — like a genuine friend",
+    witty:      "playful and clever, with smart humor and banter",
+    thoughtful: "reflective and curious, asking follow-up questions and going deep",
+    calm:       "soothing, steady, and empathetic",
+    bold:       "direct, confident, and to the point",
+  };
+  return `You are ${name}, an AI assistant built into Get better — a social platform. You are ${styles[tone] || styles.friendly}.
+Rules:
+- Keep replies SHORT and conversational (1-3 sentences max unless the user asks for detail).
+- Be genuinely helpful and engaging.
+- Never be explicit, harmful, or offensive.
+- Plain text only — no markdown, no asterisks.
+- You can discuss anything: social life, advice, ideas, creative writing, tech, etc.`;
+}
+
+// Load / save AI chat history from Firestore (under users/{uid}/ai_chat doc)
+async function loadAIHistory() {
+  if (!state.uid) return [];
+  try {
+    const snap = await getDoc(doc(db, "users", state.uid));
+    return snap.exists() ? (snap.data().aiMessages || []) : [];
+  } catch { return []; }
+}
+async function saveAIHistory(msgs) {
+  if (!state.uid) return;
+  try {
+    await updateDoc(doc(db, "users", state.uid), { aiMessages: msgs.slice(-60) });
+  } catch {}
+}
+
+// =========================================================================
+// 3. UTILITIES
+// =========================================================================
+export const $ = (sel, root = document) => root.querySelector(sel);
+export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+const _cloudPoster = (url) => {
+  try { return url.replace(/\.mp4(\?.*)?$/, ".jpg").replace(/\.webm(\?.*)?$/, ".jpg").replace(/\.mov(\?.*)?$/, ".jpg"); }
+  catch { return ""; }
+};
+
+// Public URLs used when a post is shared outside Get better. Keep this as the
+// public Vercel URL, not the current preview URL, so WhatsApp, Telegram and
+// Google always receive the same crawlable address.
+export const ORBIT_PUBLIC_ORIGIN = "https://orbit-appconnect.vercel.app";
+export const postPublicUrl = (postId) =>
+  `${ORBIT_PUBLIC_ORIGIN}/post/${encodeURIComponent(postId)}`;
+
+const postMediaItems = (post) => {
+  if (!post?.media) return [];
+  return Array.isArray(post.media) ? post.media.filter(Boolean) : [post.media];
+};
+
+const firstPostMedia = (post) => postMediaItems(post)[0] || null;
+
+const postPreviewImage = (post) => {
+  const media = firstPostMedia(post);
+  if (!media?.url) return `${ORBIT_PUBLIC_ORIGIN}/icon-512.png`;
+  return media.type === "video" ? (_cloudPoster(media.url) || media.url) : media.url;
+};
+
+// Share the real image/video where the browser supports file sharing.
+// Otherwise share the public post URL. The public URL is important because
+// the Vercel /post/:id function supplies the post-specific preview metadata.
+const sharePostExternally = async (post, author) => {
+  const url = postPublicUrl(post.id);
+  const text = (post.text || `A post by ${author?.name || "a Get better member"}`).trim();
+  const media = firstPostMedia(post);
+
+  if (navigator.share) {
+    try {
+      const shareData = { title: "A new gravity for your circles.", text, url };
+      if (media?.url && navigator.canShare) {
+        try {
+          const response = await fetch(media.url, { mode: "cors" });
+          const blob = await response.blob();
+          const extension = media.type === "video" ? "mp4" : "jpg";
+          const mime = blob.type || (media.type === "video" ? "video/mp4" : "image/jpeg");
+          const file = new File([blob], `orbit-post-${post.id}.${extension}`, { type: mime });
+          if (navigator.canShare({ files: [file] })) shareData.files = [file];
+        } catch {
+          // Sharing the public link still works when a media host blocks fetch.
+        }
+      }
+      await navigator.share(shareData);
+      return true;
+    } catch (error) {
+      if (error?.name === "AbortError") return false;
+    }
+  }
+
+  try {
+    await navigator.clipboard.writeText(url);
+    toast("Post link copied");
+    return false;
+  } catch {
+    window.prompt("Copy this Get better post link:", url);
+    return false;
+  }
+};
+
+const buildExternalShareActions = (post, author, close) => {
+  const url = postPublicUrl(post.id);
+  const text = (post.text || `A post by ${author?.name || "a Get better member"}`).trim();
+  const encodedUrl = encodeURIComponent(url);
+  const encodedText = encodeURIComponent(text);
+  const actions = el("div", { class: "post-external-share" },
+    el("div", { class: "post-external-share-title" }, "Share outside Get better"),
+    el("div", { class: "post-external-share-grid" },
+      el("button", {
+        class: "post-external-share-btn",
+        type: "button",
+        onclick: async () => { await sharePostExternally(post, author); },
+      }, el("i", { class: "ri-share-forward-line" }), el("span", {}, "Share")),
+      el("a", {
+        class: "post-external-share-btn whatsapp",
+        href: `https://wa.me/?text=${encodedText}%20${encodedUrl}`,
+        target: "_blank",
+        rel: "noopener noreferrer",
+        onclick: () => close(),
+      }, el("i", { class: "ri-whatsapp-line" }), el("span", {}, "WhatsApp")),
+      el("a", {
+        class: "post-external-share-btn telegram",
+        href: `https://t.me/share/url?url=${encodedUrl}&text=${encodedText}`,
+        target: "_blank",
+        rel: "noopener noreferrer",
+        onclick: () => close(),
+      }, el("i", { class: "ri-telegram-2-line" }), el("span", {}, "Telegram")),
+      el("button", {
+        class: "post-external-share-btn",
+        type: "button",
+        onclick: async () => {
+          try {
+            await navigator.clipboard.writeText(url);
+            toast("Post link copied");
+            close();
+          } catch {
+            window.prompt("Copy this Get better post link:", url);
+          }
+        },
+      }, el("i", { class: "ri-link" }), el("span", {}, "Copy link")),
+    ),
+    el("small", {}, "Images and videos are attached when your device supports file sharing. Otherwise the link shows the post preview."),
+  );
+  return actions;
+};
+// Renders the text/sticker overlay layer created in the create-post studio
+// on top of a video (images have overlays already baked in at post time).
+function _renderFeedOverlays(wrap, overlays) {
+  if (!overlays || !overlays.length) return;
+  const layer = el("div", { class: "cr-overlay-layer", style: "pointer-events:none;" });
+  const paint = () => {
+    layer.innerHTML = "";
+    const w = wrap.clientWidth || 320;
+    overlays.forEach((ov) => {
+      const fontPx = w * ((ov.sizePct * ov.scale) / 100);
+      const style = `left:${ov.x}%;top:${ov.y}%;transform:translate(-50%,-50%) rotate(${ov.rotation}deg);font-size:${fontPx}px;` +
+        (ov.type === "text" ? `color:${ov.color};` : "");
+      layer.appendChild(el("div", { class: `cr-layer ${ov.type}`, style }, ov.type === "text" ? ov.text : ov.icon));
+    });
+  };
+  paint();
+  window.addEventListener("resize", paint);
+  // Feed posts are torn down via innerHTML replacement, not removal events,
+  // so detect detachment lazily and drop the global listener once the layer
+  // is no longer in the document (checked opportunistically on next resize).
+  const _cleanupOnDetach = () => {
+    if (!document.body.contains(layer)) window.removeEventListener("resize", _cleanupOnDetach);
+    else paint();
+  };
+  window.removeEventListener("resize", paint);
+  window.addEventListener("resize", _cleanupOnDetach);
+  wrap.appendChild(layer);
+}
+
+// Attaches an attached song to a post: plays/pauses in sync with visibility
+// (image/carousel posts) or with the video's own play state (video posts).
+// Plays automatically at a low background volume — no floating controls on
+// the media itself (the video's own volume button already covers the
+// clip's own audio; the song is a separate, quiet background layer). A
+// small "now playing" badge is rendered in the post header instead — see
+// _songHeaderBadge, used by renderPost.
+//
+// Note: browsers block unmuted autoplay until the user has interacted with
+// the page at least once (tap/click/scroll anywhere counts) — same
+// limitation TikTok/Instagram have. After that first interaction the song
+// plays automatically as posts scroll into view.
+const SONG_BG_VOLUME = 0.25;
+function _wireSongPlayback(wrap, song, videoEl) {
+  if (!song?.url) return;
+  const audio = new Audio(song.url);
+  audio.loop = true; audio.muted = false; audio.volume = SONG_BG_VOLUME; audio.preload = "none";
+  if (videoEl) {
+    videoEl.muted = true; // song is the only audio source for posts with music
+    const DRIFT_TOLERANCE = 0.25; // seconds — resync once audio/video clocks drift past this
+    const syncTime = () => { audio.currentTime = videoEl.currentTime % (audio.duration || 1e9); };
+    // "play"/"pause" alone aren't enough: while the video stalls to buffer it
+    // fires "waiting" (not "pause"), so the song kept advancing silently
+    // ahead of the picture during any rebuffer. Pausing on "waiting" and
+    // resyncing+resuming on "playing" keeps the song locked to what's
+    // actually on screen, not just to whether playback was ever paused.
+    videoEl.addEventListener("play", () => { syncTime(); audio.play().catch(() => {}); });
+    videoEl.addEventListener("playing", () => { syncTime(); audio.play().catch(() => {}); });
+    videoEl.addEventListener("waiting", () => audio.pause());
+    videoEl.addEventListener("pause", () => audio.pause());
+    videoEl.addEventListener("seeking", () => audio.pause());
+    videoEl.addEventListener("seeked", () => { syncTime(); if (!videoEl.paused) audio.play().catch(() => {}); });
+    // Independent clocks drift apart over long continuous playback even
+    // without any stall — nudge back in sync whenever it exceeds tolerance.
+    videoEl.addEventListener("timeupdate", () => {
+      if (videoEl.paused || videoEl.seeking || !audio.duration) return;
+      const drift = Math.abs(audio.currentTime - videoEl.currentTime);
+      if (drift > DRIFT_TOLERANCE) syncTime();
+    });
+  } else {
+    const io = new IntersectionObserver((entries) => {
+      if (!document.body.contains(wrap)) { audio.pause(); io.disconnect(); return; }
+      if (entries[0].isIntersecting) audio.play().catch(() => {}); else audio.pause();
+    }, { threshold: 0.6 });
+    io.observe(wrap);
+  }
+}
+
+// Small "now playing" pill for the post header — icon + truncated song
+// info, no controls. Rendered next to the follow/more button by renderPost.
+function _songHeaderBadge(song) {
+  if (!song?.name) return null;
+  return el("div", {
+    class: "post-song-badge",
+    title: `${song.name} — ${song.artist}`,
+    style: "display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--text-mute);max-width:120px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;margin-right:6px;flex-shrink:0;",
+  },
+    el("i", { class: "ri-music-2-fill" }),
+    el("span", { style: "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" }, `${song.name} — ${song.artist}`),
+  );
+}
+
+const buildVideoPlayer = (url, opts = {}) => {
+  const { song, overlays, onOpen } = opts;
+  const poster = _cloudPoster(url);
+  // muted enables browser auto-play-on-scroll; user can unmute via the button
+  const video = el("video", { src: url, poster, preload: "none", playsinline: "", style: "width:100%;display:block;" });
+  const playIcon  = el("i", { class: "ri-play-fill" });
+  const overlay   = el("div", { class: "vp-overlay" }, el("button", { class: "vp-big-play" }, playIcon));
+  const playSmI   = el("i", { class: "ri-play-fill" });
+  const playSmBtn = el("button", { class: "vp-btn" }, playSmI);
+  const played    = el("div", { class: "vp-played" });
+  const seek      = el("div", { class: "vp-seek" }, played);
+  const timeEl    = el("span", { class: "vp-time", text: "0:00" });
+  // starts muted to match the muted attribute above
+  const muteI     = el("i", { class: "ri-volume-mute-line" });
+  const muteBtn   = el("button", { class: "vp-btn" }, muteI);
+  const fullBtn   = el("button", { class: "vp-btn" }, el("i", { class: "ri-fullscreen-line" }));
+  const bar       = el("div", { class: "vp-bar" }, playSmBtn, seek, timeEl, muteBtn, fullBtn);
+  // inline style overrides chat.css max-width:320px for post-context players
+  const wrap      = el("div", { class: "vid-player", style: "width:100%;max-width:none;overflow:hidden;border-radius:14px;" }, video, overlay, bar);
+
+  // ── Controls auto-hide ────────────────────────────────────────────────────
+  // Shows bar on any interaction; hides 4 s later while playing.
+  // On mobile (no mouseleave), a second touchstart resets the 4 s clock.
+  let _hideTimer = null;
+  const _scheduleHide = (delay = 4000) => {
+    clearTimeout(_hideTimer);
+    _hideTimer = setTimeout(() => {
+      if (!video.paused) bar.classList.add("vp-bar-hidden");
+    }, delay);
+  };
+  const _showBar = () => {
+    bar.classList.remove("vp-bar-hidden");
+    if (!video.paused) _scheduleHide();
+  };
+  // Desktop: show on hover, hide immediately on leave (then timer handles playing)
+  wrap.addEventListener("mousemove",  _showBar);
+  wrap.addEventListener("mouseleave", () => {
+    clearTimeout(_hideTimer);
+    if (!video.paused) bar.classList.add("vp-bar-hidden");
+  });
+  // Mobile: tap wrap to toggle bar visibility; bar auto-hides after 4 s
+  wrap.addEventListener("touchstart", (e) => {
+    if (e.target.closest(".vp-btn,.vp-seek,.vp-overlay")) return;
+    if (bar.classList.contains("vp-bar-hidden")) {
+      _showBar();
+    } else {
+      bar.classList.add("vp-bar-hidden");
+    }
+  }, { passive: true });
+
+  const togglePlay = () => { video.paused ? video.play() : video.pause(); };
+  // In the feed: tapping the video (anywhere except the play button / bar) opens the full-screen viewer
+  overlay.onclick = (e) => {
+    if (onOpen && !e.target.closest(".vp-big-play")) { try { video.pause(); } catch {} onOpen(); return; }
+    togglePlay();
+  };
+  playSmBtn.onclick = (e) => { e.stopPropagation(); togglePlay(); };
+  video.addEventListener("play",  () => {
+    playIcon.className = playSmI.className = "ri-pause-fill";
+    overlay.classList.add("playing");
+    _scheduleHide(4000); // start 4 s hide timer when playback begins
+  });
+  video.addEventListener("pause", () => {
+    playIcon.className = playSmI.className = "ri-play-fill";
+    overlay.classList.remove("playing");
+    bar.classList.remove("vp-bar-hidden");
+    clearTimeout(_hideTimer);
+  });
+  video.addEventListener("ended", () => {
+    playIcon.className = playSmI.className = "ri-play-fill";
+    overlay.classList.remove("playing");
+    played.style.width = "0%";
+    bar.classList.remove("vp-bar-hidden");
+    clearTimeout(_hideTimer);
+  });
+  video.addEventListener("timeupdate", () => {
+    const pct = video.duration ? (video.currentTime / video.duration) * 100 : 0;
+    played.style.width = pct + "%";
+    const s = Math.floor(video.currentTime);
+    timeEl.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  });
+  seek.onclick    = (e) => { if (!video.duration) return; const r = seek.getBoundingClientRect(); video.currentTime = ((e.clientX - r.left) / r.width) * video.duration; _showBar(); };
+  muteBtn.onclick = (e) => { e.stopPropagation(); video.muted = !video.muted; muteI.className = video.muted ? "ri-volume-mute-line" : "ri-volume-up-line"; _showBar(); };
+  fullBtn.onclick = (e) => { e.stopPropagation(); (video.requestFullscreen || video.webkitRequestFullscreen || (() => {})).call(video); };
+
+  // ── Play on scroll into view / pause on scroll out ────────────────────────
+  // Uses IntersectionObserver: starts playing when ≥50% visible, pauses when less.
+  //
+  // The actual mechanism, confirmed by the report that it's specifically
+  // "frame freezes right as it starts, audio is already moving, and by the
+  // end audio has finished while the picture hasn't caught up": that is the
+  // signature of resuming video decode from a MID-STREAM position rather
+  // than the start of the file. Video frames are only fully decodable from
+  // a keyframe forward — most encoders only place a keyframe every ~1-2s
+  // (a "GOP"). When you pause a video partway through and later call
+  // .play() again from that same currentTime, the audio track can resume
+  // instantly (any sample is playable on its own), but the video decoder
+  // has to rewind to the last keyframe *before* that point and decode
+  // forward through every frame in between before it can show anything —
+  // on a phone-grade CPU that takes long enough that audio visibly gets
+  // ahead, and if the decoder never fully catches up you keep watching
+  // "old" frames for the rest of the clip while the audio plays at the
+  // correct real-time pace.
+  //
+  // The fix isn't to buffer more or nudge the playback rate after the
+  // fact — it's to never resume from a mid-file position at all. Every
+  // time a video leaves the viewport we now pause it AND rewind it to 0,
+  // so the next time it's played it always restarts from the file's very
+  // first frame — which is always a keyframe — instead of reviving decode
+  // from some arbitrary point deep in the last GOP.
+  const HAVE_FUTURE_DATA = 3;
+  let _pendingPlay = null, _wantPlaying = false, _ioDebounce = null, _readyListener = null;
+  const _startPlayback = () => {
+    _pendingPlay = video.play().catch(() => {}).finally(() => { _pendingPlay = null; if (!_wantPlaying) { video.pause(); video.currentTime = 0; } });
+  };
+  const _applyIntent = () => {
+    if (_wantPlaying) {
+      if (!video.paused || _pendingPlay || _readyListener) return;
+      if (video.readyState >= HAVE_FUTURE_DATA) {
+        _startPlayback();
+      } else {
+        // With preload="none" the browser hasn't fetched anything yet.
+        // Call video.load() first — this kicks off a simultaneous audio+video
+        // fetch from byte 0, so both codecs start together and stay in sync.
+        // Without this the audio codec (lighter work) can finish buffering and
+        // start playing while the video decoder is still seeking to the first
+        // keyframe, producing the "sound plays, frozen frame" symptom.
+        if (video.networkState === 0 /* NETWORK_EMPTY */ || video.networkState === 3 /* NETWORK_NO_SOURCE */) {
+          video.load(); // initialise the media engine from scratch
+        } else if (video.currentTime !== 0) {
+          video.currentTime = 0; // ensure we start at a keyframe boundary
+        }
+        _readyListener = () => {
+          video.removeEventListener("canplay", _readyListener);
+          _readyListener = null;
+          if (_wantPlaying) _startPlayback();
+        };
+        video.addEventListener("canplay", _readyListener);
+      }
+    } else {
+      if (_readyListener) { video.removeEventListener("canplay", _readyListener); _readyListener = null; }
+      if (!_pendingPlay) {
+        video.pause();
+        video.currentTime = 0;
+        // With preload="none", unloading after scrolling away lets the browser
+        // free the decode buffer entirely — next play() always starts cold from
+        // frame 0 so audio/video are guaranteed to begin decoding together.
+        video.load();
+      }
+    }
+  };
+  const _io = new IntersectionObserver((entries) => {
+    _wantPlaying = entries[0].isIntersecting;
+    clearTimeout(_ioDebounce);
+    _ioDebounce = setTimeout(_applyIntent, 200);
+  }, { threshold: 0.4 });
+  _io.observe(wrap);
+
+  // Mid-playback drift correction: even starting clean from 0, a slow
+  // device can still fall behind mid-clip if it briefly can't decode as
+  // fast as real time. Compare the timestamp of the frame actually on
+  // screen against the audio/playback clock, and slow down briefly to let
+  // rendering catch back up if it falls behind (not supported on Safari/
+  // iOS — no requestVideoFrameCallback there — but the reset-to-0 fix
+  // above is the primary one and works everywhere).
+  if (typeof video.requestVideoFrameCallback === "function") {
+    const DRIFT_START = 0.12, DRIFT_CLEAR = 0.03, CATCHUP_RATE = 0.75;
+    let correcting = false, rvfcActive = false;
+    const frameTick = (_now, metadata) => {
+      if (video.paused || video.ended) { rvfcActive = false; return; }
+      const drift = video.currentTime - (metadata.mediaTime ?? video.currentTime);
+      if (!correcting && drift > DRIFT_START) { correcting = true; video.playbackRate = CATCHUP_RATE; }
+      else if (correcting && drift < DRIFT_CLEAR) { correcting = false; video.playbackRate = 1; }
+      video.requestVideoFrameCallback(frameTick);
+    };
+    video.addEventListener("play", () => { if (!rvfcActive) { rvfcActive = true; video.requestVideoFrameCallback(frameTick); } });
+    video.addEventListener("pause", () => { correcting = false; video.playbackRate = 1; });
+  }
+
+  // Clean up observer if the player is ever removed from DOM
+  video.addEventListener("emptied", () => { _io.disconnect(); if (_readyListener) video.removeEventListener("canplay", _readyListener); }, { once: true });
+
+  if (overlays) _renderFeedOverlays(wrap, overlays);
+  if (song) _wireSongPlayback(wrap, song, video);
+
+  return wrap;
+};
+
+// =========================================================================
+// VIDEO VIEWER — full-screen modal with prev/next navigation
+// Opens when a video in a multi-media post is tapped.
+// =========================================================================
+let _vvStyleReady = false;
+const _injectVVStyles = () => {
+  if (_vvStyleReady) return;
+  _vvStyleReady = true;
+  const s = document.createElement("style");
+  s.textContent = `
+    .vv-backdrop {
+      position: fixed; inset: 0; z-index: 10060;
+      background: rgba(0,0,0,0.93);
+      display: flex; align-items: center; justify-content: center;
+      overflow-y: auto;
+      animation: vvFadeIn .18s ease;
+    }
+    @keyframes vvFadeIn { from { opacity:0; } to { opacity:1; } }
+    .vv-modal {
+      position: relative;
+      display: flex; flex-direction: column; align-items: center;
+      width: 100%; max-width: 900px; max-height: none;
+      padding: 0 48px;
+      box-sizing: border-box;
+      overflow: visible;
+    }
+    .vv-header {
+      width: 100%; display: flex; align-items: center;
+      justify-content: space-between;
+      padding: 12px 0 10px;
+    }
+    .vv-counter {
+      font-size: 14px; font-weight: 600;
+      color: rgba(255,255,255,0.7);
+      letter-spacing: .5px;
+    }
+    .vv-close {
+      background: rgba(255,255,255,0.12);
+      border: none; border-radius: 50%;
+      width: 36px; height: 36px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; color: #fff; font-size: 20px;
+      transition: background .15s;
+    }
+    .vv-close:hover { background: rgba(255,255,255,0.22); }
+    .vv-media {
+      width: 100%; display: flex; align-items: center; justify-content: center;
+      flex: none; overflow: visible;
+    }
+    .vv-media .vid-player {
+      width: 100%; border-radius: 10px; overflow: hidden;
+    }
+    .vv-media .vid-player video {
+      width: 100%; height: auto; max-height: none; object-fit: contain; background: transparent;
+    }
+    .vv-media img {
+      max-width: 100%; max-height: 78dvh;
+      object-fit: contain; border-radius: 10px;
+    }
+    .vv-nav {
+      position: absolute; top: 50%; transform: translateY(-50%);
+      background: rgba(255,255,255,0.13);
+      border: none; border-radius: 50%;
+      width: 42px; height: 42px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; color: #fff; font-size: 24px;
+      transition: background .15s, opacity .15s;
+      z-index: 10;
+    }
+    .vv-nav:hover  { background: rgba(255,255,255,0.26); }
+    .vv-nav:disabled { opacity: .25; cursor: default; pointer-events: none; }
+    .vv-prev { left: 6px; }
+    .vv-next { right: 6px; }
+    .vv-dots {
+      display: flex; gap: 6px; padding: 10px 0 14px;
+    }
+    .vv-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      border: none; background: rgba(255,255,255,0.3);
+      cursor: pointer; padding: 0; transition: background .15s, transform .15s;
+    }
+    .vv-dot.active {
+      background: #fff; transform: scale(1.25);
+    }
+    .vv-modal.has-actions { padding-bottom: 92px; }
+    .vv-actions {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+      display: flex; justify-content: center; gap: 10px;
+      padding: 22px 12px calc(14px + env(safe-area-inset-bottom, 0px));
+      background: linear-gradient(transparent, rgba(0,0,0,0.78));
+      pointer-events: none;
+    }
+    .vv-act {
+      pointer-events: auto;
+      display: flex; align-items: center; gap: 7px;
+      min-width: 108px; justify-content: center;
+      padding: 10px 16px; border: none; border-radius: 999px;
+      background: rgba(255,255,255,0.14); color: #fff;
+      font-size: 14px; font-weight: 600; cursor: pointer;
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+      transition: background .15s, transform .1s;
+    }
+    .vv-act i { font-size: 19px; }
+    .vv-act:hover { background: rgba(255,255,255,0.24); }
+    .vv-act:active { transform: scale(.95); }
+    .vv-act.active { background: rgba(79,140,255,0.9); }
+    @media (max-width: 600px) {
+      .vv-act { min-width: 0; flex: 1; padding: 10px 8px; }
+      .vv-modal { padding: 0 40px; }
+      .vv-nav   { width: 34px; height: 34px; font-size: 20px; }
+      .vv-prev  { left: 2px; }
+      .vv-next  { right: 2px; }
+    }
+    /* Full-screen: the video fills the whole screen (contain = never cropped) */
+    .vv-backdrop { overflow: hidden; align-items: stretch; background: #000; }
+    .vv-modal { max-width: none; width: 100%; height: 100dvh; padding: 0 !important; justify-content: center; }
+    .vv-header { position: absolute; top: 0; left: 0; right: 0; z-index: 6; box-sizing: border-box;
+      padding: calc(10px + env(safe-area-inset-top, 0px)) 14px 22px; background: linear-gradient(rgba(0,0,0,.65), transparent); }
+    .vv-media { flex: 1 1 auto; min-height: 0; width: 100%; height: 100%; box-sizing: border-box; }
+    .vv-modal.has-actions .vv-media { padding-bottom: 72px; }
+    .vv-media .vid-player { width: 100%; height: 100%; max-width: none !important; border-radius: 0 !important; background: #000; }
+    .vv-media .vid-player video { width: 100%; height: 100%; max-height: none; object-fit: contain; }
+    .vv-media img { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; border-radius: 0; }
+    .vv-dots { position: absolute; left: 0; right: 0; bottom: 78px; justify-content: center; padding: 0; z-index: 6; }
+  `;
+  document.head.appendChild(s);
+};
+
+// Bottom bar shown in the full-screen viewers: Like (reactions) · Comment · Share.
+// `ctx` is built by the post card (lazily — it is filled in after the media is rendered).
+const _buildViewerActions = (ctx, close) => {
+  if (!ctx || typeof ctx.like !== "function") return null;
+  const likeI = el("i"), likeN = el("span");
+  const likeBtn = el("button", { class: "vv-act", title: "Like" }, likeI, likeN);
+  const syncLike = () => {
+    const on = !!ctx.isLiked(), n = ctx.likeCount();
+    const ic = ctx.likeIcons || ["ri-thumb-up-fill", "ri-thumb-up-line"];
+    likeI.className = on ? ic[0] : ic[1];
+    likeBtn.classList.toggle("active", on);
+    likeN.textContent = n ? String(n) : "Like";
+  };
+  likeBtn.onclick = (e) => { e.stopPropagation(); ctx.like(); syncLike(); };
+  const cn = ctx.commentCount();
+  const cmtBtn = el("button", { class: "vv-act", title: "Comments" },
+    el("i", { class: "ri-chat-1-line" }), el("span", {}, cn ? String(cn) : "Comment"));
+  cmtBtn.onclick = (e) => { e.stopPropagation(); close(); ctx.comment(); };
+  const bar = el("div", { class: "vv-actions" }, likeBtn, cmtBtn);
+  if (typeof ctx.react === "function") {
+    const rBtn = el("button", { class: "vv-act", title: "React with your voice" }, el("i", { class: "ri-mic-line" }), el("span", {}, "React"));
+    rBtn.onclick = (e) => { e.stopPropagation(); close(); ctx.react(); };
+    bar.appendChild(rBtn);
+  }
+  if (typeof ctx.share === "function") {
+    const shBtn = el("button", { class: "vv-act", title: "Share" }, el("i", { class: "ri-share-forward-line" }), el("span", {}, "Share"));
+    shBtn.onclick = (e) => { e.stopPropagation(); ctx.share(); };
+    bar.appendChild(shBtn);
+  }
+  bar.addEventListener("click", (e) => e.stopPropagation());
+  syncLike();
+  return bar;
+};
+
+const openVideoViewer = (mediaItems, startIndex = 0, ctx = null) => {
+  _injectVVStyles();
+  let cur = startIndex;
+
+  const backdrop  = el("div", { class: "vv-backdrop" });
+  const modal     = el("div", { class: "vv-modal" });
+  const mediaWrap = el("div", { class: "vv-media" });
+  const counterEl = el("div", { class: "vv-counter" });
+  const closeBtn  = el("button", { class: "vv-close" }, el("i", { class: "ri-close-line" }));
+  const header    = el("div", { class: "vv-header" }, counterEl, closeBtn);
+  const prevBtn   = el("button", { class: "vv-nav vv-prev" }, el("i", { class: "ri-arrow-left-s-line" }));
+  const nextBtn   = el("button", { class: "vv-nav vv-next" }, el("i", { class: "ri-arrow-right-s-line" }));
+  const dotsWrap  = el("div", { class: "vv-dots" });
+
+  const dots = mediaItems.map((_, i) => {
+    const d = el("button", { class: `vv-dot${i === startIndex ? " active" : ""}` });
+    d.onclick = () => go(i);
+    dotsWrap.appendChild(d);
+    return d;
+  });
+
+  const show = (idx) => {
+    // pause any current video
+    mediaWrap.querySelectorAll("video").forEach((v) => { try { v.pause(); } catch {} });
+    mediaWrap.innerHTML = "";
+
+    const m = mediaItems[idx];
+    if (m.type === "video") {
+      const player = buildVideoPlayer(m.url);
+      mediaWrap.appendChild(player);
+      // autoplay after a tick so the DOM is ready
+      requestAnimationFrame(() => player.querySelector("video")?.play().catch(() => {}));
+    } else {
+      mediaWrap.appendChild(el("img", { src: m.url }));
+    }
+
+    counterEl.textContent = mediaItems.length > 1 ? `${idx + 1} / ${mediaItems.length}` : "";
+    prevBtn.disabled = idx === 0;
+    nextBtn.disabled = idx === mediaItems.length - 1;
+    dots.forEach((d, i) => d.classList.toggle("active", i === idx));
+  };
+
+  const go = (idx) => { cur = idx; show(cur); };
+
+  prevBtn.onclick = (e) => { e.stopPropagation(); if (cur > 0) go(cur - 1); };
+  nextBtn.onclick = (e) => { e.stopPropagation(); if (cur < mediaItems.length - 1) go(cur + 1); };
+  closeBtn.onclick = () => close();
+
+  const close = () => {
+    mediaWrap.querySelectorAll("video").forEach((v) => { try { v.pause(); } catch {} });
+    backdrop.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+
+  const onKey = (e) => {
+    if (e.key === "Escape")      close();
+    if (e.key === "ArrowLeft"  && cur > 0)                      go(cur - 1);
+    if (e.key === "ArrowRight" && cur < mediaItems.length - 1)  go(cur + 1);
+  };
+  document.addEventListener("keydown", onKey);
+
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
+
+  modal.appendChild(header);
+  modal.appendChild(mediaWrap);
+  if (mediaItems.length > 1) {
+    modal.appendChild(prevBtn);
+    modal.appendChild(nextBtn);
+    modal.appendChild(dotsWrap);
+  }
+  backdrop.appendChild(modal);
+  const _acts = _buildViewerActions(ctx, () => close());
+  if (_acts) { modal.classList.add("has-actions"); backdrop.appendChild(_acts); }
+  document.body.appendChild(backdrop);
+  show(cur);
+};
+// =========================================================================
+// IMAGE ZOOM VIEWER — fullscreen modal with pinch / scroll zoom
+// =========================================================================
+const openImageZoom = (src, ctx = null) => {
+  _injectVVStyles();
+  let scale = 1, originX = 0.5, originY = 0.5;
+  let isDragging = false, dragStartX = 0, dragStartY = 0, translateX = 0, translateY = 0;
+
+  const backdrop = document.createElement("div");
+  Object.assign(backdrop.style, {
+    position: "fixed", inset: "0", zIndex: "10060",
+    background: "rgba(0,0,0,0.96)", display: "flex",
+    alignItems: "center", justifyContent: "center",
+    animation: "vvFadeIn .18s ease",
+    cursor: "zoom-out", userSelect: "none",
+    WebkitUserSelect: "none",
+  });
+
+  const img = document.createElement("img");
+  Object.assign(img.style, {
+    maxWidth: "100%", maxHeight: "100dvh",
+    objectFit: "contain", display: "block",
+    transition: "transform .12s ease",
+    transformOrigin: "center center",
+    cursor: "inherit", willChange: "transform",
+    userSelect: "none", WebkitUserDrag: "none",
+  });
+  img.src = src;
+  img.draggable = false;
+
+  const closeBtn = document.createElement("button");
+  closeBtn.innerHTML = '<i class="ri-close-line"></i>';
+  Object.assign(closeBtn.style, {
+    position: "fixed", top: "14px", right: "14px",
+    background: "rgba(255,255,255,0.14)", border: "none",
+    borderRadius: "50%", width: "38px", height: "38px",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    color: "#fff", fontSize: "20px", cursor: "pointer", zIndex: "1",
+  });
+
+  const zoomHint = document.createElement("div");
+  zoomHint.textContent = "Scroll or pinch to zoom";
+  Object.assign(zoomHint.style, {
+    position: "fixed", bottom: "20px", left: "50%",
+    transform: "translateX(-50%)",
+    background: "rgba(0,0,0,0.5)", color: "rgba(255,255,255,0.7)",
+    padding: "6px 14px", borderRadius: "999px", fontSize: "12px",
+    pointerEvents: "none", transition: "opacity .3s",
+  });
+  setTimeout(() => { zoomHint.style.opacity = "0"; }, 2000);
+
+  const applyTransform = () => {
+    img.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+    img.style.transition = isDragging ? "none" : "transform .12s ease";
+  };
+
+  const close = () => {
+    backdrop.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+
+  // Scroll-to-zoom (desktop)
+  backdrop.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? 0.85 : 1.18;
+    scale = Math.min(Math.max(scale * delta, 1), 6);
+    if (scale === 1) { translateX = 0; translateY = 0; }
+    applyTransform();
+  }, { passive: false });
+
+  // Click backdrop to close only when not zoomed / not dragging
+  backdrop.addEventListener("click", (e) => {
+    if (e.target === backdrop || e.target === img) {
+      if (scale <= 1) close();
+    }
+  });
+
+  // Drag-to-pan (when zoomed)
+  img.addEventListener("mousedown", (e) => {
+    if (scale <= 1) return;
+    isDragging = true;
+    dragStartX = e.clientX - translateX;
+    dragStartY = e.clientY - translateY;
+    img.style.cursor = "grabbing";
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!isDragging) return;
+    translateX = e.clientX - dragStartX;
+    translateY = e.clientY - dragStartY;
+    applyTransform();
+  });
+  window.addEventListener("mouseup", () => {
+    isDragging = false;
+    img.style.cursor = scale > 1 ? "grab" : "inherit";
+  });
+
+  // Pinch-to-zoom (mobile)
+  let lastDist = 0;
+  backdrop.addEventListener("touchstart", (e) => {
+    if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      lastDist = Math.hypot(dx, dy);
+    }
+  }, { passive: true });
+  backdrop.addEventListener("touchmove", (e) => {
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const dist = Math.hypot(dx, dy);
+      if (lastDist) {
+        scale = Math.min(Math.max(scale * (dist / lastDist), 1), 6);
+        if (scale === 1) { translateX = 0; translateY = 0; }
+        applyTransform();
+      }
+      lastDist = dist;
+    }
+  }, { passive: false });
+  backdrop.addEventListener("touchend", () => { lastDist = 0; });
+
+  // Double-tap to toggle 2× zoom
+  let _lastTap = 0;
+  img.addEventListener("click", () => {
+    const now = Date.now();
+    if (now - _lastTap < 300) {
+      scale = scale > 1 ? 1 : 2.5;
+      if (scale === 1) { translateX = 0; translateY = 0; }
+      applyTransform();
+    }
+    _lastTap = now;
+  });
+
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", onKey);
+
+  closeBtn.onclick = close;
+  backdrop.appendChild(img);
+  backdrop.appendChild(closeBtn);
+  backdrop.appendChild(zoomHint);
+  const _acts = _buildViewerActions(ctx, close);
+  if (_acts) { backdrop.appendChild(_acts); zoomHint.style.bottom = "86px"; }
+  document.body.appendChild(backdrop);
+};
+
+export const el = (tag, attrs = {}, ...children) => {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") node.className = v;
+    else if (k === "html") node.innerHTML = v;
+    else if (k === "text") node.textContent = v;
+    else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2), v);
+    else if (k === "data") for (const [dk, dv] of Object.entries(v)) node.dataset[dk] = dv;
+    else if (v === true) node.setAttribute(k, "");
+    else if (v !== false && v != null) node.setAttribute(k, v);
+  }
+  for (const c of children.flat()) {
+    if (c == null || c === false) continue;
+    node.appendChild(c.nodeType ? c : document.createTextNode(String(c)));
+  }
+  return node;
+};
+
+export const fmtTime = (ts) => {
+  if (!ts) return "";
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const diffDays = Math.floor((now - d) / 86400000);
+  if (diffDays < 7) return d.toLocaleDateString([], { weekday: "short" });
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+};
+
+export const fmtDay = (ts) => {
+  if (!ts) return "";
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const diff = Math.floor((today - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 86400000);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Yesterday";
+  if (diff < 7) return d.toLocaleDateString([], { weekday: "long" });
+  return d.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
+};
+
+export const escapeHtml = (s = "") =>
+  s.replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+
+export const linkify = (s = "") =>
+  escapeHtml(s)
+    .replace(/(https?:\/\/[^\s]+)/g, (m) => `<a href="${m}" target="_blank" rel="noopener">${m}</a>`)
+    .replace(/#([A-Za-z][\w]*)/g, (_, tag) => `<a class="hashtag" href="#explore/tag/${tag}">#${tag}</a>`)
+    .replace(/@(\w+)/g, (_, u) => `<a class="mention" href="#profile-u/${u}">@${u}</a>`);
+
+export const extractHashtags = (s = "") => {
+  const matches = s.match(/#(\w+)/g);
+  return matches ? [...new Set(matches.map((m) => m.slice(1).toLowerCase()))] : [];
+};
+
+export const toast = (msg, ms = 2200) => {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.classList.remove("hidden");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.add("hidden"), ms);
+};
+
+// =========================================================================
+// CHARACTERS — customisable cartoon avatars (stored on the user doc as `character`)
+// =========================================================================
+const CHAR = {
+  ink: "#1e1b4b",
+  colors: ["#8b5cf6", "#f472b6", "#fb923c", "#2dd4bf", "#fde047", "#60a5fa", "#34d399", "#f87171", "#a78bfa", "#94a3b8"],
+  bgs: ["#ede9fe", "#fce7f3", "#ffedd5", "#ccfbf1", "#fef9c3", "#dbeafe", "#dcfce7", "#e2e8f0"],
+  eyes: { round: "Round", dots: "Dots", happy: "Happy", sleepy: "Sleepy", wink: "Wink", hearts: "Hearts" },
+  mouth: { smile: "Smile", grin: "Grin", open: "Open", cat: "Cat", meh: "Calm" },
+  acc: { none: "None", glasses: "Glasses", cap: "Cap", headphones: "Headphones", crown: "Crown", bow: "Bow", sprout: "Sprout",
+         party: "Party hat", bubble: "Chat bubble", bolt: "Lightning", flame: "Flame", wizard: "Wizard hat", mic: "Mic", shades: "Shades", beret: "Beret", halo: "Halo" },
+};
+// Special characters: unlocked by doing things in the app. `item` = the look piece they unlock for the editor.
+const SPECIALS = [
+  { id: "firstpost",    name: "Echo",   hint: "Make your first post",                 item: ["acc", "party"],   look: { color: "#2dd4bf", bg: "#fef9c3", eyes: "happy",  mouth: "grin",  acc: "party" } },
+  { id: "firstcomment", name: "Chatty", hint: "Write your first reply",               item: ["acc", "bubble"],  look: { color: "#fb923c", bg: "#dbeafe", eyes: "round",  mouth: "open",  acc: "bubble" } },
+  { id: "firstlike",    name: "Lovey",  hint: "Like your first post",                 item: ["eyes", "hearts"], look: { color: "#f472b6", bg: "#fce7f3", eyes: "hearts", mouth: "smile", acc: "bow" } },
+  { id: "likerun",      name: "Zap",    hint: "Like 10 posts in a row",               item: ["acc", "bolt"],    look: { color: "#fde047", bg: "#ede9fe", eyes: "dots",   mouth: "grin",  acc: "bolt" } },
+  { id: "week",         name: "Blaze",  hint: "Keep a 7-day streak",                  item: ["acc", "flame"],   look: { color: "#f87171", bg: "#ffedd5", eyes: "round",  mouth: "grin",  acc: "flame" } },
+  { id: "daily",        name: "Sage",   hint: "Answer the daily question",            item: ["acc", "wizard"],  look: { color: "#a78bfa", bg: "#dbeafe", eyes: "sleepy", mouth: "smile", acc: "wizard" } },
+  { id: "react",        name: "Beat",   hint: "Send your first voice reaction",       item: ["acc", "mic"],     look: { color: "#60a5fa", bg: "#ccfbf1", eyes: "wink",   mouth: "open",  acc: "mic" } },
+  { id: "video",        name: "Star",   hint: "Post your first video note",           item: ["acc", "shades"],  look: { color: "#94a3b8", bg: "#fef9c3", eyes: "dots",   mouth: "cat",   acc: "shades" } },
+  { id: "story",        name: "Bard",   hint: "Write a post of 100+ words",           item: ["acc", "beret"],   look: { color: "#34d399", bg: "#fce7f3", eyes: "happy",  mouth: "smile", acc: "beret" } },
+  { id: "month",        name: "Legend", hint: "Keep a 30-day streak",                 item: ["acc", "halo"],    look: { color: "#fde047", bg: "#e2e8f0", eyes: "happy",  mouth: "grin",  acc: "halo" } },
+];
+const LOCKED_ITEM = Object.fromEntries(SPECIALS.map((sp) => [sp.item.join(":"), sp.id]));
+const isSpecialLook = (c) => !!LOCKED_ITEM[`acc:${c.acc}`] || !!LOCKED_ITEM[`eyes:${c.eyes}`];
+function defaultCharacter(seed = "x") {
+  let h = 0; for (const c of String(seed)) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return { color: CHAR.colors[h % CHAR.colors.length], bg: CHAR.bgs[(h >> 3) % CHAR.bgs.length], eyes: "round", mouth: "smile", acc: "none" };
+}
+function characterSVG(c = {}, size = 100) {
+  const k = CHAR.ink, col = c.color || CHAR.colors[0], bg = c.bg || CHAR.bgs[0];
+  const eyeL = { cx: 38, cy: 50 }, eyeR = { cx: 62, cy: 50 };
+  const ball = (e, dx = 1) => `<ellipse cx="${e.cx}" cy="${e.cy}" rx="5.6" ry="7" fill="#fff" stroke="${k}" stroke-width="2.2"/><circle cx="${e.cx + dx}" cy="${e.cy + 1}" r="3" fill="${k}"/>`;
+  const arc = (e) => `<path d="M${e.cx - 6} ${e.cy + 3} Q${e.cx} ${e.cy - 6} ${e.cx + 6} ${e.cy + 3}" fill="none" stroke="${k}" stroke-width="3" stroke-linecap="round"/>`;
+  const eyes = {
+    round: ball(eyeL) + ball(eyeR),
+    dots: `<circle cx="38" cy="51" r="3.6" fill="${k}"/><circle cx="62" cy="51" r="3.6" fill="${k}"/>`,
+    happy: arc(eyeL) + arc(eyeR),
+    sleepy: `<path d="M32 51 Q38 57 44 51" fill="none" stroke="${k}" stroke-width="3" stroke-linecap="round"/><path d="M56 51 Q62 57 68 51" fill="none" stroke="${k}" stroke-width="3" stroke-linecap="round"/>`,
+    wink: ball(eyeL) + `<path d="M56 52 Q62 46 68 52" fill="none" stroke="${k}" stroke-width="3" stroke-linecap="round"/>`,
+    hearts: [38, 62].map((x) => `<path transform="translate(${x} 51) scale(1.25)" d="M0 5 C-10 -3 -7 -11 0 -6 C7 -11 10 -3 0 5Z" fill="#ef4444" stroke="${k}" stroke-width="1.8" stroke-linejoin="round"/>`).join(""),
+  }[c.eyes] || "";
+  const mouth = {
+    smile: `<path d="M42 64 Q50 72 58 64" fill="none" stroke="${k}" stroke-width="3" stroke-linecap="round"/>`,
+    grin: `<path d="M41 63 Q50 77 59 63 Z" fill="#fff" stroke="${k}" stroke-width="2.6" stroke-linejoin="round"/>`,
+    open: `<path d="M44 63 Q50 78 56 63 Z" fill="${k}"/><ellipse cx="50" cy="71" rx="3" ry="2" fill="#fb7185"/>`,
+    cat: `<path d="M42 65 Q46 70 50 65 Q54 70 58 65" fill="none" stroke="${k}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`,
+    meh: `<path d="M44 67 H56" fill="none" stroke="${k}" stroke-width="3" stroke-linecap="round"/>`,
+  }[c.mouth] || "";
+  const acc = {
+    glasses: `<circle cx="38" cy="50" r="9" fill="#fff" fill-opacity=".3" stroke="${k}" stroke-width="2.6"/><circle cx="62" cy="50" r="9" fill="#fff" fill-opacity=".3" stroke="${k}" stroke-width="2.6"/><path d="M47 50 H53" stroke="${k}" stroke-width="2.6"/>`,
+    cap: `<path d="M20 42 Q50 6 80 42 Z" fill="#ef4444" stroke="${k}" stroke-width="3" stroke-linejoin="round"/><path d="M58 40 Q82 36 88 46 L58 46 Z" fill="#dc2626" stroke="${k}" stroke-width="3" stroke-linejoin="round"/>`,
+    headphones: `<path d="M19 54 Q19 14 50 14 Q81 14 81 54" fill="none" stroke="${k}" stroke-width="4.5" stroke-linecap="round"/><rect x="13" y="47" width="10" height="20" rx="5" fill="#f472b6" stroke="${k}" stroke-width="3"/><rect x="77" y="47" width="10" height="20" rx="5" fill="#f472b6" stroke="${k}" stroke-width="3"/>`,
+    crown: `<path d="M32 28 L35 11 L44 22 L50 8 L56 22 L65 11 L68 28 Z" fill="#fde047" stroke="${k}" stroke-width="2.8" stroke-linejoin="round"/>`,
+    bow: `<path d="M64 22 L78 13 L78 31 Z M64 22 L50 13 L50 31 Z" fill="#f472b6" stroke="${k}" stroke-width="2.6" stroke-linejoin="round"/><circle cx="64" cy="22" r="4.5" fill="#ec4899" stroke="${k}" stroke-width="2.4"/>`,
+    party: `<path d="M37 29 L50 4 L63 29 Z" fill="#8b5cf6" stroke="${k}" stroke-width="2.8" stroke-linejoin="round"/><path d="M42 21 H58 M45 14 H55" stroke="#fde047" stroke-width="3"/><circle cx="50" cy="5" r="4.2" fill="#fde047" stroke="${k}" stroke-width="2"/>`,
+    bubble: `<path d="M54 4 h30 a6 6 0 0 1 6 6 v11 a6 6 0 0 1 -6 6 h-16 l-8 8 v-8 h-6 a6 6 0 0 1 -6 -6 v-11 a6 6 0 0 1 6 -6z" fill="#fff" stroke="${k}" stroke-width="2.6" stroke-linejoin="round"/><circle cx="62" cy="16" r="2.2" fill="${k}"/><circle cx="70" cy="16" r="2.2" fill="${k}"/><circle cx="78" cy="16" r="2.2" fill="${k}"/>`,
+    bolt: `<path d="M54 1 L38 21 H49 L44 35 L63 12 H52 Z" fill="#fde047" stroke="${k}" stroke-width="2.6" stroke-linejoin="round"/>`,
+    flame: `<path d="M50 1 C57 13 68 15 63 29 C60 36 40 36 37 29 C32 17 45 15 50 1Z" fill="#fb923c" stroke="${k}" stroke-width="2.6" stroke-linejoin="round"/><path d="M50 15 C54 21 58 22 56 29 C54 33 46 33 44 29 C43 23 47 21 50 15Z" fill="#fde047"/>`,
+    wizard: `<path d="M30 33 L50 2 L70 33 Z" fill="#6d28d9" stroke="${k}" stroke-width="2.8" stroke-linejoin="round"/><ellipse cx="50" cy="33" rx="28" ry="6" fill="#5b21b6" stroke="${k}" stroke-width="2.8"/><circle cx="49" cy="20" r="2.4" fill="#fde047"/><circle cx="56" cy="27" r="1.8" fill="#fde047"/>`,
+    mic: `<path d="M72 78 L84 90" stroke="${k}" stroke-width="3.5" stroke-linecap="round"/><rect x="62" y="58" width="14" height="20" rx="7" fill="#94a3b8" stroke="${k}" stroke-width="2.8"/><path d="M64 66 H74 M64 71 H74" stroke="${k}" stroke-width="1.8"/>`,
+    shades: `<path d="M27 45 h19 v9 a7 7 0 0 1 -7 7 h-5 a7 7 0 0 1 -7 -7z M54 45 h19 v9 a7 7 0 0 1 -7 7 h-5 a7 7 0 0 1 -7 -7z" fill="${k}"/><path d="M46 47 h8" stroke="${k}" stroke-width="3"/><path d="M31 48 h6 M58 48 h6" stroke="#fff" stroke-width="2" opacity=".6" stroke-linecap="round"/>`,
+    beret: `<ellipse cx="46" cy="27" rx="28" ry="11" transform="rotate(-8 46 27)" fill="#ef4444" stroke="${k}" stroke-width="3"/><circle cx="52" cy="14" r="3.4" fill="${k}"/>`,
+    halo: `<ellipse cx="50" cy="12" rx="21" ry="6" fill="none" stroke="${k}" stroke-width="8"/><ellipse cx="50" cy="12" rx="21" ry="6" fill="none" stroke="#fde047" stroke-width="4.2"/>`,
+    sprout: `<path d="M50 22 V10" stroke="${k}" stroke-width="3.4" stroke-linecap="round"/><path d="M50 14 Q38 6 33 14 Q42 20 50 14 Z M50 12 Q62 2 68 10 Q58 17 50 12 Z" fill="#34d399" stroke="${k}" stroke-width="2.4" stroke-linejoin="round"/>`,
+  }[c.acc] || "";
+  const star4 = (x, y, r) => `<path d="M${x} ${y - r} Q${x} ${y} ${x + r} ${y} Q${x} ${y} ${x} ${y + r} Q${x} ${y} ${x - r} ${y} Q${x} ${y} ${x} ${y - r}Z" fill="#fde047" stroke="${k}" stroke-width="1.4" stroke-linejoin="round"/>`;
+  const spark = star4(13, 24, 8) + star4(88, 36, 6) + star4(84, 86, 5);
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="${size}" height="${size}">` +
+    `<rect width="100" height="100" fill="${bg}"/>` +
+    `<ellipse cx="38" cy="90" rx="9" ry="5" fill="${k}"/><ellipse cx="62" cy="90" rx="9" ry="5" fill="${k}"/>` +
+    `<circle cx="50" cy="56" r="34" fill="${col}" stroke="${k}" stroke-width="3.5"/>` +
+    `<path d="M26 40 Q32 28 44 26" fill="none" stroke="#fff" stroke-width="3.6" stroke-linecap="round" opacity=".5"/>` +
+    `<ellipse cx="29" cy="64" rx="4.4" ry="3.2" fill="#fb7185" opacity=".55"/><ellipse cx="71" cy="64" rx="4.4" ry="3.2" fill="#fb7185" opacity=".55"/>` +
+    eyes + mouth + acc + (isSpecialLook(c) ? spark : "") + `</svg>`;
+}
+const characterDataUri = (c) => `data:image/svg+xml;utf8,${encodeURIComponent(characterSVG(c, 128))}`;
+
+// ---------------- Unlock engine: achievements, streaks and the celebration
+let _likeRun = 0;
+const isUnlocked = (id) => (state.me?.unlocked || []).includes(id);
+const dayStr = (d = new Date()) => d.toLocaleDateString("en-CA");
+
+async function saveCharacter(ch, use) {
+  await updateDoc(doc(db, "users", state.uid), { character: ch, useCharacter: use });
+  state.me = { ...state.me, character: ch, useCharacter: use };
+  state.cache.users.set(state.uid, { ...(state.cache.users.get(state.uid) || {}), uid: state.uid, ...state.me });
+  const mine = document.querySelector("#meAvatar"); if (mine) mine.src = avatarFor(state.me);
+}
+
+const _unlockQueue = [];
+let _unlockBusy = false;
+async function _drainUnlocks() {
+  if (_unlockBusy) return;
+  _unlockBusy = true;
+  while (_unlockQueue.length) await showUnlock(_unlockQueue.shift());
+  _unlockBusy = false;
+}
+
+// kind: "post" | "comment" | "like" | "react"
+async function trackAction(kind, extra = {}) {
+  if (!state.uid || !state.me) return;
+  if (kind === "like" && !extra.on) { _likeRun = 0; return; }
+  const have = new Set(state.me.unlocked || []);
+  const got = [];
+  const want = (id) => { if (!have.has(id) && !got.includes(id)) got.push(id); };
+  if (kind === "post") { want("firstpost"); if (extra.video) want("video"); if (extra.prompt) want("daily"); if ((extra.words || 0) >= 100) want("story"); }
+  if (kind === "comment") want("firstcomment");
+  if (kind === "react") want("react");
+  if (kind === "like") { want("firstlike"); _likeRun += 1; if (_likeRun >= 10) want("likerun"); }
+  // daily streak: any post / reply / like / reaction counts for the day
+  const st = state.me.streak || { count: 0, last: "" }, today = dayStr();
+  let streak = st;
+  if (st.last !== today) {
+    const y = new Date(); y.setDate(y.getDate() - 1);
+    streak = { count: st.last === dayStr(y) ? (st.count || 0) + 1 : 1, last: today };
+  }
+  if (streak.count >= 7) want("week");
+  if (streak.count >= 30) want("month");
+  const patch = {};
+  if (streak !== st) patch.streak = streak;
+  if (got.length) patch.unlocked = arrayUnion(...got);
+  if (!Object.keys(patch).length) return;
+  try { await updateDoc(doc(db, "users", state.uid), patch); } catch { return; }
+  state.me = { ...state.me, streak, unlocked: [...have, ...got] };
+  state.cache.users.set(state.uid, { ...(state.cache.users.get(state.uid) || {}), uid: state.uid, ...state.me });
+  got.forEach((id) => { const sp = SPECIALS.find((x) => x.id === id); if (sp) _unlockQueue.push(sp); });
+  _drainUnlocks();
+}
+
+function showUnlock(sp) {
+  return new Promise((resolve) => {
+    try { sfxPost(); } catch {}
+    const confetti = el("div", { class: "gbu-confetti" });
+    const cols = ["#fde047", "#f472b6", "#8b5cf6", "#2dd4bf", "#fb923c", "#60a5fa"];
+    for (let i = 0; i < 44; i++) {
+      const p = el("i", { style: `left:${Math.random() * 100}%;--dx:${(Math.random() - .5) * 160}px;--rot:${Math.round(Math.random() * 720 - 360)}deg;--dl:${(1.0 + Math.random() * .7).toFixed(2)}s;--du:${(2.2 + Math.random() * 1.6).toFixed(2)}s;background:${cols[i % cols.length]};width:${6 + Math.random() * 6}px;height:${8 + Math.random() * 8}px;border-radius:${Math.random() > .5 ? "50%" : "2px"}` });
+      confetti.appendChild(p);
+    }
+    const close = () => { ov.classList.add("out"); setTimeout(() => { ov.remove(); resolve(); }, 260); };
+    const wear = el("button", { class: "gbu-btn primary", type: "button", onclick: async () => {
+      wear.disabled = true;
+      try { await saveCharacter(sp.look, true); toast(`${sp.name} is now your character`); } catch { toast("Couldn't save"); }
+      close();
+    } }, "Wear it");
+    const ov = el("div", { class: "gbu" },
+      el("div", { class: "gbu-rays" }), confetti,
+      el("div", { class: "gbu-stage" },
+        el("div", { class: "gbu-lock", html: '<i class="ri-lock-2-fill"></i>' }),
+        el("div", { class: "gbu-burst" }),
+        el("div", { class: "gbu-char", html: characterSVG(sp.look, 200) })),
+      el("div", { class: "gbu-k" }, "New character unlocked!"),
+      el("div", { class: "gbu-name" }, sp.name),
+      el("div", { class: "gbu-hint" }, sp.hint),
+      el("div", { class: "gbu-btns" }, wear, el("button", { class: "gbu-btn", type: "button", onclick: close }, "Keep going")));
+    document.body.appendChild(ov);
+  });
+}
+
+// ---------------- Character studio page (#character)
+function renderCharacterPage(root) {
+  const me = state.me || {};
+  let ch = { ...defaultCharacter(state.uid), ...(me.character || {}) };
+  let use = me.useCharacter ?? true;
+  const preview = el("div", { class: "gbc-preview" });
+  const draw = () => { preview.innerHTML = characterSVG(ch, 180); };
+  const rows = el("div", { class: "gbc-rows" });
+  const optRows = [];
+  const lockedId = (key, k) => LOCKED_ITEM[`${key}:${k}`];
+  const swatchRow = (label, list, key) => {
+    const row = el("div", { class: "gbc-swatches" });
+    list.forEach((c) => {
+      const b = el("button", { class: `gbc-sw${ch[key] === c ? " on" : ""}`, type: "button", style: `background:${c}`, "aria-label": c, onclick: () => {
+        ch[key] = c; [...row.children].forEach((x) => x.classList.toggle("on", x === b)); draw(); optRows.forEach((r) => r());
+      } });
+      row.appendChild(b);
+    });
+    return el("div", { class: "gbc-sec" }, el("div", { class: "gb-st-label" }, label), row);
+  };
+  const optRow = (label, map, key) => {
+    const row = el("div", { class: "gbc-opts" });
+    const refresh = () => {
+      row.innerHTML = "";
+      Object.entries(map).forEach(([k, name]) => {
+        const lid = lockedId(key, k), locked = lid && !isUnlocked(lid);
+        const b = el("button", { class: `gbc-opt${ch[key] === k ? " on" : ""}${locked ? " locked" : ""}`, type: "button", title: locked ? SPECIALS.find((x) => x.id === lid).hint : name, onclick: () => {
+          if (locked) { toast(`Locked: ${SPECIALS.find((x) => x.id === lid).hint}`); return; }
+          ch[key] = k; draw(); optRows.forEach((r) => r());
+        } });
+        b.innerHTML = characterSVG({ ...ch, [key]: k }, 56) + (locked ? '<span class="gbc-lock"><i class="ri-lock-2-fill"></i></span>' : "");
+        row.appendChild(b);
+      });
+    };
+    optRows.push(refresh); refresh();
+    return el("div", { class: "gbc-sec" }, el("div", { class: "gb-st-label" }, label), row);
+  };
+  const buildRows = () => {
+    optRows.length = 0;
+    return [swatchRow("Colour", CHAR.colors, "color"), swatchRow("Background", CHAR.bgs, "bg"),
+      optRow("Eyes", CHAR.eyes, "eyes"), optRow("Mouth", CHAR.mouth, "mouth"), optRow("Extras", CHAR.acc, "acc")];
+  };
+  const rebuild = () => { rows.innerHTML = ""; rows.append(...buildRows()); };
+  const openKeys = (key) => Object.keys(CHAR[key]).filter((k) => { const l = lockedId(key, k); return !l || isUnlocked(l); });
+  const pickKey = (key) => { const ks = openKeys(key); return ks[Math.floor(Math.random() * ks.length)]; };
+  const dice = el("button", { class: "gb-chip", type: "button", onclick: () => {
+    ch = { color: CHAR.colors[Math.floor(Math.random() * CHAR.colors.length)], bg: CHAR.bgs[Math.floor(Math.random() * CHAR.bgs.length)], eyes: pickKey("eyes"), mouth: pickKey("mouth"), acc: pickKey("acc") };
+    draw(); rebuild();
+  } }, el("i", { class: "ri-dice-line" }), " Surprise me");
+
+  // collection of special characters
+  const streakN = me.streak?.count || 0;
+  const progress = (id) => id === "week" ? `${Math.min(streakN, 7)}/7 days` : id === "month" ? `${Math.min(streakN, 30)}/30 days` : id === "likerun" ? `${Math.min(_likeRun, 10)}/10 likes` : "";
+  const coll = el("div", { class: "gbc-coll" });
+  SPECIALS.forEach((sp) => {
+    const ok = isUnlocked(sp.id);
+    const card = el("button", { class: `gbc-card${ok ? " open" : ""}`, type: "button", onclick: () => {
+      if (!ok) { toast(`Locked: ${sp.hint}`); return; }
+      ch = { ...sp.look }; draw(); rebuild(); window.scrollTo?.(0, 0); document.getElementById("content")?.scrollTo({ top: 0, behavior: "smooth" });
+    } });
+    card.innerHTML = `<span class="gbc-card-art">${characterSVG(sp.look, 84)}${ok ? "" : '<span class="gbc-lock big"><i class="ri-lock-2-fill"></i></span>'}</span>` +
+      `<strong>${ok ? sp.name : "???"}</strong><small>${ok ? "Tap to try it on" : sp.hint}</small>` + (!ok && progress(sp.id) ? `<em>${progress(sp.id)}</em>` : "");
+    coll.appendChild(card);
+  });
+  const useBox = el("input", { type: "checkbox" }); useBox.checked = !!use;
+  useBox.addEventListener("change", () => { use = useBox.checked; });
+  const save = el("button", { class: "gb-st-done", type: "button", onclick: async () => {
+    save.disabled = true;
+    try { await saveCharacter(ch, use); toast("Character saved"); history.length > 1 ? history.back() : (location.hash = "#feed"); }
+    catch (e) { toast("Couldn't save: " + (e.message || "try again")); save.disabled = false; }
+  } }, "Save");
+  draw(); rebuild();
+  const col = el("div", { class: "gb-col gb-page" },
+    el("div", { class: "gb-head" },
+      el("button", { class: "gb-icon-btn", type: "button", onclick: () => history.back() }, el("i", { class: "ri-arrow-left-line" })),
+      el("div", { class: "gb-head-t" }, el("strong", {}, "Your character")), save),
+    el("div", { class: "gbc-wrap" }, preview,
+      el("div", { class: "gbc-center" }, dice, streakN ? el("span", { class: "gbc-streak" }, el("i", { class: "ri-fire-fill" }), ` ${streakN}-day streak`) : null),
+      rows,
+      el("label", { class: "gbc-use" }, useBox, el("span", {}, "Use my character as my profile picture")),
+      el("div", { class: "gbc-coll-h" }, el("strong", {}, "Special characters"), el("span", {}, `${SPECIALS.filter((x) => isUnlocked(x.id)).length}/${SPECIALS.length} unlocked`)),
+      coll));
+  root.appendChild(col);
+}
+
+export const avatarFor = (u) =>
+  (u?.useCharacter && u?.character ? characterDataUri(u.character) : null) || u?.photoURL || `https://api.dicebear.com/7.x/shapes/svg?seed=${encodeURIComponent(u?.uid || u?.username || "x")}`;
+
+const profileCoverFor = (u) =>
+  u?.coverURL || u?.coverUrl || u?.bannerURL || u?.bannerUrl || "";
+
+export const fetchUser = async (uid) => {
+  if (!uid) return null;
+  if (state.cache.users.has(uid)) return state.cache.users.get(uid);
+  const snap = await getDoc(doc(db, "users", uid));
+  const data = snap.exists() ? { uid, ...snap.data() } : null;
+  if (data) state.cache.users.set(uid, data);
+  return data;
+};
+
+const resolveGroupMemberIds = async (raw = "") => {
+  const tokens = [...new Set(raw.split(/[\s,]+/).map((value) => value.trim().replace(/^@/, "").toLowerCase()).filter(Boolean))];
+  const ids = [];
+  for (const token of tokens) {
+    const byUsername = await getDocs(query(collection(db, "users"), where("username", "==", token), limit(1)));
+    if (!byUsername.empty) {
+      ids.push(byUsername.docs[0].id);
+      continue;
+    }
+    const byEmail = await getDocs(query(collection(db, "users"), where("email", "==", token), limit(1)));
+    if (!byEmail.empty) ids.push(byEmail.docs[0].id);
+  }
+  return [...new Set(ids)].filter((uid) => uid !== state.uid);
+};
+
+export const openGroupAdmin = async (groupId) => {
+  const snap = await getDoc(doc(db, "groups", groupId));
+  if (!snap.exists()) { toast("Group not found"); return; }
+  const group = { id: groupId, ...snap.data() };
+  if (!(group.admins || []).includes(state.uid) && group.ownerUid !== state.uid) {
+    toast("Only group admins can manage this group");
+    return;
+  }
+
+  const overlay = el("div", { class: "modal group-admin-modal" });
+  const memberList = el("div", { class: "group-admin-members" });
+  const nameInput = el("input", { type: "text", value: group.name || "", placeholder: "Group name" });
+  const iconInput = el("input", { type: "file", accept: "image/*" });
+  const currentIcon = el("img", { class: "group-admin-current-icon", src: group.iconUrl || group.photoURL || avatarFor({ uid: group.id }), alt: "Group picture" });
+  const linkInput = el("input", { type: "url", value: group.groupLink || "", placeholder: "https://example.com/group" });
+  const addInput = el("input", { type: "text", placeholder: "@username or email, separated by commas" });
+  const close = () => overlay.remove();
+
+  const paintMembers = async () => {
+    memberList.innerHTML = "";
+    const members = await Promise.all((group.members || []).map(fetchUser));
+    members.filter(Boolean).forEach((member) => {
+      const isOwner = member.uid === group.ownerUid;
+      const row = el("div", { class: "group-admin-member" },
+        el("img", { class: "avatar xs", src: avatarFor(member), alt: member.name || "Member" }),
+        el("div", { class: "group-admin-member-meta" },
+          el("strong", {}, member.name || "Member"),
+          el("span", {}, `@${member.username || "user"}${isOwner ? " · Owner" : ""}`),
+        ),
+        !isOwner ? el("button", {
+          class: "icon-btn",
+          title: "Remove member",
+          onclick: async () => {
+            group.members = (group.members || []).filter((uid) => uid !== member.uid);
+            await updateDoc(doc(db, "groups", group.id), { members: arrayRemove(member.uid) });
+            toast("Member removed");
+            paintMembers();
+          },
+        }, el("i", { class: "ri-user-unfollow-line" })) : null,
+      );
+      memberList.appendChild(row);
+    });
+    if (!memberList.children.length) memberList.appendChild(el("div", { class: "group-admin-empty" }, "No members yet."));
+  };
+
+  const saveLinkBtn = el("button", {
+    class: "btn primary",
+    onclick: async () => {
+      const value = linkInput.value.trim();
+      if (value && !/^https?:\/\//i.test(value)) {
+        toast("Group links must start with http:// or https://");
+        return;
+      }
+      await updateDoc(doc(db, "groups", group.id), { groupLink: value });
+      group.groupLink = value;
+      toast("Group link updated");
+    },
+  }, "Save link");
+
+  const saveDetailsBtn = el("button", {
+    class: "btn primary",
+    onclick: async () => {
+      const name = nameInput.value.trim();
+      if (!name) { toast("Group name cannot be empty"); return; }
+      const updates = { name };
+      if (iconInput.files?.[0]) {
+        saveDetailsBtn.disabled = true;
+        saveDetailsBtn.textContent = "Uploading…";
+        try {
+          const uploaded = await uploadToCloudinary(iconInput.files[0], "image");
+          updates.iconUrl = uploaded.url;
+        } catch {
+          saveDetailsBtn.disabled = false;
+          saveDetailsBtn.textContent = "Save details";
+          return;
+        }
+      }
+      await updateDoc(doc(db, "groups", group.id), updates);
+      Object.assign(group, updates);
+      toast("Group details updated");
+      saveDetailsBtn.disabled = false;
+      saveDetailsBtn.textContent = "Save details";
+      close();
+      router();
+    },
+  }, "Save details");
+
+  const addBtn = el("button", {
+    class: "btn ghost",
+    onclick: async () => {
+      const ids = await resolveGroupMemberIds(addInput.value);
+      if (!ids.length) { toast("No matching Get better members found"); return; }
+      await updateDoc(doc(db, "groups", group.id), { members: arrayUnion(...ids) });
+      group.members = [...new Set([...(group.members || []), ...ids])];
+      addInput.value = "";
+      toast(`${ids.length} member${ids.length === 1 ? "" : "s"} added`);
+      paintMembers();
+    },
+  }, "Add members");
+
+  overlay.appendChild(el("div", { class: "modal-card group-admin-card" },
+    el("div", { class: "modal-head" },
+      el("h3", {}, "Manage group"),
+      el("button", { class: "icon-btn", onclick: close }, el("i", { class: "ri-close-line" })),
+    ),
+    el("div", { class: "group-admin-section" },
+      el("div", { class: "group-admin-label" }, "Group profile"),
+      currentIcon,
+      nameInput,
+      iconInput,
+      saveDetailsBtn,
+    ),
+    el("div", { class: "group-admin-section" },
+      el("div", { class: "group-admin-label" }, "Group link"),
+      el("div", { class: "group-admin-inline" }, linkInput, saveLinkBtn),
+    ),
+    el("div", { class: "group-admin-section" },
+      el("div", { class: "group-admin-label" }, "Add members"),
+      el("div", { class: "group-admin-inline" }, addInput, addBtn),
+      el("p", { class: "group-admin-help" }, "Admins can add members by Get better username or email."),
+    ),
+    el("div", { class: "group-admin-section" },
+      el("div", { class: "group-admin-label" }, `Members (${(group.members || []).length})`),
+      memberList,
+    ),
+  ));
+  overlay.addEventListener("click", (event) => { if (event.target === overlay) close(); });
+  document.body.appendChild(overlay);
+  paintMembers();
+};
+
+export const setFollowState = async (uid, shouldFollow) => {
+  if (!uid || uid === state.uid) return;
+  const meRef = doc(db, "users", state.uid);
+  const themRef = doc(db, "users", uid);
+  const batch = writeBatch(db);
+  batch.update(meRef, { following: shouldFollow ? arrayUnion(uid) : arrayRemove(uid) });
+  batch.update(themRef, { followers: shouldFollow ? arrayUnion(state.uid) : arrayRemove(state.uid) });
+  await batch.commit();
+  state.me.following = shouldFollow
+    ? [...new Set([...(state.me.following || []), uid])]
+    : (state.me.following || []).filter((id) => id !== uid);
+  state.cache.users.delete(uid);
+  state.cache.users.delete(state.uid);
+  if (shouldFollow) writeNotif(uid, "follow", {}).catch(() => {});
+};
+
+// =========================================================================
+// 4. CLOUDINARY UPLOAD
+// =========================================================================
+export const uploadToCloudinary = async (file, kind = "image") => {
+  if (!file) return null;
+  if (cloudinaryConfig.cloudName.startsWith("YOUR_")) {
+    toast("Cloudinary not configured — set cloudName + uploadPreset in app.js");
+    throw new Error("Cloudinary not configured");
+  }
+  const url = `https://api.cloudinary.com/v1_1/${cloudinaryConfig.cloudName}/${kind === "video" ? "video" : "image"}/upload`;
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("upload_preset", cloudinaryConfig.uploadPreset);
+  const res = await fetch(url, { method: "POST", body: fd });
+  if (!res.ok) throw new Error("Upload failed");
+  const json = await res.json();
+  // Strip undefined fields — Firestore rejects them
+  const out = { url: json.secure_url, publicId: json.public_id, type: kind };
+  if (json.width)    out.width    = json.width;
+  if (json.height)   out.height   = json.height;
+  if (json.duration) out.duration = json.duration; // only present for video
+  return out;
+};
+
+// =========================================================================
+// 5. THEME
+// =========================================================================
+const applyTheme = (theme) => {
+  document.documentElement.setAttribute("data-theme", theme);
+  localStorage.setItem("orbit:theme", theme);
+  const icon = $("#themeToggle")?.querySelector("i");
+  if (icon) {
+    icon.className = theme === "dark" ? "ri-sun-line"
+                   : theme === "light" ? "ri-moon-line"
+                   : "ri-contrast-2-line"; // glass
+  }
+};
+const initTheme = () => applyTheme(localStorage.getItem("orbit:theme") || "light");
+const toggleTheme = () => {
+  const cur = document.documentElement.getAttribute("data-theme") || "dark";
+  applyTheme(cur === "dark" ? "light" : cur === "light" ? "glass" : "dark");
+};
+
+// =========================================================================
+// GET BETTER LOADER — branded spinner shown during async auth operations
+// =========================================================================
+// Cartoon "friends playing" loader (styles in style.css → .gb-loader)
+const GB_LOADER_SVG = `<svg class="gbl" viewBox="0 0 240 140" aria-hidden="true"><ellipse cx="120" cy="124" rx="100" ry="8" fill="#1e1b4b" opacity=".08"/><g transform="translate(52 86) scale(0.765)" class="ob-pos gbl-c"><g class="ob-char" style="--d:0.0s">
+<ellipse cx="0" cy="28" rx="20.8" ry="6" fill="#1e1b4b" opacity=".12" class="ob-shadow"/>
+<ellipse cx="-12" cy="24" rx="9" ry="6" fill="#1e1b4b"/><ellipse cx="12" cy="24" rx="9" ry="6" fill="#1e1b4b"/>
+
+<circle r="26" fill="#8b5cf6" stroke="#1e1b4b" stroke-width="3.5"/>
+<path d="M-22 -16 Q-14 -28 -2 -27" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" opacity=".55"/>
+<g class="ob-eyes" style="--d:0.0s"><ellipse cx="-12" cy="-6" rx="7" ry="9" fill="#fff" stroke="#1e1b4b" stroke-width="2.5"/><ellipse cx="12" cy="-6" rx="7" ry="9" fill="#fff" stroke="#1e1b4b" stroke-width="2.5"/>
+<circle cx="-10" cy="-4" r="3.6" fill="#1e1b4b"/><circle cx="14" cy="-4" r="3.6" fill="#1e1b4b"/></g>
+<ellipse cx="-22" cy="8" rx="5" ry="3.5" fill="#fb7185" opacity=".55"/><ellipse cx="22" cy="8" rx="5" ry="3.5" fill="#fb7185" opacity=".55"/>
+<path d="M-11 6 Q0 22 11 6 Z" fill="#fff" stroke="#1e1b4b" stroke-width="3" stroke-linejoin="round"/></g></g><g transform="translate(120 86) scale(0.765)" class="ob-pos gbl-c"><g class="ob-char" style="--d:0.4s">
+<ellipse cx="0" cy="28" rx="20.8" ry="6" fill="#1e1b4b" opacity=".12" class="ob-shadow"/>
+<ellipse cx="-12" cy="24" rx="9" ry="6" fill="#1e1b4b"/><ellipse cx="12" cy="24" rx="9" ry="6" fill="#1e1b4b"/>
+
+<circle r="26" fill="#f472b6" stroke="#1e1b4b" stroke-width="3.5"/>
+<path d="M-22 -16 Q-14 -28 -2 -27" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" opacity=".55"/>
+<g class="ob-eyes" style="--d:0.4s"><ellipse cx="-12" cy="-6" rx="7" ry="9" fill="#fff" stroke="#1e1b4b" stroke-width="2.5"/><ellipse cx="12" cy="-6" rx="7" ry="9" fill="#fff" stroke="#1e1b4b" stroke-width="2.5"/>
+<circle cx="-10" cy="-4" r="3.6" fill="#1e1b4b"/><circle cx="14" cy="-4" r="3.6" fill="#1e1b4b"/></g>
+<ellipse cx="-22" cy="8" rx="5" ry="3.5" fill="#fb7185" opacity=".55"/><ellipse cx="22" cy="8" rx="5" ry="3.5" fill="#fb7185" opacity=".55"/>
+<path d="M-9 8 Q0 18 9 8" fill="none" stroke="#1e1b4b" stroke-width="3" stroke-linecap="round"/></g></g><g transform="translate(188 86) scale(0.765)" class="ob-pos gbl-c"><g class="ob-char" style="--d:0.8s">
+<ellipse cx="0" cy="28" rx="20.8" ry="6" fill="#1e1b4b" opacity=".12" class="ob-shadow"/>
+<ellipse cx="-12" cy="24" rx="9" ry="6" fill="#1e1b4b"/><ellipse cx="12" cy="24" rx="9" ry="6" fill="#1e1b4b"/>
+
+<circle r="26" fill="#2dd4bf" stroke="#1e1b4b" stroke-width="3.5"/>
+<path d="M-22 -16 Q-14 -28 -2 -27" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" opacity=".55"/>
+<g class="ob-eyes" style="--d:0.8s"><ellipse cx="-12" cy="-6" rx="7" ry="9" fill="#fff" stroke="#1e1b4b" stroke-width="2.5"/><ellipse cx="12" cy="-6" rx="7" ry="9" fill="#fff" stroke="#1e1b4b" stroke-width="2.5"/>
+<circle cx="-10" cy="-4" r="3.6" fill="#1e1b4b"/><circle cx="14" cy="-4" r="3.6" fill="#1e1b4b"/></g>
+<ellipse cx="-22" cy="8" rx="5" ry="3.5" fill="#fb7185" opacity=".55"/><ellipse cx="22" cy="8" rx="5" ry="3.5" fill="#fb7185" opacity=".55"/>
+<path d="M-11 6 Q0 22 11 6 Z" fill="#fff" stroke="#1e1b4b" stroke-width="3" stroke-linejoin="round"/></g></g><g class="gbl-ball-x"><g class="gbl-ball-y"><circle cx="52" cy="22" r="9" fill="#fde047" stroke="#1e1b4b" stroke-width="3"/><path d="M46 20 q6 -5 12 0" fill="none" stroke="#1e1b4b" stroke-width="2" stroke-linecap="round" opacity=".5"/></g></g><g transform="translate(22 24) scale(0.8)"><path class="ob-twinkle" style="--d:0.2s" d="M0 -10 L3 -3 L10 -3 L4.5 2 L6.5 9 L0 5 L-6.5 9 L-4.5 2 L-10 -3 L-3 -3Z" fill="#67e8f9" stroke="#1e1b4b" stroke-width="2" stroke-linejoin="round"/></g><g transform="translate(222 30) scale(0.8)"><path class="ob-twinkle" style="--d:0.9s" d="M0 -10 L3 -3 L10 -3 L4.5 2 L6.5 9 L0 5 L-6.5 9 L-4.5 2 L-10 -3 L-3 -3Z" fill="#fde047" stroke="#1e1b4b" stroke-width="2" stroke-linejoin="round"/></g><g transform="translate(120 22) scale(0.8)"><path class="ob-float" style="--d:0.5s" d="M0 6 C-12 -4 -8 -14 0 -8 C8 -14 12 -4 0 6Z" fill="#fb7185" stroke="#1e1b4b" stroke-width="2.5" stroke-linejoin="round"/></g></svg>`;
+const gbLoader = (label = "", small = false) =>
+  el("div", { class: `gb-loader${small ? " sm" : ""}`, html: GB_LOADER_SVG + (label ? `<div class="gb-loader-t">${label}</div>` : "") });
+
+const _injectOrbitLoaderStyles = (() => {
+  let done = false;
+  return () => {
+    if (done) return; done = true;
+    const s = document.createElement("style");
+    s.textContent = `
+      .orbit-loader-overlay {
+        position: fixed; inset: 0; z-index: 9999;
+        background: var(--bg, #0e0e1a);
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+        gap: 20px;
+        animation: orbitLoaderFadeIn .18s ease;
+      }
+      @keyframes orbitLoaderFadeIn { from { opacity: 0; } to { opacity: 1; } }
+      .orbit-loader-ring {
+        width: 56px; height: 56px;
+        border-radius: 50%;
+        border: 3px solid transparent;
+        border-top-color: #6c63ff;
+        border-right-color: #ff6b9d;
+        animation: orbitSpin .85s linear infinite;
+        position: relative;
+      }
+      .orbit-loader-ring::before {
+        content: '';
+        position: absolute; inset: 5px;
+        border-radius: 50%;
+        border: 2px solid transparent;
+        border-top-color: rgba(108,99,255,.35);
+        border-right-color: rgba(255,107,157,.35);
+        animation: orbitSpin 1.4s linear infinite reverse;
+      }
+      @keyframes orbitSpin { to { transform: rotate(360deg); } }
+      .orbit-loader-text {
+        font-size: 13px; font-weight: 600; letter-spacing: .5px;
+        background: linear-gradient(90deg, #6c63ff, #ff6b9d);
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        background-clip: text;
+      }
+    `;
+    document.head.appendChild(s);
+  };
+})();
+
+let _orbitLoaderEl = null;
+const showOrbitLoader = (label = "Signing in…") => {
+  _injectOrbitLoaderStyles();
+  if (_orbitLoaderEl) return;
+  _orbitLoaderEl = el("div", { class: "orbit-loader-overlay" },
+    gbLoader(label),
+  );
+  document.body.appendChild(_orbitLoaderEl);
+};
+const hideOrbitLoader = () => {
+  if (_orbitLoaderEl) { _orbitLoaderEl.remove(); _orbitLoaderEl = null; }
+};
+
+const showPostSuccess = () => {
+  const existing = document.querySelector(".post-success-overlay");
+  if (existing) existing.remove();
+  const overlay = el("div", { class: "post-success-overlay" },
+    el("div", { class: "post-success-card" },
+      el("div", { class: "post-success-orbit" },
+        el("span", {}, el("i", { class: "ri-check-line" })),
+      ),
+      el("h3", {}, "Your post is live"),
+      el("p", {}, "Your Get better is growing. Keep sharing your world."),
+    ),
+  );
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add("is-visible"));
+  setTimeout(() => {
+    overlay.classList.remove("is-visible");
+    setTimeout(() => overlay.remove(), 280);
+  }, 2200);
+};
+
+// =========================================================================
+// 6. AUTH FLOW
+// =========================================================================
+const showOnboarding = () => {
+  $("#onboarding").classList.remove("hidden");
+  $("#auth").classList.add("hidden");
+  $("#app").classList.add("hidden");
+  $("#boot").classList.add("hidden");
+
+  const slides = $$(".ob-slide", document.getElementById("onboarding"));
+  const dots   = $$(".ob-dot",   document.getElementById("onboarding"));
+  let current  = 0;
+
+  const goTo = (i) => {
+    slides[current].classList.remove("active");
+    dots[current].classList.remove("active");
+    current = i;
+    slides[current].classList.add("active");
+    dots[current].classList.add("active");
+    const nextBtn = $("#obNext");
+    if (nextBtn) nextBtn.innerHTML = current === slides.length - 1
+      ? 'Get Started <i class="ri-rocket-line"></i>'
+      : 'Next <i class="ri-arrow-right-line"></i>';
+  };
+
+  $("#obNext")?.addEventListener("click", () => {
+    if (current < slides.length - 1) { goTo(current + 1); }
+    else { finishOnboarding(); }
+  });
+  $("#obSkip")?.addEventListener("click", finishOnboarding);
+
+  // Touch/swipe support
+  let touchStartX = 0;
+  const obEl = document.getElementById("onboarding");
+  obEl.addEventListener("touchstart", (e) => { touchStartX = e.touches[0].clientX; }, { passive: true });
+  obEl.addEventListener("touchend", (e) => {
+    const dx = touchStartX - e.changedTouches[0].clientX;
+    if (Math.abs(dx) > 40) {
+      if (dx > 0 && current < slides.length - 1) goTo(current + 1);
+      else if (dx < 0 && current > 0) goTo(current - 1);
+    }
+  }, { passive: true });
+};
+
+const finishOnboarding = () => {
+  localStorage.setItem("orbit_onboarded", "1");
+  $("#onboarding").classList.add("hidden");
+  showAuth();
+};
+
+const showAuth = () => { hideOrbitLoader(); $("#auth").classList.remove("hidden"); $("#app").classList.add("hidden"); $("#boot").classList.add("hidden"); $("#onboarding").classList.add("hidden"); };
+const showApp  = () => { hideOrbitLoader(); $("#auth").classList.add("hidden"); $("#app").classList.remove("hidden"); $("#boot").classList.add("hidden"); };
+
+const ensureUserDoc = async (user, extras = {}) => {
+  const ref = doc(db, "users", user.uid);
+  // Offline-safe: try the server (max 6s), then the saved copy, then a bare profile from the login.
+  let snap = null;
+  try { snap = await Promise.race([getDoc(ref), new Promise((_, rej) => setTimeout(() => rej(new Error("slow")), 6000))]); }
+  catch { try { snap = await getDocFromCache(ref); } catch { snap = null; } }
+  if (!snap) {
+    const uname = (user.email?.split("@")[0] || "me").toLowerCase().replace(/[^a-z0-9_]/g, "");
+    return { uid: user.uid, name: user.displayName || uname, username: uname, email: user.email || null,
+      photoURL: user.photoURL || `https://api.dicebear.com/7.x/shapes/svg?seed=${user.uid}`, followers: [], following: [], _offlineStub: true };
+  }
+  if (!snap.exists()) {
+    const username = (extras.username || (user.email?.split("@")[0]) || `u${Date.now()}`).toLowerCase().replace(/[^a-z0-9_]/g, "");
+    const profile = {
+      uid: user.uid,
+      name: extras.name || user.displayName || username,
+      username,
+      email: user.email || null,
+      photoURL: user.photoURL || `https://api.dicebear.com/7.x/shapes/svg?seed=${user.uid}`,
+      bio: "",
+      birthday: null,
+      birthdayAnnounceEnabled: false,
+      birthdayAnnouncedYear: null,
+      verified: false,                // becomes true after location grant
+      verifiedAt: null,
+      location: null,                 // { lat, lng, city }
+      followers: [],
+      following: [],
+      privateAccount: false,
+      showOnline: true,
+      allowMessages: true,
+      autoplayVideos: true,
+      emailNotifications: true,
+      hideSensitive: false,
+      themePref: "dark",
+      online: true,
+      lastSeen: serverTimestamp(),
+      createdAt: serverTimestamp(),
+    };
+    await setDoc(ref, profile);
+    // Welcome notification for new users
+    await addDoc(collection(db, "notifications", user.uid, "items"), {
+      type: "welcome",
+      text: `Welcome to Get better, ${profile.name.split(" ")[0]}! 👋 Explore communities, join spaces, and connect with people who share your interests.`,
+      read: false,
+      createdAt: serverTimestamp(),
+    }).catch(() => {});
+    return { ...profile, _isNew: true };
+  }
+  // mark online + lastSeen
+  updateDoc(ref, { online: true, lastSeen: serverTimestamp() }).catch(() => {});   // never await: offline writes wait for the network
+  return { uid: user.uid, ...snap.data(), online: true };
+};
+
+const announceBirthdayIfDue = async () => {
+  const uid = state.uid;
+  if (!uid) return;
+  const userRef = doc(db, "users", uid);
+  const snap = await getDoc(userRef);
+  if (!snap.exists()) return;
+  const profile = { uid, ...snap.data() };
+  const birthday = String(profile.birthday || "");
+  if (!profile.birthdayAnnounceEnabled || !/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(birthday)) return;
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const today = `${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  if (birthday !== today || Number(profile.birthdayAnnouncedYear) === year) return;
+
+  const followers = [...new Set((profile.followers || []).filter((followerUid) => followerUid && followerUid !== uid))];
+  const notificationId = `birthday_${uid}_${year}`;
+  if (!followers.length) {
+    await updateDoc(userRef, { birthdayAnnouncedYear: year });
+    state.me = { ...state.me, birthdayAnnouncedYear: year };
+    return;
+  }
+
+  for (let offset = 0; offset < followers.length; offset += 400) {
+    const batch = writeBatch(db);
+    const chunk = followers.slice(offset, offset + 400);
+    chunk.forEach((followerUid) => {
+      batch.set(doc(db, "notifications", followerUid, "items", notificationId), {
+        type: "birthday",
+        fromUid: uid,
+        profileUid: uid,
+        text: `${profile.name || "Someone"} is celebrating a birthday today!`,
+        read: false,
+        createdAt: serverTimestamp(),
+      });
+    });
+    if (offset + chunk.length >= followers.length) batch.update(userRef, { birthdayAnnouncedYear: year });
+    await batch.commit();
+  }
+  state.me = { ...state.me, birthdayAnnouncedYear: year };
+};
+
+onAuthStateChanged(auth, async (user) => {
+  if (!user) {
+    state.me = null; state.uid = null;
+    if (!localStorage.getItem("orbit_onboarded")) { showOnboarding(); } else { showAuth(); }
+    return;
+  }
+  // Show a branded loader while we fetch/create the user doc so the
+  // screen is never blank between the boot screen disappearing and
+  // the feed skeleton appearing (covers both first load and PWA reopen).
+  showOrbitLoader("Loading Get better…");
+  state.uid = user.uid;
+  state.me = await ensureUserDoc(user);
+  $("#meAvatar").src = avatarFor(state.me);
+  showApp(); // calls hideOrbitLoader() internally
+  announceBirthdayIfDue().catch((err) => console.warn("Birthday announcement failed:", err));
+  startMyProfileListener();
+  startNotifListener();
+  startSuggestions();
+  router(); // initial route
+  watchOfflineOnUnload();
+  // startNewsBot(); // kick off official news/sport/social bot (throttled to every 5 h)
+  // Show a full-page setup guide for brand-new users; otherwise prompt incomplete profiles
+  if (state.me._isNew) showOnboardingGuide();
+  else checkProfileSetup();
+  // Notify chat module
+  document.dispatchEvent(new CustomEvent("orbit:auth-ready", { detail: state.me }));
+});
+
+const watchOfflineOnUnload = () => {
+  const off = async () => {
+    try { await updateDoc(doc(db, "users", state.uid), { online: false, lastSeen: serverTimestamp() }); } catch {}
+  };
+  window.addEventListener("beforeunload", off);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") off();
+    else if (state.uid) updateDoc(doc(db, "users", state.uid), { online: true, lastSeen: serverTimestamp() }).catch(() => {});
+  });
+};
+
+const startMyProfileListener = () => {
+  return onSnapshot(doc(db, "users", state.uid), (snap) => {
+    if (snap.exists()) {
+      state.me = { uid: state.uid, ...snap.data() };
+      $("#meAvatar").src = avatarFor(state.me);
+    }
+  });
+};
+
+// Auth UI bindings
+$$(".auth-tab").forEach((tab) => {
+  tab.addEventListener("click", () => {
+    $$(".auth-tab").forEach((t) => t.classList.toggle("active", t === tab));
+    const which = tab.dataset.tab;
+    if (which === "signup") {
+      // Show feature-overview onboarding before the actual sign-up form
+      $("#signinForm").classList.add("hidden");
+      $("#signupForm").classList.add("hidden");
+      $("#signupOnboard").classList.remove("hidden");
+      return;
+    }
+    // Sign-in tab: hide everything else, show sign-in
+    $("#signupOnboard").classList.add("hidden");
+    $("#signupForm").classList.add("hidden");
+    $("#forgotPasswordForm")?.classList.add("hidden");
+    $("#signinForm").classList.remove("hidden");
+  });
+});
+
+// "Create my account" inside the pre-signup onboard → reveal the real sign-up form
+document.getElementById("onboardGetStarted")?.addEventListener("click", () => {
+  $("#signupOnboard").classList.add("hidden");
+  $("#signupForm").classList.remove("hidden");
+});
+
+$("#signinForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  showOrbitLoader("Signing in…");
+  try {
+    await signInWithEmailAndPassword(auth, fd.get("email"), fd.get("password"));
+    // loader dismissed by showApp() → hideOrbitLoader() is called there
+  } catch (err) {
+    hideOrbitLoader();
+    toast(err.message.replace("Firebase: ", ""));
+  }
+});
+
+$("#forgotPasswordBtn")?.addEventListener("click", () => {
+  $("#signinForm").classList.add("hidden");
+  $("#forgotPasswordForm").classList.remove("hidden");
+  const email = $("#signinForm").querySelector("[name=email]")?.value || "";
+  const resetEmail = $("#forgotPasswordForm").querySelector("[name=email]");
+  if (resetEmail) resetEmail.value = email;
+});
+
+$("#backToSigninBtn")?.addEventListener("click", () => {
+  $("#forgotPasswordForm").classList.add("hidden");
+  $("#signinForm").classList.remove("hidden");
+});
+
+$("#forgotPasswordForm")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const email = new FormData(e.target).get("email")?.toString().trim();
+  if (!email) return;
+  const button = e.target.querySelector("button[type=submit]");
+  button.disabled = true;
+  button.textContent = "Sending…";
+  try {
+    await sendPasswordResetEmail(auth, email);
+    toast("Password reset link sent. Check your email.");
+    e.target.reset();
+    $("#forgotPasswordForm").classList.add("hidden");
+    $("#signinForm").classList.remove("hidden");
+  } catch (err) {
+    toast(err.message.replace("Firebase: ", ""));
+  } finally {
+    button.disabled = false;
+    button.textContent = "Send reset link";
+  }
+});
+
+$("#signupForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const name = fd.get("name"), username = fd.get("username");
+  showOrbitLoader("Creating your account…");
+  try {
+    const cred = await createUserWithEmailAndPassword(auth, fd.get("email"), fd.get("password"));
+    await updateProfile(cred.user, { displayName: name });
+    await ensureUserDoc(cred.user, { name, username });
+  } catch (err) { hideOrbitLoader(); toast(err.message.replace("Firebase: ", "")); }
+});
+
+$("#googleBtn").addEventListener("click", async () => {
+  showOrbitLoader("Connecting with Google…");
+  try { await signInWithPopup(auth, new GoogleAuthProvider()); }
+  catch (err) { hideOrbitLoader(); toast(err.message.replace("Firebase: ", "")); }
+});
+
+$("#signOutBtn").addEventListener("click", async () => {
+  try {
+    if (state.uid) await updateDoc(doc(db, "users", state.uid), { online: false, lastSeen: serverTimestamp() });
+  } catch {}
+  await signOut(auth);
+});
+
+$("#themeToggle").addEventListener("click", toggleTheme);
+$("#themeAuthToggle")?.addEventListener("click", toggleTheme);
+
+// -- Notification helpers --
+export const writeNotif = async (toUid, type, data = {}) => {
+  if (!toUid || toUid === state.uid) return;
+  try {
+    await addDoc(collection(db, "notifications", toUid, "items"), {
+      type, ...data, fromUid: state.uid,
+      fromName: state.me?.name || "", fromAvatar: state.me?.photoURL || "",
+      read: false, createdAt: serverTimestamp(),
+    });
+  } catch {}
+};
+let _notifUnsub = null;
+const startNotifListener = () => {
+  if (_notifUnsub) _notifUnsub();
+  _notifUnsub = onSnapshot(
+    query(collection(db, "notifications", state.uid, "items"), where("read", "==", false), limit(99)),
+    (snap) => { const pill = $("#notifPill"); if (!pill) return; const n = snap.size; pill.textContent = n > 99 ? "99+" : String(n); pill.hidden = n === 0; }, () => {}
+  );
+};
+// -- Notification bell --
+const toggleNotifPanel = () => {
+  const existing = $("#notifPanel");
+  if (existing) { existing.remove(); return; }
+  const panel = el("div", { class: "notif-panel", id: "notifPanel" });
+  panel.appendChild(el("div", { class: "np-head" }, el("span", { text: "Notifications" }),
+    el("button", { class: "icon-btn", style: "width:30px;height:30px;", onclick: () => panel.remove() }, el("i", { class: "ri-close-line" }))));
+  getDocs(query(collection(db, "notifications", state.uid, "items"), orderBy("createdAt", "desc"), limit(30)))
+  .then((snap) => {
+    if (snap.empty) { panel.appendChild(el("div", { class: "notif-empty" }, "No notifications yet.")); return; }
+     const iconMap = { orbit:"ri-thumb-up-fill", follow:"ri-user-follow-fill", message:"ri-chat-1-fill", comment:"ri-chat-4-fill", commentLike:"ri-thumb-up-fill", groupMessage:"ri-group-2-fill", call:"ri-phone-fill", newPost:"ri-file-add-fill", postConfirm:"ri-checkbox-circle-fill", birthday:"ri-cake-2-fill" };
+     const colMap  = { orbit:"#0866ff", follow:"var(--primary)", message:"var(--good)", comment:"var(--grad-3)", commentLike:"#0866ff", groupMessage:"var(--good)", call:"var(--primary)", newPost:"var(--grad-1)", postConfirm:"var(--good)", birthday:"var(--grad-2)" };
+    snap.docs.forEach((d) => {
+      const n = { id: d.id, ...d.data() };
+      const ic = iconMap[n.type] || "ri-notification-3-fill";
+      const co = colMap[n.type]  || "var(--primary)";
+      const txt = n.text || (n.fromName || "Someone") + " " + ({ orbit:"liked your post", follow:"followed you", message:"sent you a message", comment:"commented on your post", commentLike:"liked your comment", groupMessage:"sent a message in your group", call:"called you", newPost:"shared a new post", postConfirm:"Your post is live!" }[n.type] || "interacted");
+      const item = el("div", { class: "notif-item" + (n.read ? "" : " unread") },
+        el("i", { class: ic, style: "color:" + co + ";font-size:20px;flex-shrink:0;margin-top:2px;" }),
+        el("div", { style: "min-width:0;" }, el("div", { class: "ni-text" }, txt), el("div", { class: "ni-time" }, fmtTime(n.createdAt))),
+      );
+      item.addEventListener("click", () => {
+        updateDoc(doc(db, "notifications", state.uid, "items", n.id), { read: true }).catch(() => {});
+        panel.remove();
+         if (n.type === "birthday" && (n.profileUid || n.fromUid)) location.hash = "#profile/" + (n.profileUid || n.fromUid);
+         else if (n.type === "message" && n.fromUid) location.hash = "#chats/" + n.fromUid;
+        else if (n.type === "groupMessage" && n.groupId) location.hash = "#chats/" + n.groupId;
+        else if (n.type === "follow"  && n.fromUid) location.hash = "#profile/" + n.fromUid;
+        else if ((n.type === "comment" || n.type === "commentLike" || n.type === "newPost" || n.type === "postConfirm") && n.postId) location.hash = "#post/" + n.postId;
+        else if (n.type === "call") location.hash = "#chats";
+        else location.hash = "#feed";
+      });
+      panel.appendChild(item);
+    });
+    snap.docs.filter((d) => !d.data().read).forEach((d) => updateDoc(doc(db, "notifications", state.uid, "items", d.id), { read: true }).catch(() => {}));
+  }).catch(() => panel.appendChild(el("div", { class: "notif-empty" }, "Could not load notifications.")));
+  document.body.appendChild(panel);
+  setTimeout(() => document.addEventListener("click", function once(e) {
+    if (!panel.contains(e.target) && e.target !== $("#notifBtn")) panel.remove();
+    else document.addEventListener("click", once, { once: true });
+  }, { once: true }), 50);
+};
+$("#notifBtn").addEventListener("click", () => { location.hash = "#notifications"; });
+
+// =========================================================================
+// 7. ROUTER
+// =========================================================================
+// "reels" removed — videos live in the feed as regular posts
+const routes = ["feed", "chats", "ai-chat", "groups", "communities", "community", "explore", "saved", "settings", "profile", "post", "profile-u", "spaces", "challenges", "mentorship", "notifications", "learn", "character", "prompt", "games", "bro"];
+
+// Feed DOM caching — lets us restore the feed instantly when navigating
+// back from a post without re-rendering or re-shuffling.
+let _feedScrollY = 0;
+let _feedCachedNode = null; // detached feed DOM preserved during post visit
+let _feedUnsub = null;      // kept alive so the cached node stays fresh
+
+const router = () => {
+  const hash = (location.hash || "#feed").replace(/^#/, "");
+  const [route, ...rest] = hash.split("/");
+  const target = routes.includes(route) ? route : "feed";
+  const prevRoute = content._currentRoute;
+
+  $$(".nav-item, .bn").forEach((b) => b.classList.toggle("active", b.dataset.route === (target === "community" ? "communities" : target)));
+
+  // Hide bottom nav in post detail, restore on all other routes
+  const _bnEl = document.querySelector(".bottomnav");
+  if (_bnEl) _bnEl.classList.toggle("detail-hidden", target === "post" || target === "feed");
+  document.body.dataset.route = target;
+
+  // ── Leaving the feed ──────────────────────────────────────────────────
+  if (prevRoute === "feed") {
+    // Save scroll position
+    _feedScrollY = content.scrollTop || 0;
+    // Detach the feed node before clearing innerHTML so we don't destroy it
+    const feedNode = content.firstElementChild;
+    if (feedNode) {
+      content.removeChild(feedNode);
+      _feedCachedNode = feedNode;
+    }
+    // Only keep unsub alive when going to a post (might come back)
+    // Kill it when navigating elsewhere (fresh feed on return)
+    if (target !== "post") {
+      if (_feedUnsub) { _feedUnsub(); _feedUnsub = null; }
+      _feedCachedNode = null;
+    }
+  }
+
+  // Cancel previous non-feed route unsub
+  if (prevRoute !== "feed" && content._unsub) {
+    content._unsub();
+    content._unsub = null;
+  }
+
+  content.innerHTML = "";
+  content._currentRoute = target;
+
+  // ── Entering the feed ─────────────────────────────────────────────────
+  if (target === "feed") {
+    if (prevRoute === "post" && _feedCachedNode) {
+      // Restore cached feed without re-rendering (preserves shuffle order)
+      content.appendChild(_feedCachedNode);
+      content._unsub = _feedUnsub;
+      const sy = _feedScrollY;
+      requestAnimationFrame(() => {
+        // Disable smooth-scroll briefly so the position restores instantly
+        // instead of animating visibly from the top.
+        content.style.scrollBehavior = "auto";
+        content.scrollTop = sy;
+        requestAnimationFrame(() => { content.style.scrollBehavior = ""; });
+      });
+      _feedCachedNode = null;
+    } else {
+      // Fresh navigation — discard old cache, re-render with new shuffle
+      if (_feedUnsub) { _feedUnsub(); _feedUnsub = null; }
+      _feedCachedNode = null;
+      renderFeed(content);
+    }
+    return;
+  }
+
+  switch (target) {
+    case "chats":
+      if (rest[0] === "ai") {
+        renderAIChat(content);
+      } else {
+        document.dispatchEvent(new CustomEvent("orbit:open-chats", { detail: { peerUid: rest[0] || null } }));
+        // Inject AI entry at top of chat list after chat.js renders
+        setTimeout(() => _injectAIChatEntry(), 350);
+      }
+      break;
+    case "ai-chat":    renderAIChat(content); break;
+    case "groups":     location.replace("#communities"); break;
+    case "communities": content._unsub = gb().renderCommunities(content); break;
+    case "community":  content._unsub = gb().renderCommunity(content, rest[0]); break;
+    case "explore":    renderExplore(content, rest[0] === "tag" ? rest[1] : null); break;
+    case "character":  renderCharacterPage(content); break;
+    case "games":      content._unsub = renderGames(content, rest[0]); break;
+    case "bro":        content._unsub = renderBro(content); break;
+    case "prompt":     content._unsub = gb().renderPromptPage(content, rest[0]); break;
+    case "saved":      renderSaved(content); break;
+    case "settings":   renderSettings(content); break;
+    case "profile":    renderProfile(content, rest[0] || state.uid); break;
+    case "profile-u":  renderProfileByUsername(content, rest[0]); break;
+    case "post":
+      content._unsub = gb().renderVoiceDetail(content, rest[0]);
+      break;
+    case "spaces":         import("./features.js").then(m => rest[0] ? m.renderSpacePage(content, rest[0]) : m.renderSpaces(content)); break;
+    case "challenges":     import("./features.js").then(m => m.renderChallenges(content)); break;
+    case "mentorship":     import("./features.js").then(m => m.renderMentorship(content)); break;
+    case "notifications":  import("./additional.js").then(m => m.renderNotifications(content)); break;
+    case "learn":
+      import("./features.js").then(m => {
+        if (rest[0] && rest[1]) m.renderChapterPage(content, rest[0], rest[1]);
+        else if (rest[0])       m.renderTrackPage(content, rest[0]);
+        else                    m.renderLearn(content);
+      }); break;
+  }
+};
+window.addEventListener("hashchange", router);
+
+// ── Bottom nav auto-hide on scroll-down, show on scroll-up (Twitter style) ──
+const _initBottomNavScroll = () => {
+  const _bn = document.querySelector(".bottomnav");
+  const _ct = document.getElementById("content");
+  if (!_bn || !_ct) return;
+  let _lastScrollY = 0;
+  _ct.addEventListener("scroll", () => {
+    const y  = _ct.scrollTop;
+    const dy = y - _lastScrollY;
+    if (Math.abs(dy) < 5) return;
+    if (dy > 0 && y > 80) _bn.classList.add("bn-hidden");
+    else                   _bn.classList.remove("bn-hidden");
+    _lastScrollY = y;
+  }, { passive: true });
+};
+setTimeout(_initBottomNavScroll, 700);
+$$(".nav-item, .bn, .brand").forEach((b) => {
+  if (!b.dataset.route) return;
+  b.addEventListener("click", () => { location.hash = "#" + b.dataset.route; });
+});
+$("#meBtn").addEventListener("click", () => { location.hash = "#profile"; });
+// ── Mobile sidebar overlay ──────────────────────────────────────
+const openMobileSidebar = () => {
+  $("#sidebar").classList.add("is-open");
+  $("#sidebarBackdrop").classList.add("visible");
+};
+const closeMobileSidebar = () => {
+  $("#sidebar").classList.remove("is-open");
+  $("#sidebarBackdrop").classList.remove("visible");
+};
+$("#openSidebar")?.addEventListener("click", openMobileSidebar);
+$("#sidebarBackdrop").addEventListener("click", closeMobileSidebar);
+// Close sidebar when a nav item is tapped on mobile
+$$(".nav-item, .sidebar-foot .link").forEach((b) =>
+  b.addEventListener("click", () => { if (window.innerWidth <= 640) closeMobileSidebar(); })
+);
+
+// =========================================================================
+// MUTUALS — Daily & All-Time mutual score engine
+// Computes closeness from shared orbits + shared comment threads
+// =========================================================================
+const computeMutuals = async (dayOnly = false) => {
+  if (!state.uid) return [];
+  const cutoff = dayOnly ? Date.now() - 86400000 : 0;
+
+  // 1. Posts this user orbited
+  const orbitedSnap = await getDocs(
+    query(collection(db, "posts"), where("orbits", "array-contains", state.uid), limit(40))
+  ).catch(() => null);
+  if (!orbitedSnap) return [];
+
+  const relevantPosts = orbitedSnap.docs
+    .filter(d => !dayOnly || (d.data().createdAt?.toMillis?.() || 0) >= cutoff)
+    .map(d => ({ id: d.id, ...d.data() }));
+
+  if (!relevantPosts.length) return [];
+
+  // 2. Detect which of those posts the current user also commented on
+  const commentedPostIds = new Set();
+  await Promise.all(relevantPosts.map(async (p) => {
+    const cSnap = await getDocs(
+      query(collection(db, "posts", p.id, "comments"), where("authorUid", "==", state.uid), limit(1))
+    ).catch(() => null);
+    if (cSnap && !cSnap.empty) commentedPostIds.add(p.id);
+  }));
+
+  // 3. Score each other uid by shared orbits
+  const scores = {};
+  relevantPosts.forEach(p => {
+    const bonus = commentedPostIds.has(p.id) ? 1.5 : 1;
+    (p.orbits || []).filter(uid => uid !== state.uid).forEach(uid => {
+      if (!scores[uid]) scores[uid] = { orbit: 0, comment: 0 };
+      scores[uid].orbit += bonus;
+    });
+  });
+
+  // 4. Score by shared comment threads
+  await Promise.all([...commentedPostIds].map(async (postId) => {
+    const cSnap = await getDocs(
+      query(collection(db, "posts", postId, "comments"), limit(20))
+    ).catch(() => null);
+    if (!cSnap) return;
+    cSnap.docs.forEach(d => {
+      const uid = d.data().authorUid;
+      if (uid && uid !== state.uid) {
+        if (!scores[uid]) scores[uid] = { orbit: 0, comment: 0 };
+        scores[uid].comment += 2;
+      }
+    });
+  }));
+
+  // 5. Compute percentage
+  const maxPossible = Math.max(relevantPosts.length * 2.5 + commentedPostIds.size * 2, 1);
+  const ranked = Object.entries(scores)
+    .map(([uid, s]) => ({
+      uid,
+      raw: s.orbit + s.comment,
+      pct: Math.min(99, Math.round(((s.orbit + s.comment) / maxPossible) * 100)),
+    }))
+    .filter(x => x.raw >= 1)
+    .sort((a, b) => b.raw - a.raw)
+    .slice(0, 20);
+
+  // 6. Fetch profiles
+  const users = await Promise.all(ranked.map(r => fetchUser(r.uid)));
+  return ranked.map((r, i) => ({ ...r, user: users[i] })).filter(r => r.user);
+};
+
+const renderMutuals = async (container, dayOnly = true) => {
+  container.innerHTML = "";
+  container.appendChild(el("div", { class: "empty" },
+    gbLoader("Finding your mutuals…", true),
+  ));
+
+  const mutuals = await computeMutuals(dayOnly);
+  container.innerHTML = "";
+
+  if (!mutuals.length) {
+    container.appendChild(el("div", { class: "empty" },
+      el("i", { class: "ri-team-line" }),
+      el("div", { class: "t" }, dayOnly ? "No daily mutuals yet" : "No mutuals found"),
+      el("div", {}, dayOnly
+        ? "Get better & comment on posts to discover who you vibe with today."
+        : "Start orbiting posts to find people who share your taste."),
+    ));
+    return;
+  }
+
+  if (dayOnly) {
+    const dateStr = new Date().toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
+    container.appendChild(el("div", { class: "mutuals-date-badge" },
+      el("i", { class: "ri-calendar-2-line" }), `  Today · ${dateStr}`,
+    ));
+  }
+
+  const list = el("div", { class: "mutuals-list" });
+  mutuals.forEach(({ uid, pct, user }) => {
+    const dash = pct;
+    const gap  = 100 - pct;
+    const ringHtml = `<svg viewBox="0 0 36 36" class="mutual-ring-svg"><circle class="mutual-ring-bg" cx="18" cy="18" r="15.9" fill="none"/><circle class="mutual-ring-fill" cx="18" cy="18" r="15.9" fill="none" style="stroke-dasharray:${dash} ${gap};stroke-dashoffset:25;"/></svg><span class="mutual-pct-label">${pct}%</span>`;
+    const card = el("div", { class: "mutual-card" },
+      el("div", { class: "mutual-av-wrap", onclick: () => location.hash = `#profile/${uid}` },
+        el("img", { class: "mutual-avatar", src: avatarFor(user) }),
+        el("div", { class: "mutual-ring-wrap", html: ringHtml }),
+      ),
+      el("div", { class: "mutual-info", onclick: () => location.hash = `#profile/${uid}` },
+        el("div", { class: "mutual-name" },
+          user.name || "User",
+          user.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
+        ),
+        el("div", { class: "mutual-uname" }, `@${user.username || "user"}`),
+        user.bio ? el("div", { class: "mutual-bio" }, user.bio.slice(0, 80)) : null,
+        el("div", { class: "mutual-match" },
+          el("i", { class: "ri-fire-fill" }),
+          ` ${pct}% mutual ${dayOnly ? "today" : "overlap"}`,
+        ),
+      ),
+      el("button", {
+        class: "btn primary sm mutual-msg-btn",
+        onclick: (e) => { e.stopPropagation(); location.hash = `#chats/${uid}`; },
+      }, el("i", { class: "ri-chat-3-line" }), " Message"),
+    );
+    list.appendChild(card);
+  });
+  container.appendChild(list);
+};
+
+// =========================================================================
+// 8. FEED — flat IG/FB style with separator lines + Trending lane
+// Videos posted are regular posts — no separate Reels section.
+// Infinite scroll: first page via onSnapshot (live), subsequent pages via
+// getDocs + startAfter cursor — loads more as you reach the bottom, just
+// like X / Instagram / Facebook.
+// =========================================================================
+const FEED_PAGE_SIZE = 20;
+
+const renderFeed = (root) => {
+  const unsub = gb().renderVoiceFeed(root);
+  _feedUnsub  = unsub;
+  root._unsub = unsub;
+};
+
+// ── Feed scroll-to-play ───────────────────────────────────────────────────
+// Observes <video> elements directly (not the vid-player wrapper) so the
+// observer works even before the poster loads (wrapper has 0 height until then).
+let _feedVidIO = null;
+const _setupFeedVideoScroll = (list) => {
+  // Disconnect previous observer so removed elements don't accumulate
+  if (_feedVidIO) { _feedVidIO.disconnect(); _feedVidIO = null; }
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach((e) => {
+      const v = e.target;
+      if (e.isIntersecting) {
+        if (state.me?.autoplayVideos !== false) v.play().catch(() => {});
+      } else {
+        v.pause();
+        v.currentTime = 0;
+      }
+    });
+  }, { threshold: 0.4 });
+  _feedVidIO = io;
+  // Observe all videos already in the list
+  list.querySelectorAll("video").forEach((v) => { io.observe(v); });
+  // Watch for videos added later (lazy suggestion cards, etc.)
+  const mo = new MutationObserver(() => {
+    list.querySelectorAll("video:not([data-fvio])").forEach((v) => {
+      v.setAttribute("data-fvio", "1");
+      io.observe(v);
+    });
+  });
+  mo.observe(list, { childList: true, subtree: true });
+};
+
+const renderTrendingCard = (p, author) => {
+  return el("div", { class: "trending-card", onclick: () => location.hash = `#feed` /* stays; could open detail */ },
+    el("div", { class: "t-head" },
+      el("img", { class: "avatar xs", src: avatarFor(author), onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${author?.uid}`; } }),
+      el("div", { class: "t-name" }, author?.name || "User"),
+    ),
+    el("div", { class: "t-text", text: (p.text || "").slice(0, 140) }),
+    el("div", { class: "t-meta" },
+      el("i", { class: "ri-fire-fill", style: "color: var(--grad-2);" }),
+      `${p.orbitCount || 0} likes · ${fmtTime(p.createdAt)}`
+    ),
+  );
+};
+
+// =========================================================================
+// 8a. MEDIA CAROUSEL / GRID
+// 1 item  → single full-width image or video player
+// 2 items → side-by-side grid (Facebook-style)
+// 3 items → 1 large left + 2 stacked right (Facebook-style)
+// 4+      → swipeable carousel
+// =========================================================================
+const _makeGridCell = (m, spanRows = false, _allItems = [], _idx = 0, _postId = null, _ctx = null) => {
+  const cellStyle = [
+    "position:relative;overflow:hidden;cursor:pointer;",
+    spanRows ? "grid-row:1/3;" : "",
+  ].join("");
+  const cell = el("div", { style: cellStyle });
+
+  const _navigateToPost = (e) => {
+    e.stopPropagation();
+    if (_ctx) { openVideoViewer(_allItems, _idx, _ctx); return; }
+    if (_postId) location.hash = `#post/${_postId}`;
+  };
+
+  if (m.type === "video") {
+    const vid = el("video", {
+      src: m.url,
+      poster: _cloudPoster(m.url),
+      preload: "metadata",
+      playsinline: "",
+      style: "width:100%;height:100%;object-fit:cover;display:block;cursor:pointer;",
+    });
+    const overlay = el("div", {
+      class: "media-grid-play",
+      style: "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.18);",
+    }, el("i", { class: "ri-play-circle-fill", style: "font-size:44px;color:#fff;filter:drop-shadow(0 2px 10px rgba(0,0,0,0.5));" }));
+    // Clicking navigates to post detail instead of opening modal
+    vid.addEventListener("click", _navigateToPost);
+    overlay.addEventListener("click", _navigateToPost);
+    cell.appendChild(vid);
+    cell.appendChild(overlay);
+  } else {
+    const img = el("img", { src: m.url, loading: "lazy", style: "width:100%;height:100%;object-fit:cover;display:block;" });
+    img.addEventListener("click", _navigateToPost);
+    cell.appendChild(img);
+  }
+  return cell;
+};
+
+const renderMediaCarousel = (mediaRaw, postId = null, opts = {}) => {
+  const { detailView = false, song = null, viewerCtx = null } = opts;
+  const items = Array.isArray(mediaRaw) ? mediaRaw : (mediaRaw ? [mediaRaw] : []);
+  if (!items.length) return null;
+  // A song attaches at the post level; if the media itself isn't a single
+  // video (which syncs playback directly), sync the song to the whole
+  // media block scrolling into view instead.
+  const _wireStandaloneSong = (node) => { if (song) _wireSongPlayback(node, song, null); return node; };
+
+  // ── Detail view: all items stacked vertically (Facebook-style) ──
+  if (detailView && items.length > 1) {
+    const stack = el("div", { class: "post-media-stack", style: "display:flex;flex-direction:column;gap:4px;position:relative;" });
+    let sawVideo = false;
+    items.forEach((m) => {
+      if (m.type === "video") {
+        sawVideo = true;
+        const player = buildVideoPlayer(m.url, { song, overlays: m.overlays });
+        player.style.borderRadius = "14px";
+        stack.appendChild(player);
+      } else {
+        const img = el("img", {
+          src: m.url, loading: "lazy",
+          style: "width:100%;display:block;max-height:520px;object-fit:cover;cursor:zoom-in;border-radius:0;",
+        });
+        img.addEventListener("click", () => openImageZoom(m.url, viewerCtx));
+        stack.appendChild(img);
+      }
+    });
+    if (song && !sawVideo) _wireStandaloneSong(stack);
+    return stack;
+  }
+
+  // ── Single item ────────────────────────────────────────────────
+  if (items.length === 1) {
+    const m = items[0];
+    if (m.type === "video") {
+      // Full-width, no side border-radius so it stretches edge-to-edge
+      const player = buildVideoPlayer(m.url, { song, overlays: m.overlays, onOpen: detailView || !viewerCtx ? null : () => openVideoViewer(items, 0, viewerCtx) });
+      player.style.borderRadius = "14px";
+      const wrap = el("div", { class: "post-media", style: "border-radius:14px;overflow:hidden;margin:8px 0;" });
+      wrap.appendChild(player);
+      return wrap;
+    }
+    const _imgStyle = "width:100%;display:block;max-height:520px;object-fit:cover;" + (detailView || viewerCtx ? "cursor:zoom-in;" : "");
+    const singleImg = el("img", { src: m.url, loading: "lazy", style: _imgStyle });
+    if (detailView || viewerCtx) singleImg.addEventListener("click", (e) => { e.stopPropagation(); openImageZoom(m.url, viewerCtx); });
+    const wrap = el("div", { class: "post-media", style: "border-radius:14px;overflow:hidden;margin:8px 0;" }, singleImg);
+    if (song) _wireStandaloneSong(wrap);
+    return wrap;
+  }
+
+  // ── 2 items: side-by-side ──────────────────────────────────────
+  if (items.length === 2) {
+    const grid = el("div", {
+      class: "post-media",
+      style: "display:grid;grid-template-columns:1fr 1fr;gap:3px;border-radius:14px;overflow:hidden;height:260px;margin:8px 0;position:relative;",
+    });
+    items.forEach((m, i) => grid.appendChild(_makeGridCell(m, false, items, i, postId, viewerCtx)));
+    if (song) _wireStandaloneSong(grid);
+    return grid;
+  }
+
+  // ── 3 items: 1 large left + 2 stacked right ────────────────────
+  if (items.length === 3) {
+    const grid = el("div", {
+      class: "post-media",
+      style: "display:grid;grid-template-columns:2fr 1fr;grid-template-rows:130px 130px;gap:3px;border-radius:14px;overflow:hidden;margin:8px 0;position:relative;",
+    });
+    items.forEach((m, i) => grid.appendChild(_makeGridCell(m, i === 0, items, i, postId, viewerCtx)));
+    if (song) _wireStandaloneSong(grid);
+    return grid;
+  }
+
+  // ── 4+ items: Facebook-style 2×2 grid with "+N more" overflow ─
+  const show = items.slice(0, 4);
+  const overflow = items.length - 4;
+  const grid = el("div", {
+    class: "post-media",
+    style: "display:grid;grid-template-columns:1fr 1fr;grid-template-rows:130px 130px;gap:3px;border-radius:14px;overflow:hidden;margin:8px 0;position:relative;",
+  });
+  show.forEach((m, i) => {
+    const cell = _makeGridCell(m, false, items, i, postId, viewerCtx);
+    if (i === 3 && overflow > 0) {
+      const moreOverlay = el("div", {
+        style: "position:absolute;inset:0;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;cursor:pointer;",
+        onclick: (e) => { e.stopPropagation(); if (viewerCtx) openVideoViewer(items, 3, viewerCtx); else if (postId) location.hash = `#post/${postId}`; },
+      }, el("span", {
+        style: "color:#fff;font-size:22px;font-weight:700;font-family:var(--font-display);letter-spacing:-0.02em;",
+      }, `+${overflow}`));
+      cell.appendChild(moreOverlay);
+    }
+    grid.appendChild(cell);
+  });
+  if (song) _wireStandaloneSong(grid);
+  return grid;
+};
+
+const postIsHidden = (p) => (state.me?.hiddenPosts || []).includes(p.id);
+
+const removePostFromView = (postId) => {
+  const node = document.querySelector(`.tfb-post[data-post-id="${postId}"]`);
+  if (!node) return;
+  node.classList.add("post-dismissed");
+  setTimeout(() => node.remove(), 320);
+};
+
+const openPostShareModal = async (p, author) => {
+  const overlay = el("div", { class: "post-share-overlay" });
+  const card = el("div", { class: "post-share-card" });
+  const close = () => {
+    overlay.classList.remove("is-visible");
+    setTimeout(() => overlay.remove(), 220);
+  };
+  const selected = new Set();
+  const list = el("div", { class: "post-share-list" },
+    el("div", { class: "post-share-loading" }, el("i", { class: "ri-loader-4-line" }), " Loading your chats…"),
+  );
+  const sendBtn = el("button", { class: "btn primary block", disabled: true }, el("i", { class: "ri-send-plane-fill" }), " Send post");
+  const updateSendState = () => { sendBtn.disabled = selected.size === 0; };
+
+  const addTarget = (target) => {
+    const row = el("button", { class: "post-share-target", type: "button" });
+    row._target = target;
+    const check = el("span", { class: "post-share-check" }, el("i", { class: "ri-check-line" }));
+    row.append(
+      target.kind === "group"
+        ? el("img", { class: "avatar sm", src: target.iconUrl || `https://api.dicebear.com/7.x/shapes/svg?seed=${target.id}` })
+        : el("img", { class: "avatar sm", src: avatarFor(target.peer) }),
+      el("span", { class: "post-share-target-info" },
+        el("strong", {}, target.name),
+        el("small", {}, target.kind === "group" ? `${(target.members || []).length} members` : `@${target.peer?.username || "user"}`),
+      ),
+      check,
+    );
+    row.onclick = () => {
+      if (selected.has(target.key)) { selected.delete(target.key); row.classList.remove("selected"); }
+      else { selected.add(target.key); row.classList.add("selected"); }
+      updateSendState();
+    };
+    list.appendChild(row);
+  };
+
+  sendBtn.onclick = async () => {
+    sendBtn.disabled = true;
+    sendBtn.innerHTML = '<i class="ri-loader-4-line"></i> Sharing…';
+    const targets = [...list.querySelectorAll(".post-share-target.selected")].map((row) => row._target).filter(Boolean);
+    try {
+      const body = {
+        authorUid: state.uid,
+        type: "forwarded",
+        forwarded: true,
+        forwardPostId: p.id,
+        forwardText: p.text || "",
+        forwardAuthorUid: p.authorUid,
+        forwardAuthorName: author?.name || "Get better member",
+        forwardKind: "post",
+        text: p.text || "Shared a post",
+        media: p.media || null,
+        createdAt: serverTimestamp(),
+        readBy: [state.uid],
+      };
+      await Promise.all(targets.map(async (target) => {
+        if (target.kind === "group") {
+          await addDoc(collection(db, "groups", target.id, "messages"), body);
+          await updateDoc(doc(db, "groups", target.id), {
+            lastMessage: `Shared a post by ${author?.name || "a Get better member"}`,
+            lastMessageAt: serverTimestamp(),
+          }).catch(() => {});
+        } else {
+          const chatId = [state.uid, target.peer.uid].sort().join("__");
+          const myRef = doc(db, "users", state.uid, "chats", chatId);
+          const theirRef = doc(db, "users", target.peer.uid, "chats", chatId);
+          await addDoc(collection(db, "chats", chatId, "messages"), body);
+          await Promise.all([
+            setDoc(myRef, {
+              peerUid: target.peer.uid, lastMessage: "Shared a post", lastFromMe: true,
+              unread: 0, updatedAt: serverTimestamp(), createdAt: serverTimestamp(),
+            }, { merge: true }),
+            setDoc(theirRef, {
+              peerUid: state.uid, lastMessage: "Shared a post", lastFromMe: false,
+              unread: increment(1), updatedAt: serverTimestamp(), createdAt: serverTimestamp(),
+            }, { merge: true }),
+          ]);
+          writeNotif(target.peer.uid, "message", { text: `${state.me?.name || "Someone"} shared a post with you` }).catch(() => {});
+        }
+      }));
+      toast(`Shared to ${targets.length} chat${targets.length === 1 ? "" : "s"}`);
+      close();
+    } catch (err) {
+      toast("Could not share this post");
+      sendBtn.disabled = false;
+      sendBtn.innerHTML = '<i class="ri-send-plane-fill"></i> Send post';
+    }
+  };
+
+  card.append(
+    el("div", { class: "post-share-head" },
+      el("div", {}, el("h3", {}, "Share post"), el("p", {}, `Send ${author?.name || "this member"}’s post to your Get better`)),
+      el("button", { class: "icon-btn", onclick: close }, el("i", { class: "ri-close-line" })),
+    ),
+    el("div", { class: "post-share-preview" },
+      el("img", { class: "avatar sm", src: avatarFor(author) }),
+      el("span", {}, (p.text || "Shared post").slice(0, 100)),
+    ),
+    buildExternalShareActions(p, author, close),
+    list,
+    sendBtn,
+  );
+  overlay.appendChild(card);
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add("is-visible"));
+
+  try {
+    const [groupSnap, dmSnap] = await Promise.all([
+      getDocs(query(collection(db, "groups"), where("members", "array-contains", state.uid), limit(80))),
+      getDocs(query(collection(db, "users", state.uid, "chats"), orderBy("updatedAt", "desc"), limit(80))),
+    ]);
+    list.innerHTML = "";
+    groupSnap.docs.forEach((d) => {
+      const g = { id: d.id, ...d.data(), kind: "group", key: `group:${d.id}` };
+      g.name = g.name || "Group";
+      g.iconUrl = g.iconUrl || g.photoURL || "";
+      addTarget(g);
+      list.lastElementChild._target = g;
+    });
+    const peers = await Promise.all(dmSnap.docs.map(async (d) => {
+      const data = d.data();
+      const peer = await fetchUser(data.peerUid);
+      return peer ? { ...data, peer, kind: "dm", key: `dm:${peer.uid}`, name: peer.name || "User" } : null;
+    }));
+    peers.filter(Boolean).forEach((target) => { addTarget(target); list.lastElementChild._target = target; });
+    if (!list.children.length) list.appendChild(el("div", { class: "post-share-empty" }, "Join a group or start a chat to share posts."));
+  } catch {
+    list.innerHTML = "";
+    list.appendChild(el("div", { class: "post-share-empty" }, "Could not load your chats."));
+  }
+};
+
+const openPostMenu = (p, author, isMine) => {
+  const overlay = el("div", { class: "post-menu-overlay" });
+  const sheet = el("div", { class: "post-menu-sheet" });
+  const close = () => { sheet.classList.remove("is-visible"); setTimeout(() => overlay.remove(), 220); };
+  const action = (icon, label, handler, danger = false) => {
+    const btn = el("button", { class: `post-menu-action${danger ? " danger" : ""}`, onclick: async () => { close(); await handler(); } },
+      el("i", { class: icon }), el("span", {}, label));
+    sheet.appendChild(btn);
+  };
+  action("ri-share-forward-line", "Share to chats", () => openPostShareModal(p, author));
+  const isSaved = (state.me?.saved || []).includes(p.id);
+  action(isSaved ? "ri-bookmark-fill" : "ri-bookmark-line",
+    isSaved ? "Remove from Saved" : "Save post",
+    () => toggleSave(p.id, !isSaved));
+  if (!isMine) {
+    action("ri-eye-off-line", "Not interested — hide this post", async () => {
+      await updateDoc(doc(db, "users", state.uid), { hiddenPosts: arrayUnion(p.id) });
+      state.me.hiddenPosts = [...new Set([...(state.me.hiddenPosts || []), p.id])];
+      removePostFromView(p.id);
+      toast("You won’t see this post again");
+    });
+  } else {
+    action("ri-delete-bin-line", "Delete post", async () => {
+      if (!confirm("Delete this post for everyone?")) return;
+      await deleteDoc(doc(db, "posts", p.id));
+      removePostFromView(p.id);
+      toast("Post deleted");
+    }, true);
+  }
+  action("ri-links-line", "Copy post link", async () => {
+    const url = `${location.origin}${location.pathname}#post/${p.id}`;
+    await navigator.clipboard.writeText(url);
+    toast("Link copied");
+  });
+  overlay.appendChild(sheet);
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => sheet.classList.add("is-visible"));
+};
+
+// Text + voice-note posts only (Get better). Media posts render nothing.
+function renderPost(p, author, opts = {}) {
+  const hasMedia = Array.isArray(p.media) ? p.media.length > 0 : !!p.media;
+  if (hasMedia || (!p.audio?.url && !p.text && !p.video?.url)) return el("div", { style: "display:none" });
+  return gb().renderVoicePost(p, author, { detail: !!opts.detailView });
+}
+const _renderMediaPost = (p, author, opts = {}) => {
+  const iOrbited = (p.orbits || []).includes(state.uid);
+  const isMine = p.authorUid === state.uid;
+  const { hideComments = false, detailView: _detailView = false } = opts;
+  let _isFollowingAuthor = !isMine && (state.me?.following || []).includes(author?.uid);
+
+  // View-count tracking: count once per session per post (skip own posts)
+  if (!isMine && p.id) {
+    if (!state._viewedPosts) state._viewedPosts = new Set();
+    if (!state._viewedPosts.has(p.id)) {
+      state._viewedPosts.add(p.id);
+      updateDoc(doc(db, "posts", p.id), { views: increment(1) }).catch(() => {});
+    }
+  }
+
+  const post = el("article", { class: "tfb-post", data: { postId: p.id } });
+
+  // ── Header: avatar ring + name + timestamp + menu ────────────────
+  const menuBtn = el("button", { class: "icon-btn tfb-menu", onclick: (e) => {
+    e.stopPropagation();
+    openPostMenu(p, author, isMine);
+  }}, el("i", { class: "ri-more-2-line" }));
+
+  const header = el("div", { class: "tfb-header" },
+    el("div", {
+      class: "tfb-avatar-ring",
+      onclick: (e) => { e.stopPropagation(); location.hash = `#profile/${author?.uid}`; },
+    },
+      el("img", { src: avatarFor(author) }),
+    ),
+    el("div", { class: "tfb-header-text" },
+      el("span", { class: "tfb-name" },
+        author?.name || "User",
+        author?.verified
+          ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' })
+          : null,
+      ),
+      el("div", { class: "tfb-sub-row" },
+        el("span", { class: "tfb-sub" }, `@${author?.username || "user"} · ${fmtTime(p.createdAt)}`),
+        p.isSponsored ? el("span", { class: "tfb-sponsored-pill" }, el("i", { class: "ri-advertisement-line" }), "Sponsored") : null,
+      ),
+    ),
+    !isMine && author?.uid
+      ? el("button", {
+          class: `post-follow-btn${_isFollowingAuthor ? " following" : ""}`,
+          onclick: async (e) => {
+            e.stopPropagation();
+            const btn = e.currentTarget;
+            const previous = _isFollowingAuthor;
+            _isFollowingAuthor = !_isFollowingAuthor;
+            btn.textContent = _isFollowingAuthor ? "Following" : "Follow";
+            btn.classList.toggle("following", _isFollowingAuthor);
+            btn.disabled = true;
+            try {
+              await setFollowState(author.uid, _isFollowingAuthor);
+            } catch {
+              _isFollowingAuthor = previous;
+              btn.textContent = _isFollowingAuthor ? "Following" : "Follow";
+              btn.classList.toggle("following", _isFollowingAuthor);
+              toast("Could not update follow status");
+            } finally {
+              btn.disabled = false;
+            }
+          },
+        }, _isFollowingAuthor ? "Following" : "Follow")
+      : null,
+    menuBtn,
+    el("div", { class: "tfb-tail" }),
+  );
+  post.appendChild(header);
+
+  // ── Kind badge for build / project posts ─────────────────────────
+  if (p.kind === "build" || p.kind === "project") {
+    const icons  = { build: "ri-hammer-line", project: "ri-folder-5-line" };
+    const labels = { build: "Build in Public", project: "Project Showcase" };
+    post.appendChild(el("div", { class: `post-kind-badge post-kind-${p.kind}` },
+      el("i", { class: icons[p.kind] }), " " + labels[p.kind]));
+    if (p.title) {
+      post.appendChild(el("div", { class: "post-feat-title", onclick: () => location.hash = `#post/${p.id}` }, p.title));
+    }
+  }
+
+  // ── Location badge ───────────────────────────────────────────────
+  if (p.location?.city || p.location?.lat) {
+    post.appendChild(el("div", { class: "post-location-badge" },
+      el("i", { class: "ri-map-pin-fill" }),
+      " " + (p.location.city || `${p.location.lat}, ${p.location.lng}`),
+    ));
+  }
+
+  // ── Caption ──────────────────────────────────────────────────────
+  if (p.text) {
+    const caption = el("div", { class: "tfb-caption" });
+    if (p.text.includes("```")) {
+      import("./features.js")
+        .then((m) => caption.appendChild(m.renderTextWithCode(p.text)))
+        .catch(() => { caption.innerHTML = linkify(p.text); });
+    } else {
+      const TRUNC_LEN = 280;
+      if (!_detailView && p.text.length > TRUNC_LEN) {
+        let expanded = false;
+        const shortText = p.text.slice(0, TRUNC_LEN).trim();
+        const paint = () => {
+          caption.innerHTML = linkify(expanded ? p.text : shortText + "… ");
+          const moreBtn = el("span", { class: "see-more-btn", text: expanded ? "See less" : "See more" });
+          moreBtn.addEventListener("click", (e) => { e.stopPropagation(); expanded = !expanded; paint(); });
+          caption.appendChild(moreBtn);
+        };
+        paint();
+      } else {
+        caption.innerHTML = linkify(p.text);
+        caption.onclick = (e) => {
+          if (!e.target.closest("button,a")) location.hash = `#post/${p.id}`;
+        };
+      }
+    }
+    post.appendChild(caption);
+  }
+
+  // ── Media ────────────────────────────────────────────────────────
+  const _vctx = {};   // filled in below once the Like / Comment buttons exist
+  const mediaNode = renderMediaCarousel(p.media, p.id, { detailView: _detailView, song: p.song, viewerCtx: _vctx });
+  if (mediaNode) {
+    // Swap post-media class for tfb-media
+    mediaNode.classList.remove("post-media");
+    mediaNode.classList.add("tfb-media");
+    post.appendChild(mediaNode);
+  }
+
+  if (p.isSponsored) {
+    let destinationUrl = "";
+    try {
+      const parsedUrl = new URL(p.ad?.destinationUrl || "");
+      if (["http:", "https:"].includes(parsedUrl.protocol)) destinationUrl = parsedUrl.href;
+    } catch {}
+    const adHeadline = String(p.ad?.headline || "").trim();
+    const adCta = ["Learn more", "Shop now", "Sign up", "Contact us"].includes(p.ad?.cta) ? p.ad.cta : "Learn more";
+    if (adHeadline || destinationUrl) {
+      post.appendChild(el("div", { class: "tfb-ad-promo" },
+        adHeadline ? el("strong", { class: "tfb-ad-headline" }, adHeadline) : null,
+        destinationUrl ? el("a", {
+          class: "tfb-ad-cta",
+          href: destinationUrl,
+          target: "_blank",
+          rel: "noopener noreferrer",
+        }, adCta, el("i", { class: "ri-arrow-right-up-line" })) : null,
+      ));
+    }
+  }
+
+  // ── Build / project extra detail block ───────────────────────────
+  if (p.kind === "build" || p.kind === "project") {
+    import("./features.js").then((m) => {
+      const extra = p.kind === "build" ? m.renderBuildExtra(p) : m.renderProjectExtra(p);
+      const actions = post.querySelector(".tfb-actions");
+      if (actions) post.insertBefore(extra, actions); else post.appendChild(extra);
+    }).catch(() => {});
+  }
+
+  // ── Actions row ──────────────────────────────────────────────────
+  const orbitIcon = el("i", { class: iOrbited ? "ri-thumb-up-fill" : "ri-thumb-up-line" });
+  const likeTotal = el("span", { class: "tfb-like-total", text: p.orbitCount ? String(p.orbitCount) : "" });
+  const likeSummary = el("div", { class: `tfb-like-summary${p.orbitCount ? "" : " hidden"}` },
+    el("span", { class: "tfb-reaction-bubble" }, el("i", { class: "ri-thumb-up-fill" })),
+    likeTotal,
+  );
+  const cmtCountEl = el("span", { class: "tfb-comment-total", text: p.commentCount ? String(p.commentCount) : "" });
+  const cmtCountLabel = el("span", { class: "tfb-comment-label" }, p.commentCount === 1 ? " comment" : " comments");
+  const commentSummaryBtn = el("button", {
+    class: `tfb-comment-summary${p.commentCount ? "" : " hidden"}`,
+    onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; },
+  }, cmtCountEl, cmtCountLabel);
+  let _iOrbited = iOrbited;
+
+  const orbitBtn = el("button", {
+    class: `tfb-badge tfb-act tfb-like-btn${iOrbited ? " active" : ""}`,
+    title: "Like",
+    "aria-pressed": String(iOrbited),
+    onclick: async (e) => {
+      e.stopPropagation();
+      _iOrbited = !_iOrbited;
+      if (_iOrbited) sfxOrbit();
+      orbitBtn.classList.remove("orbit-burst");
+      void orbitBtn.offsetWidth;
+      orbitBtn.classList.add("orbit-burst");
+      orbitIcon.className = _iOrbited ? "ri-thumb-up-fill" : "ri-thumb-up-line";
+      p.orbitCount = Math.max(0, (p.orbitCount || 0) + (_iOrbited ? 1 : -1));
+      likeTotal.textContent = p.orbitCount ? String(p.orbitCount) : "";
+      likeSummary.classList.toggle("hidden", !p.orbitCount);
+      orbitBtn.classList.toggle("active", _iOrbited);
+      orbitBtn.setAttribute("aria-pressed", String(_iOrbited));
+      await updateDoc(doc(db, "posts", p.id), {
+        orbits:     _iOrbited ? arrayUnion(state.uid)   : arrayRemove(state.uid),
+        orbitCount: increment(_iOrbited ? 1 : -1),
+      }).catch(() => {});
+      if (_iOrbited && author?.uid && author.uid !== state.uid) {
+        writeNotif(author.uid, "orbit", {
+          postId: p.id,
+          text: `${state.me?.name || "Someone"} liked your post`,
+        }).catch(() => {});
+        const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
+        import("./notifications.js").then(({ notifyUser }) =>
+          notifyUser(author.uid, state.me?.name || "Someone", "liked your post",
+            "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
+        ).catch(() => {});
+      }
+    },
+  }, orbitIcon, el("span", {}, "Like"));
+
+  const actions = el("div", { class: "tfb-actions" },
+    orbitBtn,
+    el("button", { class: "tfb-act", onclick: (e) => { e.stopPropagation(); location.hash = `#post/${p.id}`; } },
+      el("i", { class: "ri-chat-1-line" }), "Comment",
+    ),
+    el("button", {
+      class: "tfb-act",
+      onclick: async (e) => {
+        e.stopPropagation();
+        await openPostShareModal(p, author);
+      },
+    },
+      el("i", { class: "ri-share-forward-line" }), " Share",
+    ),
+  );
+  Object.assign(_vctx, {
+    isLiked: () => _iOrbited,
+    likeCount: () => p.orbitCount || 0,
+    like: () => orbitBtn.click(),
+    commentCount: () => p.commentCount || 0,
+    comment: () => { if (!_detailView) location.hash = `#post/${p.id}`; },
+    share: () => openPostShareModal(p, author),
+  });
+  post.appendChild(el("div", { class: "tfb-post-stats" }, likeSummary, commentSummaryBtn));
+  post.appendChild(actions);
+
+  // ── Comments (feed preview — top 5) ─────────────────────────────
+  if (!hideComments) {
+    const cBox = el("div", { class: "comments hidden" });
+    post.appendChild(cBox);
+
+    let _replyTo = null;
+
+    const replyBanner = el("div", { class: "reply-banner hidden" },
+      el("span", { class: "reply-banner-text" }, ""),
+      el("button", { class: "reply-cancel-btn", onclick: () => {
+        _replyTo = null;
+        replyBanner.classList.add("hidden");
+        cForm.querySelector("input").placeholder = "Write a comment…";
+        cForm.querySelector("input").value = "";
+      }}, el("i", { class: "ri-close-line" })),
+    );
+    post.appendChild(replyBanner);
+
+    let _cmtMediaFile = null;
+    let _cmtAudioBlob = null;
+    let _cmtRecorder  = null;
+    let _cmtRecording = false;
+
+    const cmtMediaInput = el("input", { type: "file", accept: "image/*,video/*" });
+    cmtMediaInput.style.display = "none";
+    post.appendChild(cmtMediaInput);
+
+    const cmtAttachPreview = el("div", { class: "cmt-attach-preview hidden" });
+    post.appendChild(cmtAttachPreview);
+
+    const clearCmtAttach = () => {
+      _cmtMediaFile = null; _cmtAudioBlob = null;
+      cmtAttachPreview.innerHTML = ""; cmtAttachPreview.classList.add("hidden");
+    };
+
+    const showCmtMediaPreview = (file) => {
+      cmtAttachPreview.innerHTML = ""; cmtAttachPreview.classList.remove("hidden");
+      const isVideo = file.type.startsWith("video");
+      const url = URL.createObjectURL(file);
+      const thumb = isVideo
+        ? el("video", { src: url, muted: "", preload: "metadata", style: "width:72px;height:72px;object-fit:cover;border-radius:10px;display:block;" })
+        : el("img",   { src: url, style: "width:72px;height:72px;object-fit:cover;border-radius:10px;display:block;" });
+      const rmBtn = el("button", { type: "button", class: "cmt-attach-remove",
+        html: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` });
+      rmBtn.addEventListener("click", clearCmtAttach);
+      cmtAttachPreview.appendChild(el("div", { class: "cmt-attach-thumb" }, thumb, rmBtn));
+    };
+
+    const showCmtAudioPreview = (blob) => {
+      cmtAttachPreview.innerHTML = ""; cmtAttachPreview.classList.remove("hidden");
+      const url = URL.createObjectURL(blob);
+      const audio = el("audio", { src: url, controls: true, style: "height:28px;max-width:160px;" });
+      const rmBtn = el("button", { type: "button", class: "cmt-attach-remove",
+        html: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` });
+      rmBtn.addEventListener("click", clearCmtAttach);
+      cmtAttachPreview.appendChild(el("div", { class: "cmt-attach-audio" }, audio, rmBtn));
+    };
+
+    cmtMediaInput.addEventListener("change", (e) => {
+      const file = e.target.files?.[0]; if (!file) return;
+      _cmtMediaFile = file; _cmtAudioBlob = null;
+      showCmtMediaPreview(file); cmtMediaInput.value = "";
+    });
+
+    const cmtMediaBtn = el("button", {
+      type: "button", class: "icon-btn cmt-icon-btn", title: "Add photo or video",
+      html: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`,
+    });
+    cmtMediaBtn.addEventListener("click", (e) => { e.stopPropagation(); cmtMediaInput.click(); });
+
+    const SVG_MIC  = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`;
+    const SVG_STOP = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>`;
+    const cmtMicBtn = el("button", { type: "button", class: "icon-btn cmt-icon-btn", title: "Record voice note", html: SVG_MIC });
+    cmtMicBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (_cmtRecording) { _cmtRecorder?.stop(); return; }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const chunks = [];
+        _cmtRecorder = new MediaRecorder(stream);
+        _cmtRecorder.ondataavailable = (ev) => { if (ev.data.size > 0) chunks.push(ev.data); };
+        _cmtRecorder.onstop = () => {
+          stream.getTracks().forEach((t) => t.stop());
+          _cmtAudioBlob = new Blob(chunks, { type: "audio/webm" });
+          _cmtMediaFile = null; _cmtRecording = false;
+          cmtMicBtn.innerHTML = SVG_MIC; cmtMicBtn.style.color = ""; cmtMicBtn.classList.remove("recording");
+          showCmtAudioPreview(_cmtAudioBlob);
+        };
+        _cmtRecorder.start(); _cmtRecording = true;
+        cmtMicBtn.innerHTML = SVG_STOP; cmtMicBtn.style.color = "var(--danger)"; cmtMicBtn.classList.add("recording");
+        clearCmtAttach();
+      } catch { toast("Microphone access denied"); }
+    });
+
+    const cForm = el("form", { class: "comment-form" });
+    const cFormRow = el("div", { class: "comment-form-row" },
+      el("img", { class: "avatar xs", src: avatarFor(state.me), style: "cursor:pointer;", onclick: () => location.hash = `#profile/${state.uid}` }),
+      el("input", { type: "text", placeholder: "Write a comment…" }),
+      cmtMediaBtn,
+      cmtMicBtn,
+      el("button", { class: "icon-btn", type: "submit" }, el("i", { class: "ri-send-plane-fill" })),
+    );
+    cForm.appendChild(cFormRow);
+
+    cForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const input = cForm.querySelector("input");
+      const text = input.value.trim();
+      if (!text && !_cmtMediaFile && !_cmtAudioBlob) return;
+      const submitBtn = cForm.querySelector("button[type='submit']");
+      submitBtn.disabled = true;
+      const commentData = {
+        text: text || "", authorUid: state.uid, createdAt: serverTimestamp(), likes: [],
+        ..._replyTo ? { replyToUid: _replyTo.uid, replyToName: _replyTo.name, replyToUsername: _replyTo.username } : {},
+      };
+      try {
+        if (_cmtMediaFile) {
+          const kind = _cmtMediaFile.type.startsWith("video") ? "video" : "image";
+          const up = await uploadToCloudinary(_cmtMediaFile, kind);
+          commentData.mediaUrl = up.url; commentData.mediaType = kind;
+        } else if (_cmtAudioBlob) {
+          const audioFile = new File([_cmtAudioBlob], "voice.webm", { type: "audio/webm" });
+          const up = await uploadToCloudinary(audioFile, "video");
+          commentData.audioUrl = up.url;
+        }
+      } catch { toast("Media upload failed"); submitBtn.disabled = false; return; }
+      input.value = ""; _replyTo = null;
+      replyBanner.classList.add("hidden"); input.placeholder = "Write a comment…";
+      clearCmtAttach();
+      cBox.classList.remove("hidden");
+      cBox.appendChild(el("div", { class: "comment" },
+        el("img", { class: "avatar xs", src: avatarFor(state.me), onclick: () => location.hash = `#profile/${state.uid}` }),
+        el("div", { class: "body" },
+          el("div", { class: "name" }, state.me?.name || "User"),
+          commentData.text ? el("div", { class: "text", text: commentData.text }) : null,
+        ),
+      ));
+      sfxComment();
+      submitBtn.disabled = false;
+      await addDoc(collection(db, "posts", p.id, "comments"), commentData);
+      await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
+      const notifSnippet = commentData.text
+        ? `"${commentData.text.slice(0, 60)}"`
+        : commentData.mediaType ? "📷 sent a photo" : "🎙️ sent a voice note";
+      if (author?.uid && author.uid !== state.uid) {
+        writeNotif(author.uid, "comment", { postId: p.id, text: `${state.me?.name || "Someone"} commented: ${notifSnippet}` }).catch(() => {});
+        const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
+        import("./notifications.js").then(({ notifyUser }) =>
+          notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
+        ).catch(() => {});
+      }
+      if (commentData.replyToUid && commentData.replyToUid !== state.uid && commentData.replyToUid !== author?.uid) {
+        writeNotif(commentData.replyToUid, "commentReply", { postId: p.id, text: `${state.me?.name || "Someone"} replied to your comment: ${notifSnippet}` }).catch(() => {});
+        import("./notifications.js").then(({ notifyUser }) =>
+          notifyUser(commentData.replyToUid, state.me?.name || "Someone", "replied to your comment", "/#post/" + p.id, state.me?.photoURL || "")
+        ).catch(() => {});
+      }
+    });
+    post.appendChild(cForm);
+
+    const renderFeedComment = (c, a) => {
+      const isLiked = (c.likes || []).includes(state.uid);
+      const likeCountEl = el("span", { text: String((c.likes || []).length || "") });
+      const likeIconEl = el("i", { class: isLiked ? "ri-thumb-up-fill" : "ri-thumb-up-line", style: isLiked ? "color:#0866ff;" : "" });
+      let _liked = isLiked;
+      const likeBtn = el("button", { class: `cmt-like-btn${_liked ? " liked" : ""}`, onclick: async (e) => {
+        e.stopPropagation();
+        _liked = !_liked;
+        likeIconEl.className = _liked ? "ri-thumb-up-fill" : "ri-thumb-up-line";
+        likeIconEl.style.color = _liked ? "#0866ff" : "";
+        likeBtn.classList.toggle("liked", _liked);
+        const newCount = (c.likes?.length || 0) + (_liked ? 1 : -1);
+        likeCountEl.textContent = newCount > 0 ? String(newCount) : "";
+        await updateDoc(doc(db, "posts", p.id, "comments", c.id), {
+          likes: _liked ? arrayUnion(state.uid) : arrayRemove(state.uid),
+        }).catch(() => {});
+        if (_liked && a?.uid && a.uid !== state.uid) {
+          writeNotif(a.uid, "commentLike", { postId: p.id, text: `${state.me?.name || "Someone"} liked your comment` }).catch(() => {});
+          import("./notifications.js").then(({ notifyUser }) =>
+            notifyUser(a.uid, state.me?.name || "Someone", "liked your comment", "/#post/" + p.id, state.me?.photoURL || "")
+          ).catch(() => {});
+        }
+      }}, likeIconEl, el("span", {}, "Like"), likeCountEl);
+
+      const replyBtn = el("button", { class: "cmt-reply-btn", onclick: () => {
+        _replyTo = { uid: a?.uid, name: a?.name || "user", username: a?.username || "" };
+        replyBanner.querySelector(".reply-banner-text").textContent = `Replying to @${a?.username || a?.name || "user"}`;
+        replyBanner.classList.remove("hidden");
+        cForm.querySelector("input").placeholder = `Reply to @${a?.username || a?.name || "user"}…`;
+        cForm.querySelector("input").focus();
+      }}, "Reply");
+
+      return el("div", { class: "comment" },
+        el("img", { class: "avatar xs", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
+        el("div", { class: "body" },
+          el("div", { class: "name" }, a?.name || "User",
+            a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null),
+          (c.replyToUsername || c.replyToName)
+            ? el("div", { class: "reply-to-label" },
+                el("i", { class: "ri-corner-down-right-line" }),
+                el("a", { class: "mention", href: `#profile-u/${c.replyToUsername || c.replyToName}` },
+                  `@${c.replyToUsername || c.replyToName}`))
+            : null,
+          c.text  ? el("div", { class: "text", text: c.text }) : null,
+          c.mediaUrl ? el("div", { class: "cmt-media", onclick: (e) => {
+            e.stopPropagation();
+            c.mediaType === "video"
+              ? openVideoViewer([{ type: "video", url: c.mediaUrl }], 0)
+              : openImageZoom(c.mediaUrl);
+          }},
+            c.mediaType === "video"
+              ? el("div", { class: "cmt-media-video-wrap" },
+                  el("video", { src: c.mediaUrl, muted: "", preload: "metadata", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;" }),
+                  el("div", { class: "cmt-media-video-play", html: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>` }),
+                )
+              : el("img", { src: c.mediaUrl, loading: "lazy", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;" }),
+          ) : null,
+          c.audioUrl ? el("div", { class: "cmt-voice-note" },
+            el("span", { html: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>` }),
+            el("audio", { src: c.audioUrl, controls: true, style: "height:28px;max-width:150px;" }),
+          ) : null,
+          el("div", { class: "cmt-meta-row" }, replyBtn, likeBtn),
+        ),
+      );
+    };
+
+    onSnapshot(
+      query(collection(db, "posts", p.id, "comments"), orderBy("createdAt", "desc"), limit(5)),
+      async (snap) => {
+        cBox.innerHTML = "";
+        if (snap.empty) { cBox.classList.add("hidden"); return; }
+        cBox.classList.remove("hidden");
+        const comments = snap.docs.map((d) => ({ id: d.id, ...d.data() })).reverse();
+        const authors  = await Promise.all([...new Set(comments.map((c) => c.authorUid))].map(fetchUser));
+        const map      = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
+        comments.forEach((c) => cBox.appendChild(renderFeedComment(c, map[c.authorUid])));
+        // Keep the feed comment count badge in sync with live comment data
+        cmtCountEl.textContent = snap.size ? String(snap.size) : "";
+        cmtCountLabel.textContent = snap.size === 1 ? " comment" : " comments";
+        commentSummaryBtn.classList.toggle("hidden", snap.size === 0);
+      },
+    );
+
+    post._focusComment = () => cForm.querySelector("input").focus();
+  }
+  return post;
+}
+
+// =========================================================================
+// 8b. POST DETAIL — full single post with all comments + back button
+// =========================================================================
+// Inject Twitter-comment styles once
+const _injectTwCmtStyles = (() => {
+  let done = false;
+  return () => {
+    if (done) return; done = true;
+    const s = document.createElement("style");
+    s.textContent = `
+      /* Twitter-style comments */
+      .tw-comment {
+        display: flex;
+        gap: 12px;
+        padding: 12px 16px;
+        border-top: 1px solid var(--border, rgba(255,255,255,0.08));
+      }
+      .tw-comment:first-child { border-top: none; }
+      .tw-cmt-avatar { flex-shrink: 0; cursor: pointer; }
+      .tw-cmt-body { flex: 1; min-width: 0; }
+      .tw-cmt-header {
+        display: flex; align-items: center; gap: 5px;
+        flex-wrap: wrap; margin-bottom: 3px;
+      }
+      .tw-cmt-name { font-weight: 700; font-size: 14px; }
+      .tw-cmt-username { font-size: 13px; color: var(--text3); }
+      .tw-cmt-dot { font-size: 12px; color: var(--text3); }
+      .tw-cmt-time { font-size: 13px; color: var(--text3); }
+      .tw-cmt-text { font-size: 14px; line-height: 1.5; color: var(--text); word-break: break-word; }
+      .tw-cmt-actions {
+        display: flex; align-items: center; gap: 20px;
+        margin-top: 10px;
+      }
+      .tw-cmt-act-btn {
+        display: flex; align-items: center; gap: 5px;
+        background: none; border: none; cursor: pointer;
+        color: var(--text3); font-size: 13px;
+        padding: 4px; border-radius: 999px;
+        transition: color .15s, background .15s;
+      }
+      .tw-cmt-act-btn i { font-size: 17px; }
+      .tw-cmt-act-btn:hover { color: var(--primary); background: rgba(108,99,255,.1); }
+      .tw-cmt-act-btn.liked { color: var(--danger, #e0245e); }
+      .tw-cmt-act-btn.liked:hover { background: rgba(224,36,94,.1); }
+      .tw-cmt-act-count { font-size: 13px; }
+      .detail-cmt-list { border-radius: 12px; overflow: hidden; }
+
+      /* Ensure mention colour isn't overridden inside comment body */
+      .tw-cmt-body a.mention {
+        color: var(--primary, #6c63ff);
+        text-decoration: none;
+        font-weight: 500;
+      }
+      .tw-cmt-body a.mention:hover { text-decoration: underline; }
+
+      /* Twitter-style reply banner */
+      .detail-reply-banner {
+        display: flex; align-items: center; justify-content: space-between;
+        margin: 0 16px 6px;
+        padding: 8px 12px 8px 14px;
+        border-radius: 10px;
+        background: rgba(108,99,255,.08);
+        border-left: 3px solid var(--primary, #6c63ff);
+        animation: replyBannerIn .15s ease;
+      }
+      .detail-reply-banner.hidden { display: none; }
+      @keyframes replyBannerIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+      .detail-reply-banner-inner {
+        display: flex; align-items: center; gap: 6px;
+        font-size: 13px; color: var(--text3);
+      }
+      .detail-reply-banner-icon { font-size: 14px; color: var(--primary, #6c63ff); }
+      .detail-reply-banner-label { color: var(--text3); }
+      .detail-reply-banner-user {
+        color: var(--primary, #6c63ff);
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .detail-reply-banner-close {
+        background: none; border: none; cursor: pointer;
+        color: var(--text3); padding: 2px 4px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        transition: color .15s, background .15s;
+        font-size: 15px; line-height: 1;
+      }
+      .detail-reply-banner-close:hover { color: var(--text); background: rgba(255,255,255,.08); }
+    `;
+    document.head.appendChild(s);
+  };
+})();
+
+const renderPostDetail = async (root, postId) => {
+  _injectTwCmtStyles();
+  if (!postId) { location.hash = "#feed"; return; }
+
+  const back = el("div", { class: "detail-topbar" },
+    el("button", { class: "icon-btn", onclick: () => history.back() },
+      el("i", { class: "ri-arrow-left-line" }), "Back"),
+  );
+  root.appendChild(back);
+
+  const snap = await getDoc(doc(db, "posts", postId)).catch(() => null);
+  if (!snap || !snap.exists()) {
+    root.appendChild(el("div", { class: "empty" },
+      el("i", { class: "ri-ghost-line" }),
+      el("div", { class: "t" }, "Post not found"),
+    ));
+    return;
+  }
+  const p = { id: snap.id, ...snap.data() };
+  const author = await fetchUser(p.authorUid);
+
+  back.append(
+    el("div", { class: "detail-author" },
+      el("img", {
+        class: "avatar xs",
+        src: avatarFor(author),
+        alt: `${author?.name || "Post owner"} profile picture`,
+        onclick: () => { location.hash = `#profile/${author?.uid}`; },
+      }),
+      el("div", { class: "detail-author-copy" },
+        el("strong", {}, author?.name || "User"),
+        el("span", {}, `@${author?.username || "user"}`),
+      ),
+    ),
+    el("div", { class: "detail-topbar-stats" },
+      el("span", {}, el("i", { class: "ri-thumb-up-line" }), ` ${p.orbitCount || 0} likes`),
+      el("span", {}, el("i", { class: "ri-eye-line" }), ` ${p.views || 0}`),
+      el("span", {}, el("i", { class: "ri-chat-1-line" }), ` ${p.commentCount || 0}`),
+    ),
+  );
+
+  // Render the post card with media stacked vertically in detail view
+  root.appendChild(renderPost(p, author, { hideComments: true, detailView: true }));
+
+  // Full comments section
+  const cmtSection = el("div", { class: "detail-comments" });
+  root.appendChild(cmtSection);
+
+  const cmtHead = el("div", { class: "detail-cmt-head" }, "Comments");
+  cmtSection.appendChild(cmtHead);
+
+  const cList = el("div", { class: "detail-cmt-list" });
+  cmtSection.appendChild(cList);
+
+  // Track reply state for detail view
+  let _detailReplyTo = null;
+  const detailReplyBanner = el("div", { class: "detail-reply-banner hidden" });
+  const _replyBannerUsername = el("span", { class: "detail-reply-banner-user" }, "");
+  detailReplyBanner.appendChild(
+    el("div", { class: "detail-reply-banner-inner" },
+      el("i", { class: "ri-corner-down-right-line detail-reply-banner-icon" }),
+      el("span", { class: "detail-reply-banner-label" }, "Replying to "),
+      _replyBannerUsername,
+    ),
+  );
+  const _replyBannerClose = el("button", { class: "detail-reply-banner-close", type: "button", onclick: () => {
+    _detailReplyTo = null;
+    detailReplyBanner.classList.add("hidden");
+    const inp = cmtSection.querySelector("input[type='text']");
+    if (inp) { inp.placeholder = "Write a comment…"; inp.value = ""; }
+  }}, el("i", { class: "ri-close-line" }));
+  detailReplyBanner.appendChild(_replyBannerClose);
+  cmtSection.appendChild(detailReplyBanner);
+
+  const renderDetailComment = (c, a) => {
+    const isLiked = (c.likes || []).includes(state.uid);
+    const likeCount = (c.likes || []).length;
+    const likeCountEl = el("span", { class: "tw-cmt-act-count", text: likeCount > 0 ? String(likeCount) : "" });
+    const likeIconEl = el("i", { class: isLiked ? "ri-thumb-up-fill" : "ri-thumb-up-line" });
+    let _liked = isLiked;
+
+    const likeBtn = el("button", {
+      class: `tw-cmt-act-btn${_liked ? " liked" : ""}`,
+      onclick: async (ev) => {
+        ev.stopPropagation();
+        _liked = !_liked;
+        likeIconEl.className = _liked ? "ri-thumb-up-fill" : "ri-thumb-up-line";
+        likeBtn.classList.toggle("liked", _liked);
+        const newCount = (c.likes?.length || 0) + (_liked ? 1 : -1);
+        likeCountEl.textContent = newCount > 0 ? String(newCount) : "";
+        await updateDoc(doc(db, "posts", p.id, "comments", c.id), {
+          likes: _liked ? arrayUnion(state.uid) : arrayRemove(state.uid),
+        }).catch(() => {});
+        if (_liked && a?.uid && a.uid !== state.uid) {
+          writeNotif(a.uid, "commentLike", { postId: p.id, text: `${state.me?.name || "Someone"} liked your comment` }).catch(() => {});
+          import("./notifications.js").then(({ notifyUser }) =>
+            notifyUser(a.uid, state.me?.name || "Someone", "liked your comment", "/#post/" + p.id, state.me?.photoURL || "")
+          ).catch(() => {});
+        }
+      },
+    }, likeIconEl, "Like", likeCountEl);
+
+    const replyBtn = el("button", {
+      class: "tw-cmt-act-btn",
+      onclick: () => {
+        const handle = a?.username || a?.name || "user";
+        _detailReplyTo = { uid: a?.uid, name: a?.name || "user", username: a?.username || "", commentId: c.id };
+        _replyBannerUsername.textContent = `@${handle}`;
+        detailReplyBanner.classList.remove("hidden");
+        const inp = cmtSection.querySelector("input[type='text']");
+        if (inp) { inp.placeholder = `Reply to @${handle}…`; inp.focus(); }
+      },
+    }, el("i", { class: "ri-chat-1-line" }), "Reply");
+
+    const shareBtn = el("button", {
+      class: "tw-cmt-act-btn",
+      onclick: async (ev) => {
+        ev.stopPropagation();
+        const url = postPublicUrl(p.id);
+        try {
+          if (navigator.share) {
+            await navigator.share({ title: "A new gravity for your circles.", text: c.text || "", url });
+          } else {
+            await navigator.clipboard.writeText(url);
+            toast("Link copied");
+          }
+        } catch (error) {
+          if (error?.name !== "AbortError") {
+            await navigator.clipboard.writeText(url).catch(() => {});
+            toast("Link copied");
+          }
+        }
+      },
+    }, el("i", { class: "ri-share-forward-line" }), "Share");
+
+    return el("div", { class: "tw-comment" },
+      el("img", { class: "avatar xs tw-cmt-avatar", src: avatarFor(a), onclick: () => location.hash = `#profile/${a?.uid}` }),
+      el("div", { class: "tw-cmt-body" },
+        el("div", { class: "tw-cmt-bubble" },
+          el("div", { class: "tw-cmt-header" },
+            el("span", { class: "tw-cmt-name" }, a?.name || "User",
+              a?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
+            ),
+            el("span", { class: "tw-cmt-username" }, `@${a?.username || "user"}`),
+            el("span", { class: "tw-cmt-dot" }, "·"),
+            el("span", { class: "tw-cmt-time" }, fmtTime(c.createdAt)),
+          ),
+          (c.replyToUsername || c.replyToName) ? el("div", { class: "reply-to-label" },
+            el("i", { class: "ri-corner-down-right-line" }),
+            el("a", { class: "mention", href: `#profile-u/${c.replyToUsername || c.replyToName}` }, `@${c.replyToUsername || c.replyToName}`)
+          ) : null,
+          c.text ? el("div", { class: "tw-cmt-text" }, c.text) : null,
+          c.mediaUrl ? el("div", { class: "cmt-media", onclick: (ev) => { ev.stopPropagation(); c.mediaType === "video" ? openVideoViewer([{ type: "video", url: c.mediaUrl }], 0) : openImageZoom(c.mediaUrl); }},
+            c.mediaType === "video"
+              ? el("div", { class: "cmt-media-video-wrap" },
+                  el("video", { src: c.mediaUrl, muted: "", preload: "metadata", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;border-radius:10px;" }),
+                  el("div", { class: "cmt-media-video-play", html: `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"/></svg>` }),
+                )
+              : el("img", { src: c.mediaUrl, loading: "lazy", style: "max-width:200px;max-height:150px;object-fit:cover;display:block;border-radius:10px;margin-top:8px;" }),
+          ) : null,
+          c.audioUrl ? el("div", { class: "cmt-voice-note" },
+            el("span", { html: `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>` }),
+            el("audio", { src: c.audioUrl, controls: true, style: "height:28px;max-width:150px;" }),
+          ) : null,
+        ),
+        el("div", { class: "tw-cmt-actions" }, replyBtn, shareBtn, likeBtn),
+      ),
+    );
+  };
+
+  const DETAIL_CMT_PAGE = 5;
+  let _detailCmtSnap = null;
+
+  const loadDetailComments = async (showAll = false) => {
+    const q = showAll
+      ? query(collection(db, "posts", p.id, "comments"), orderBy("createdAt", "asc"), limit(200))
+      : query(collection(db, "posts", p.id, "comments"), orderBy("createdAt", "asc"), limit(DETAIL_CMT_PAGE));
+    if (_detailCmtSnap) _detailCmtSnap();
+    _detailCmtSnap = onSnapshot(q, async (snap) => {
+      cList.innerHTML = "";
+      if (snap.empty) {
+        cList.appendChild(el("div", { class: "reel-cmt-empty" }, "No comments yet. Be the first!"));
+        return;
+      }
+      const comments = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const auths = await Promise.all([...new Set(comments.map((c) => c.authorUid))].map(fetchUser));
+      const map = Object.fromEntries(auths.filter(Boolean).map((u) => [u.uid, u]));
+
+      // Separate top-level comments from replies, then render nested
+      const topLevel = comments.filter((c) => !c.parentCommentId);
+      const replies   = comments.filter((c) => !!c.parentCommentId);
+
+      topLevel.forEach((c) => {
+        cList.appendChild(renderDetailComment(c, map[c.authorUid]));
+        // Collect direct replies to this comment
+        const children = replies.filter((r) => r.parentCommentId === c.id);
+        if (children.length > 0) {
+          const replyWrap = el("div", { class: "tw-comment-reply" });
+          children.forEach((r) => replyWrap.appendChild(renderDetailComment(r, map[r.authorUid])));
+          cList.appendChild(replyWrap);
+        }
+      });
+
+      // Show "Load more" button only if we might have more and haven't loaded all yet
+      if (!showAll && snap.docs.length >= DETAIL_CMT_PAGE) {
+        const total = p.commentCount || 0;
+        const remaining = total - snap.docs.length;
+        const loadMoreBtn = el("button", { class: "load-more-cmts-btn", onclick: () => loadDetailComments(true) },
+          el("i", { class: "ri-arrow-down-s-line" }),
+          remaining > 0 ? ` View ${remaining} more comment${remaining !== 1 ? "s" : ""}` : " View all comments",
+        );
+        cList.appendChild(loadMoreBtn);
+      }
+    });
+  };
+
+  loadDetailComments(false);
+
+  // ── Detail comment: media + voice-note state ────────────────
+  let _dCmtMediaFile = null;
+  let _dCmtAudioBlob = null;
+  let _dCmtRecorder  = null;
+  let _dCmtRecording = false;
+
+  const dCmtMediaInput = el("input", { type: "file", accept: "image/*,video/*" });
+  dCmtMediaInput.style.display = "none";
+
+  const dCmtAttachPreview = el("div", { class: "cmt-attach-preview hidden" });
+
+  const clearDCmtAttach = () => {
+    _dCmtMediaFile = null; _dCmtAudioBlob = null;
+    dCmtAttachPreview.innerHTML = ""; dCmtAttachPreview.classList.add("hidden");
+  };
+
+  const showDCmtMediaPreview = (file) => {
+    dCmtAttachPreview.innerHTML = ""; dCmtAttachPreview.classList.remove("hidden");
+    const isVideo = file.type.startsWith("video");
+    const url = URL.createObjectURL(file);
+    const thumb = isVideo
+      ? el("video", { src: url, muted: "", preload: "metadata", style: "width:72px;height:72px;object-fit:cover;border-radius:10px;display:block;" })
+      : el("img",  { src: url, style: "width:72px;height:72px;object-fit:cover;border-radius:10px;display:block;" });
+    const rmBtn = el("button", { type: "button", class: "cmt-attach-remove",
+      html: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` });
+    rmBtn.addEventListener("click", clearDCmtAttach);
+    dCmtAttachPreview.appendChild(el("div", { class: "cmt-attach-thumb" }, thumb, rmBtn));
+  };
+
+  const showDCmtAudioPreview = (blob) => {
+    dCmtAttachPreview.innerHTML = ""; dCmtAttachPreview.classList.remove("hidden");
+    const url = URL.createObjectURL(blob);
+    const audio = el("audio", { src: url, controls: true, style: "height:28px;max-width:160px;" });
+    const rmBtn = el("button", { type: "button", class: "cmt-attach-remove",
+      html: `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>` });
+    rmBtn.addEventListener("click", clearDCmtAttach);
+    dCmtAttachPreview.appendChild(el("div", { class: "cmt-attach-audio" }, audio, rmBtn));
+  };
+
+  dCmtMediaInput.addEventListener("change", (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    _dCmtMediaFile = file; _dCmtAudioBlob = null;
+    showDCmtMediaPreview(file); dCmtMediaInput.value = "";
+  });
+
+  const dCmtMediaBtn = el("button", {
+    type: "button", class: "icon-btn cmt-icon-btn", title: "Add photo or video",
+    html: `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`,
+  });
+  dCmtMediaBtn.addEventListener("click", (e) => { e.stopPropagation(); dCmtMediaInput.click(); });
+
+  const D_SVG_MIC  = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`;
+  const D_SVG_STOP = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>`;
+  const dCmtMicBtn = el("button", { type: "button", class: "icon-btn cmt-icon-btn", title: "Record voice note", html: D_SVG_MIC });
+  dCmtMicBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (_dCmtRecording) { _dCmtRecorder?.stop(); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const chunks = [];
+      _dCmtRecorder = new MediaRecorder(stream);
+      _dCmtRecorder.ondataavailable = (ev) => { if (ev.data.size > 0) chunks.push(ev.data); };
+      _dCmtRecorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        _dCmtAudioBlob = new Blob(chunks, { type: "audio/webm" });
+        _dCmtMediaFile = null; _dCmtRecording = false;
+        dCmtMicBtn.innerHTML = D_SVG_MIC; dCmtMicBtn.style.color = ""; dCmtMicBtn.classList.remove("recording");
+        showDCmtAudioPreview(_dCmtAudioBlob);
+      };
+      _dCmtRecorder.start(); _dCmtRecording = true;
+      dCmtMicBtn.innerHTML = D_SVG_STOP; dCmtMicBtn.style.color = "var(--danger)"; dCmtMicBtn.classList.add("recording");
+      clearDCmtAttach();
+    } catch { toast("Microphone access denied"); }
+  });
+
+  const cForm = el("form", { class: "comment-form detail-cmt-form" });
+  cForm.appendChild(dCmtMediaInput);
+  cForm.appendChild(dCmtAttachPreview);
+  const dFormRow = el("div", { class: "comment-form-row" },
+    el("img", { class: "avatar xs", src: avatarFor(state.me), style: "cursor:pointer;", onclick: () => location.hash = `#profile/${state.uid}` }),
+    el("input", { type: "text", placeholder: "Write a comment…" }),
+    dCmtMediaBtn,
+    dCmtMicBtn,
+    el("button", { class: "icon-btn", type: "submit" }, el("i", { class: "ri-send-plane-fill" })),
+  );
+  cForm.appendChild(dFormRow);
+
+  cForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const input = cForm.querySelector("input[type='text']");
+    const text = input.value.trim();
+    if (!text && !_dCmtMediaFile && !_dCmtAudioBlob) return;
+    const submitBtn = cForm.querySelector("button[type='submit']");
+    submitBtn.disabled = true;
+    const commentData = {
+      text: text || "", authorUid: state.uid, createdAt: serverTimestamp(), likes: [],
+      ..._detailReplyTo ? {
+        replyToUid: _detailReplyTo.uid,
+        replyToName: _detailReplyTo.name,
+        replyToUsername: _detailReplyTo.username,
+        parentCommentId: _detailReplyTo.commentId || null,
+      } : {},
+    };
+    try {
+      if (_dCmtMediaFile) {
+        const kind = _dCmtMediaFile.type.startsWith("video") ? "video" : "image";
+        const up = await uploadToCloudinary(_dCmtMediaFile, kind);
+        commentData.mediaUrl = up.url; commentData.mediaType = kind;
+      } else if (_dCmtAudioBlob) {
+        const audioFile = new File([_dCmtAudioBlob], "voice.webm", { type: "audio/webm" });
+        const up = await uploadToCloudinary(audioFile, "video");
+        commentData.audioUrl = up.url;
+      }
+    } catch { toast("Media upload failed"); submitBtn.disabled = false; return; }
+    input.value = ""; _detailReplyTo = null;
+    detailReplyBanner.classList.add("hidden"); input.placeholder = "Write a comment…";
+    clearDCmtAttach(); sfxComment(); submitBtn.disabled = false;
+    await addDoc(collection(db, "posts", p.id, "comments"), commentData);
+    await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
+    const notifSnippet = commentData.text ? `"${commentData.text.slice(0, 60)}"` : commentData.mediaType ? "📷 sent a photo" : "🎙️ sent a voice note";
+    if (author?.uid && author.uid !== state.uid) {
+      writeNotif(author.uid, "comment", { postId: p.id, text: `${state.me?.name || "Someone"} commented: ${notifSnippet}` }).catch(() => {});
+      const _thumb = Array.isArray(p.media) ? p.media[0]?.url : p.media?.url;
+      import("./notifications.js").then(({ notifyUser }) =>
+        notifyUser(author.uid, state.me?.name || "Someone", "commented on your post", "/#post/" + p.id, state.me?.photoURL || "", _thumb || "")
+      ).catch(() => {});
+    }
+    if (commentData.replyToUid && commentData.replyToUid !== state.uid && commentData.replyToUid !== author?.uid) {
+      writeNotif(commentData.replyToUid, "commentReply", { postId: p.id, text: `${state.me?.name || "Someone"} replied to your comment: ${notifSnippet}` }).catch(() => {});
+      import("./notifications.js").then(({ notifyUser }) =>
+        notifyUser(commentData.replyToUid, state.me?.name || "Someone", "replied to your comment", "/#post/" + p.id, state.me?.photoURL || "")
+      ).catch(() => {});
+    }
+  });
+  cmtSection.appendChild(cForm);
+};
+
+const toggleSave = async (postId, shouldSave = null) => {
+  const ref = doc(db, "users", state.uid);
+  const has = (state.me.saved || []).includes(postId);
+  const next = shouldSave == null ? !has : shouldSave;
+  await updateDoc(ref, { saved: next ? arrayUnion(postId) : arrayRemove(postId) });
+  state.me.saved = next
+    ? [...new Set([...(state.me.saved || []), postId])]
+    : (state.me.saved || []).filter((id) => id !== postId);
+  toast(next ? "Saved" : "Removed from Saved");
+};
+
+// =========================================================================
+// 10. GROUPS
+// =========================================================================
+// =========================================================================
+// 11. EXPLORE / SAVED
+// =========================================================================
+const renderExplore = (root, hashtagFilter = null) => {
+  const col = el("div", { class: "gb-col gb-page" });
+  const head = el("div", { class: "gb-head" },
+    hashtagFilter ? el("button", { class: "gb-icon-btn", type: "button", onclick: () => history.back() }, el("i", { class: "ri-arrow-left-line" })) : el("i", { class: "ri-compass-3-fill gb-head-ic" }),
+    el("div", { class: "gb-head-t" }, el("strong", {}, hashtagFilter ? `#${hashtagFilter}` : "Explore")));
+  let sort = "new";
+  const pills = el("div", { class: "gb-pills" });
+  const list = el("div", { class: "gb-list" });
+  let docs = [];
+  const draw = async () => {
+    const posts = docs.map((d) => ({ id: d.id, ...d.data() }))
+      .filter((p) => !(Array.isArray(p.media) ? p.media.length : p.media) && (p.audio?.url || p.text || p.video?.url))
+      .filter((p) => !(state.me?.hiddenPosts || []).includes(p.id));
+    posts.sort(sort === "top"
+      ? (a, b) => (b.orbitCount || 0) - (a.orbitCount || 0)
+      : (a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+    list.innerHTML = "";
+    if (!posts.length) { list.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-mic-line" }), el("div", { class: "t" }, "Nothing here yet"))); return; }
+    const users = await Promise.all([...new Set(posts.map((p) => p.authorUid))].map(fetchUser));
+    const map = Object.fromEntries(users.filter(Boolean).map((u) => [u.uid, u]));
+    posts.slice(0, 60).forEach((p) => list.appendChild(gb().renderVoicePost(p, map[p.authorUid])));
+  };
+  [["new", "Latest"], ["top", "Popular"]].forEach(([k, label]) => {
+    const b = el("button", { class: `gb-pill${k === sort ? " on" : ""}`, type: "button", onclick: () => {
+      sort = k; [...pills.children].forEach((x) => x.classList.toggle("on", x === b)); draw();
+    } }, label);
+    pills.appendChild(b);
+  });
+  col.append(head, ...(hashtagFilter ? [] : [gb().buildTrendingRail()]), pills, list);
+  root.appendChild(col);
+  const q = hashtagFilter
+    ? query(collection(db, "posts"), where("hashtags", "array-contains", hashtagFilter.toLowerCase()), limit(80))
+    : query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(80));
+  const unsub = onSnapshot(q, (snap) => { docs = snap.docs; draw(); }, () => {});
+  root._unsub = () => { unsub(); gb().stopAllAudio?.(); };
+};
+const _renderExploreOld = (root, hashtagFilter = null) => {
+  // ── Hashtag filter view (grid) ────────────────────────────────────────────
+  if (hashtagFilter) {
+    root.appendChild(el("div", { class: "section-head" },
+      el("button", { class: "icon-btn", style: "margin-right:8px;", onclick: () => history.back() },
+        el("i", { class: "ri-arrow-left-line" })),
+      el("h2", {}, `#${hashtagFilter}`),
+    ));
+    const grid = el("div", { class: "grid-3" });
+    root.appendChild(grid);
+    onSnapshot(
+      query(collection(db, "posts"), where("hashtags", "array-contains", hashtagFilter.toLowerCase()), limit(60)),
+      (snap) => {
+        grid.innerHTML = "";
+        if (snap.empty) {
+          grid.appendChild(el("div", { class: "empty", style: "grid-column:1/-1;" },
+            el("i", { class: "ri-hashtag" }),
+            el("div", { class: "t" }, `No posts tagged #${hashtagFilter}`)));
+          return;
+        }
+        [...snap.docs]
+          .sort((a, b) => (b.data().createdAt?.seconds || 0) - (a.data().createdAt?.seconds || 0))
+          .forEach((d) => {
+            const p = { id: d.id, ...d.data() };
+            const cell = el("div", { class: "cell", onclick: () => location.hash = `#post/${p.id}` });
+            const mediaItems = Array.isArray(p.media) ? p.media : (p.media ? [p.media] : []);
+            if (mediaItems.length) {
+              const m = mediaItems[0];
+              if (m.type === "video") {
+                cell.appendChild(el("video", { src: m.url, muted: "", playsinline: "", preload: "metadata" }));
+                cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-play-fill" })));
+              } else {
+                cell.appendChild(el("img", { src: m.url, loading: "lazy" }));
+                if (mediaItems.length > 1) cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-image-2-line" })));
+              }
+            } else {
+              cell.appendChild(el("div", { class: "cell-text", text: (p.text || "").slice(0, 80) }));
+            }
+            if (p.text) cell.appendChild(el("div", { class: "cell-overlay", text: (p.text || "").slice(0, 55) }));
+            cell.appendChild(el("span", { class: "cell-views" }, el("i", { class: "ri-eye-line" }), " " + String(p.views || 0)));
+            grid.appendChild(cell);
+          });
+      }
+    );
+    return;
+  }
+
+  // ── Full Discover page ────────────────────────────────────────────────────
+  const wrap = el("div", { class: "disc-wrap" });
+  root.appendChild(wrap);
+
+  // 1. Header ──────────────────────────────────────────────────────────────
+  const unreadDot = el("span", { class: "disc-badge-dot", style: "display:none;" });
+  const bellIcon  = el("span", { class: "disc-icon disc-bell" }, "🔔", unreadDot);
+  bellIcon.onclick = () => { location.hash = "#notifications"; };
+  const notifPill = document.getElementById("notifPill");
+  if (notifPill && !notifPill.hidden && parseInt(notifPill.textContent || "0") > 0) {
+    unreadDot.style.display = "";
+  }
+
+  const searchBox    = el("div", { class: "disc-search-box hidden" });
+  const searchInput  = el("input", { type: "text", placeholder: "Search people, hashtags…" });
+  const searchResultsEl = el("div", { class: "explore-search-results hidden" });
+  searchBox.appendChild(searchInput);
+  searchBox.appendChild(searchResultsEl);
+
+  const searchIcon = el("span", { class: "disc-icon" }, "🔍");
+  searchIcon.onclick = () => {
+    searchBox.classList.toggle("hidden");
+    if (!searchBox.classList.contains("hidden")) searchInput.focus();
+  };
+
+  wrap.appendChild(el("div", { class: "disc-header" },
+    el("h1", {}, "Discover"),
+    el("div", { class: "disc-header-icons" }, searchIcon, bellIcon),
+  ));
+  wrap.appendChild(searchBox);
+
+  // Search logic
+  let _sd = null;
+  searchInput.addEventListener("input", () => {
+    clearTimeout(_sd);
+    const q1 = searchInput.value.trim().toLowerCase();
+    if (!q1) { searchResultsEl.classList.add("hidden"); searchResultsEl.innerHTML = ""; return; }
+    _sd = setTimeout(async () => {
+      searchResultsEl.innerHTML = "";
+      searchResultsEl.classList.remove("hidden");
+      if (q1.startsWith("#")) {
+        searchResultsEl.appendChild(el("div", { class: "explore-search-item", onclick: () => location.hash = `#explore/tag/${q1.slice(1)}` },
+          el("i", { class: "ri-hashtag" }), el("span", {}, q1)));
+        return;
+      }
+      const snap = await getDocs(query(collection(db, "users"), orderBy("username"), limit(200))).catch(() => null);
+      if (!snap) return;
+      const matches = snap.docs
+        .map((d) => ({ uid: d.id, ...d.data() }))
+        .filter((u) => u.uid !== state.uid && ((u.name || "").toLowerCase().includes(q1) || (u.username || "").toLowerCase().includes(q1)))
+        .slice(0, 12);
+      if (!matches.length) { searchResultsEl.appendChild(el("div", { class: "explore-search-empty" }, "No matches")); return; }
+      matches.forEach((u) => searchResultsEl.appendChild(
+        el("div", { class: "explore-search-item", onclick: () => location.hash = `#profile/${u.uid}` },
+          el("img", { class: "avatar xs", src: avatarFor(u) }),
+          el("div", {}, el("div", { class: "esi-name" }, u.name || "User"), el("div", { class: "esi-sub" }, "@" + (u.username || "user"))),
+        )
+      ));
+    }, 250);
+  });
+  document.addEventListener("click", (e) => {
+    if (!searchBox.contains(e.target) && e.target !== searchIcon) searchBox.classList.add("hidden");
+  });
+
+  // 2. Filter pills ─────────────────────────────────────────────────────────
+  const pillLabels  = ["For You", "Trending", "People", "Topics", "Live"];
+  let activeFilter  = "For You";
+  const pillRow     = el("div", { class: "disc-pills" });
+  const pillEls     = pillLabels.map((label) => {
+    const pill = el("span", { class: "disc-pill" + (label === activeFilter ? " active" : "") }, label);
+    pill.onclick = () => {
+      pillEls.forEach((p) => p.classList.remove("active"));
+      pill.classList.add("active");
+      activeFilter = label;
+    };
+    return pill;
+  });
+  pillEls.forEach((p) => pillRow.appendChild(p));
+  wrap.appendChild(pillRow);
+
+  // 3 & 4. Trending Now ─────────────────────────────────────────────────────
+  wrap.appendChild(el("div", { class: "disc-section-header" },
+    el("h2", {}, "Trending Now 🔥"),
+    el("span", { class: "disc-see-all" }, "See all"),
+  ));
+  const trendRow = el("div", { class: "disc-trend-row" });
+  wrap.appendChild(trendRow);
+
+  getDocs(query(collection(db, "posts"), orderBy("orbitCount", "desc"), limit(80)))
+    .then((snap) => {
+      // Aggregate hashtags → weight + cover image
+      const tagData = {};
+      snap.docs.forEach((d) => {
+        const p = d.data();
+        const tags = p.hashtags || [];
+        const media = Array.isArray(p.media) ? p.media : (p.media ? [p.media] : []);
+        const imgUrl = media.find((m) => m.type === "image")?.url || null;
+        tags.forEach((tag) => {
+          if (!tagData[tag]) tagData[tag] = { count: 0, imageUrl: null };
+          tagData[tag].count += (p.orbitCount || 0) + 1;
+          if (!tagData[tag].imageUrl && imgUrl) tagData[tag].imageUrl = imgUrl;
+        });
+      });
+      const sorted = Object.entries(tagData).sort((a, b) => b[1].count - a[1].count).slice(0, 10);
+      const fallbackGrads = [
+        "linear-gradient(135deg,#1a1a2e,#16213e)",
+        "linear-gradient(135deg,#0f0c29,#302b63)",
+        "linear-gradient(135deg,#1a1a1a,#2d2d2d)",
+        "linear-gradient(135deg,#111827,#1f2937)",
+        "linear-gradient(135deg,#0d0d0d,#1a1a1a)",
+      ];
+      if (!sorted.length) {
+        trendRow.appendChild(el("div", { style: "padding:0 16px;color:var(--text-mute);font-size:13px;" }, "No trending topics yet"));
+        return;
+      }
+      sorted.forEach(([tag, data], i) => {
+        const bgStyle = data.imageUrl
+          ? `background-image:url('${data.imageUrl}');background-size:cover;background-position:center;`
+          : `background:${fallbackGrads[i % fallbackGrads.length]};`;
+        const countStr = data.count > 999
+          ? (data.count / 1000).toFixed(1) + "K"
+          : String(data.count);
+        trendRow.appendChild(el("div", {
+          class: "disc-trend-card",
+          style: bgStyle,
+          onclick: () => location.hash = `#explore/tag/${tag}`,
+        },
+          el("div", { class: "disc-trend-overlay" },
+            el("span", { class: "disc-trend-title" }, `#${tag}`),
+            el("span", { class: "disc-trend-count" }, `${countStr} orbits`),
+          ),
+        ));
+      });
+    }).catch(() => {
+      trendRow.appendChild(el("div", { style: "padding:0 16px;color:var(--text-mute);font-size:13px;" }, "Could not load trends"));
+    });
+
+  // 5 & 6. People to Follow ─────────────────────────────────────────────────
+  wrap.appendChild(el("div", { class: "disc-section-header" },
+    el("h2", {}, "People to Follow"),
+    el("span", { class: "disc-see-all" }, "See all"),
+  ));
+  const peopleList = el("div", { class: "disc-people-list" });
+  wrap.appendChild(peopleList);
+
+  getDocs(query(collection(db, "users"), limit(40)))
+    .then((snap) => {
+      const following = state.me?.following || [];
+      const suggestions = snap.docs
+        .map((d) => ({ uid: d.id, ...d.data() }))
+        .filter((u) => u.uid !== state.uid && !following.includes(u.uid))
+        .sort((a, b) => (b.followers?.length || 0) - (a.followers?.length || 0))
+        .slice(0, 6);
+
+      if (!suggestions.length) {
+        peopleList.appendChild(el("div", { style: "color:var(--text-mute);font-size:13px;padding:0 0 8px;" },
+          "You're already following everyone — check back soon."));
+        return;
+      }
+
+      suggestions.forEach((u) => {
+        let followed = (state.me?.following || []).includes(u.uid);
+        const followBtn = el("button", {
+          class: "disc-follow-btn",
+          style: followed ? "opacity:0.5;" : "",
+        }, followed ? "Following" : "Follow");
+
+        followBtn.onclick = async () => {
+          followed = !followed;
+          followBtn.textContent = followed ? "Following" : "Follow";
+          followBtn.style.opacity = followed ? "0.5" : "";
+          const meRef  = doc(db, "users", state.uid);
+          const themRef = doc(db, "users", u.uid);
+          const batch = writeBatch(db);
+          if (followed) {
+            batch.update(meRef,  { following: arrayUnion(u.uid) });
+            batch.update(themRef, { followers: arrayUnion(state.uid) });
+            if (state.me) state.me.following = [...new Set([...(state.me.following || []), u.uid])];
+            writeNotif(u.uid, "follow", {}).catch(() => {});
+          } else {
+            batch.update(meRef,  { following: arrayRemove(u.uid) });
+            batch.update(themRef, { followers: arrayRemove(state.uid) });
+            if (state.me) state.me.following = (state.me.following || []).filter((x) => x !== u.uid);
+          }
+          await batch.commit().catch(() => {
+            toast("Failed to update");
+            followed = !followed;
+            followBtn.textContent = followed ? "Following" : "Follow";
+            followBtn.style.opacity = followed ? "0.5" : "";
+          });
+        };
+
+        const roleText = u.bio ? u.bio.slice(0, 42) : (u.verified ? "Verified member" : "Get better member");
+        peopleList.appendChild(el("div", { class: "disc-people-row" },
+          el("img", {
+            class: "disc-people-avatar",
+            src: avatarFor(u),
+            style: "cursor:pointer;",
+            onclick: () => location.hash = `#profile/${u.uid}`,
+          }),
+          el("div", {
+            class: "disc-people-info",
+            onclick: () => location.hash = `#profile/${u.uid}`,
+          },
+            el("span", { class: "disc-people-name" },
+              u.name || "User",
+              u.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null,
+            ),
+            el("span", { class: "disc-people-handle" }, `@${u.username || "user"}`),
+            el("span", { class: "disc-people-role" }, roleText),
+          ),
+          followBtn,
+        ));
+      });
+    }).catch(() => {});
+
+  // 7 & 8. Popular Posts ────────────────────────────────────────────────────
+  wrap.appendChild(el("div", { class: "disc-section-header", style: "margin-top:8px;" },
+    el("h2", {}, "Popular Posts"),
+  ));
+  // NOTE: intentionally NOT "feed-wrap" — that class triggers global story/suggestion
+  // hooks from features.js/additional.js that belong only on the home feed.
+  const postsList = el("div", { class: "disc-posts-list" });
+  wrap.appendChild(postsList);
+
+  // Skeleton loading — show 4 placeholder cards while Firestore loads
+  const _makeSkeleton = () => el("div", { class: "disc-skel-post" },
+    el("div", { class: "disc-skel-head" },
+      el("div", { class: "disc-skel-avatar" }),
+      el("div", { class: "disc-skel-meta" },
+        el("div", { class: "disc-skel-line w60" }),
+        el("div", { class: "disc-skel-line w40" }),
+      ),
+    ),
+    el("div", { class: "disc-skel-line w100", style: "height:14px;margin-bottom:6px;" }),
+    el("div", { class: "disc-skel-line w80", style: "height:14px;margin-bottom:6px;" }),
+    el("div", { class: "disc-skel-media" }),
+  );
+  for (let i = 0; i < 4; i++) postsList.appendChild(_makeSkeleton());
+
+  getDocs(query(collection(db, "posts"), orderBy("orbitCount", "desc"), limit(20)))
+    .then(async (snap) => {
+      postsList.innerHTML = ""; // clear skeletons
+      if (snap.empty) {
+        postsList.appendChild(el("div", { class: "empty" },
+          el("i", { class: "ri-planet-line" }),
+          el("div", { class: "t" }, "No popular posts yet")));
+        return;
+      }
+      const posts   = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const uids    = [...new Set(posts.map((p) => p.authorUid))];
+      const authors = await Promise.all(uids.map(fetchUser));
+      const byUid   = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
+      posts.slice(0, 10).forEach((p) => {
+        postsList.appendChild(renderPost(p, byUid[p.authorUid]));
+        postsList.appendChild(el("div", { class: "tfb-divider" }));
+      });
+      _setupFeedVideoScroll(postsList);
+    }).catch(() => { postsList.innerHTML = ""; });
+}
+
+const renderSaved = (root) => {
+  const head = el("div", { class: "section-head" }, el("h2", {}, "Saved"));
+  root.appendChild(head);
+  const list = el("div", { class: "feed-wrap" });
+  root.appendChild(list);
+
+  const ids = state.me.saved || [];
+  if (!ids.length) {
+    list.appendChild(el("div", { class: "empty" },
+      el("i", { class: "ri-bookmark-line" }),
+      el("div", { class: "t" }, "Nothing saved yet"),
+      el("div", {}, "Tap the bookmark on any post to save it here.")));
+    return;
+  }
+  Promise.all(ids.map((id) => getDoc(doc(db, "posts", id)))).then(async (docs) => {
+    const posts = docs.filter((d) => d.exists()).map((d) => ({ id: d.id, ...d.data() }));
+    const authors = await Promise.all([...new Set(posts.map((p) => p.authorUid))].map(fetchUser));
+    const map = Object.fromEntries(authors.filter(Boolean).map((u) => [u.uid, u]));
+    posts.forEach((p) => list.appendChild(renderPost(p, map[p.authorUid], { hideComments: true })));
+    _setupFeedVideoScroll(list);
+  });
+};
+
+// =========================================================================
+// 12. PROFILE
+// =========================================================================
+// Tracks the live listener for whichever profile tab (Posts / Media) is
+// currently rendered, so posting or switching tabs never leaves a stale
+// listener running and the visible tab always reflects Firestore live.
+let _profileTabUnsub = null;
+
+const formatProfileBirthday = (value) => {
+  const match = /^(\d{2})-(\d{2})$/.exec(String(value || ""));
+  if (!match) return "";
+  const date = new Date(2000, Number(match[1]) - 1, Number(match[2]), 12);
+  if (date.getMonth() !== Number(match[1]) - 1 || date.getDate() !== Number(match[2])) return "";
+  return date.toLocaleDateString(undefined, { month: "long", day: "numeric" });
+};
+
+const renderProfile = async (root, uid) => {
+  // Always use fresh data for own profile (bypass stale cache after Pro activation)
+  let u;
+  if (uid === state.uid) {
+    state.cache.users.delete(uid);
+    u = await fetchUser(uid);
+    if (u) state.me = { ...state.me, ...u };
+  } else {
+    u = await fetchUser(uid);
+  }
+  if (!u) {
+    root.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-user-line" }), el("div", { class: "t" }, "User not found")));
+    return;
+  }
+  const isMe = uid === state.uid;
+  let _iFollow = (state.me.following || []).includes(uid);
+  const canViewPrivateProfile = isMe || !u.privateAccount || _iFollow;
+
+  // Live-update follower count in-place — no full page re-render on follow/unfollow
+  const followersCountEl = el("strong", {}, String((u.followers || []).length));
+  const postsCountEl = el("strong", {}, String(u.postCount || 0));
+
+  let profileFollowBtn = null;
+  let compactFollowBtn = null;
+  const syncFollowButtons = () => {
+    [profileFollowBtn, compactFollowBtn].filter(Boolean).forEach((button) => {
+      button.textContent = _iFollow ? "Following" : "Follow";
+      button.className = `btn ${_iFollow ? "ghost" : "primary"}`;
+    });
+  };
+  const followProfile = async () => {
+    const prev = _iFollow;
+    _iFollow = !_iFollow;
+    syncFollowButtons();
+    const curCount = parseInt(followersCountEl.textContent) || 0;
+    followersCountEl.textContent = String(Math.max(0, curCount + (_iFollow ? 1 : -1)));
+    const meRef = doc(db, "users", state.uid);
+    const themRef = doc(db, "users", uid);
+    const batch = writeBatch(db);
+    if (_iFollow) {
+      batch.update(meRef, { following: arrayUnion(uid) });
+      batch.update(themRef, { followers: arrayUnion(state.uid) });
+    } else {
+      batch.update(meRef, { following: arrayRemove(uid) });
+      batch.update(themRef, { followers: arrayRemove(state.uid) });
+    }
+    await batch.commit().catch(() => {
+      _iFollow = prev;
+      syncFollowButtons();
+      followersCountEl.textContent = String(curCount);
+      toast("Failed to update follow status");
+    });
+    state.cache.users.delete(uid);
+    state.cache.users.delete(state.uid);
+    if (state.me) {
+      state.me.following = _iFollow
+        ? [...new Set([...(state.me.following || []), uid])]
+        : (state.me.following || []).filter((x) => x !== uid);
+    }
+    if (_iFollow) {
+      writeNotif(uid, "follow", {}).catch(() => {});
+      import("./notifications.js").then(({ notifyUser }) =>
+        notifyUser(uid, state.me?.name || "Someone", "started following you", "/#profile/" + state.uid, state.me?.photoURL || "")
+      ).catch(() => {});
+    }
+    if (u.privateAccount && _iFollow) router();
+  };
+  if (!isMe) {
+    profileFollowBtn = el("button", { class: `btn ${_iFollow ? "ghost" : "primary"}` }, _iFollow ? "Following" : "Follow");
+    profileFollowBtn.addEventListener("click", followProfile);
+  }
+
+  const profileShell = el("div", { class: "profile-shell" });
+  root.appendChild(profileShell);
+  const profileHead = el("div", { class: "profile-head" },
+    profileCoverFor(u)
+      ? el("div", { class: "profile-cover" },
+          el("img", { src: profileCoverFor(u), alt: `${u.name || "Profile"} cover photo` }))
+      : el("div", { class: "profile-cover profile-cover-empty" }),
+    el("div", { class: "profile-head-main" },
+      el("img", { class: "avatar xl profile-main-avatar", src: avatarFor(u), alt: `${u.name || "Profile"} profile picture` }),
+      el("div", { class: "profile-head-copy" },
+        el("div", { class: "name-row" }, u.name,
+          u.verified ? el("span", { class: "verified lg", title: "Location verified", html: '<i class="ri-check-line"></i>' }) : null,
+          u.isPro ? el("span", { class: "pro-name-badge" }, el("i", { class: "ri-vip-crown-fill" }), " Pro") : null),
+        el("div", { class: "uname" }, "@" + u.username),
+        el("div", { class: "stats" },
+          el("div", { class: "stat" }, postsCountEl, el("span", {}, "posts")),
+          el("div", { class: "stat" }, followersCountEl, el("span", {}, "followers")),
+          el("div", { class: "stat" }, el("strong", {}, String((u.following || []).length)), el("span", {}, "following")),
+        ),
+        u.bio ? el("div", { class: "bio", text: u.bio }) : null,
+        u.birthday && formatProfileBirthday(u.birthday)
+          ? el("div", { class: "profile-birthday" }, el("i", { class: "ri-cake-2-line" }), `Birthday ${formatProfileBirthday(u.birthday)}`)
+          : null,
+        el("div", { class: "profile-actions" },
+          isMe
+            ? el("button", { class: "btn ghost", onclick: () => openProfileEditModal() }, el("i", { class: "ri-edit-line" }), "Edit profile")
+            : profileFollowBtn,
+          !isMe && u.allowMessages !== false ? el("button", { class: "btn ghost", onclick: () => location.hash = `#chats/${uid}` },
+            el("i", { class: "ri-chat-3-line" }), "Message") : null,
+          isMe && !u.verified ? el("button", { class: "btn ghost", onclick: requestLocationVerification },
+            el("i", { class: "ri-shield-check-line" }), "Get verified") : null,
+        ),
+      ),
+    ),
+  );
+  profileShell.appendChild(profileHead);
+
+  const compactPostsCountEl = el("span", {}, `${postsCountEl.textContent} posts`);
+  const compactBar = el("div", { class: "profile-compact-bar" },
+    el("img", { class: "avatar sm", src: avatarFor(u), alt: `${u.name || "Profile"} profile picture` }),
+    el("div", { class: "profile-compact-name" },
+      el("strong", {}, u.name || "User"),
+      compactPostsCountEl,
+    ),
+    el("span", { class: "profile-compact-count" }, `${postsCountEl.textContent} posts`),
+  );
+  if (!isMe) {
+    compactFollowBtn = el("button", { class: `btn compact-follow ${_iFollow ? "ghost" : "primary"}` }, _iFollow ? "Following" : "Follow");
+    compactFollowBtn.addEventListener("click", followProfile);
+    compactBar.appendChild(compactFollowBtn);
+  }
+  profileShell.appendChild(compactBar);
+  const onProfileScroll = () => profileShell.classList.toggle("profile-scrolled", root.scrollTop > 170);
+  root.addEventListener("scroll", onProfileScroll, { passive: true });
+  profileShell._cleanupScroll = () => root.removeEventListener("scroll", onProfileScroll);
+
+  // Feature: Pro section — rendered directly below header, always visible
+  const proSection = el("div", { class: "profile-pro-section" });
+  profileShell.appendChild(proSection);
+  import("./features.js").then((m) => {
+    if (u.isPro) {
+      m.renderOrbitScoreBadge(proSection, uid);
+      m.renderTechStack(proSection, u, isMe);
+      m.renderSkillBadges(proSection, uid, isMe);
+    } else if (isMe) {
+      m.renderGoProBanner(proSection);
+    }
+    // Academy badges — visible to all users who earned them
+    m.renderLearnBadges(proSection, uid);
+  }).catch(() => {});
+
+  // Tabs: Posts | About | Mutuals
+  const tabs = el("div", { class: "profile-tabs" },
+    el("button", { class: "profile-tab active", "data-ptab": "posts" }, "Posts"),
+    el("button", { class: "profile-tab", "data-ptab": "about" }, "About"),
+    el("button", { class: "profile-tab", "data-ptab": "mutuals" },
+      el("i", { class: "ri-team-line" }), " Mutuals"),
+  );
+  profileShell.appendChild(tabs);
+  const body = el("div", {});
+  profileShell.appendChild(body);
+
+  if (!canViewPrivateProfile) {
+    body.appendChild(el("div", { class: "private-profile-notice" },
+      el("i", { class: "ri-lock-2-line" }),
+      el("strong", {}, "This account is private"),
+      el("span", {}, "Follow this account to see their posts and media."),
+    ));
+    return;
+  }
+
+  const renderTab = async (which) => {
+    // Kill any live listener from the previously active tab (Posts/Media)
+    // before switching, so we never have two snapshot listeners fighting
+    // over the same `body` element.
+    if (_profileTabUnsub) { _profileTabUnsub(); _profileTabUnsub = null; }
+
+    body.innerHTML = "";
+    body.appendChild(el("div", { class: "empty" },
+      gbLoader("Loading…", true)));
+
+    if (which === "posts") {
+      // Live listener — any post created or deleted by this user reflects
+      // on their profile immediately.  We use docChanges() so that a simple
+      // orbit/like write (type:"modified") does NOT wipe and re-render the
+      // feed — which would interrupt any playing video back to the start.
+      // The orbitBtn already updates its icon/count optimistically, so we
+      // can safely skip re-rendering on "modified".
+      let _profFeed = null;
+      const _postEls = new Map(); // postId → article element
+
+      _profileTabUnsub = onSnapshot(
+        query(collection(db, "posts"), where("authorUid", "==", uid), limit(60)),
+        (snap) => {
+          const changes = snap.docChanges();
+
+          // ── First paint: all changes arrive as "added" ──────────────────
+          if (!_profFeed) {
+            body.innerHTML = "";
+            if (snap.empty) {
+              body.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-image-line" }), el("div", { class: "t" }, "No posts yet")));
+              return;
+            }
+            const posts = snap.docs
+              .map((d) => ({ id: d.id, ...d.data() }))
+              .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+            postsCountEl.textContent = String(posts.length);
+            compactPostsCountEl.textContent = `${posts.length} posts`;
+            compactBar.querySelector(".profile-compact-count").textContent = `${posts.length} posts`;
+            _profFeed = el("div", { class: "profile-feed-list" }); body.appendChild(_profFeed);
+            posts.forEach((p) => {
+              const card = renderPost(p, u, { hideComments: true });
+              _postEls.set(p.id, card);
+              _profFeed.appendChild(card);
+            });
+            _setupFeedVideoScroll(_profFeed);
+            return;
+          }
+
+          // ── Incremental updates ──────────────────────────────────────────
+          for (const change of changes) {
+            if (change.type === "removed") {
+              const card = _postEls.get(change.doc.id);
+              if (card) { card.remove(); _postEls.delete(change.doc.id); }
+              if (_postEls.size === 0) {
+                _profFeed.remove(); _profFeed = null;
+                body.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-image-line" }), el("div", { class: "t" }, "No posts yet")));
+              }
+            } else if (change.type === "added") {
+              const p = { id: change.doc.id, ...change.doc.data() };
+              postsCountEl.textContent = String((parseInt(postsCountEl.textContent) || 0) + 1);
+              compactPostsCountEl.textContent = `${postsCountEl.textContent} posts`;
+              compactBar.querySelector(".profile-compact-count").textContent = `${postsCountEl.textContent} posts`;
+              const card = renderPost(p, u, { hideComments: true });
+              _postEls.set(p.id, card);
+              _profFeed.prepend(card);
+            }
+            // "modified" (e.g. orbit/like write) — intentionally ignored:
+            // the orbitBtn already updated its own UI optimistically.
+          }
+        },
+        () => {}
+      );
+
+    } else if (which === "media") {
+      // Show all posts that have media (images or videos) in a grid — also live
+      _profileTabUnsub = onSnapshot(
+        query(collection(db, "posts"), where("authorUid", "==", uid), limit(60)),
+        (snap) => {
+          body.innerHTML = "";
+          if (snap.empty) {
+            body.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-image-line" }), el("div", { class: "t" }, "No media yet")));
+            return;
+          }
+          const posts = snap.docs
+            .map((d) => ({ id: d.id, ...d.data() }))
+            .filter((p) => p.media && (Array.isArray(p.media) ? p.media.length > 0 : true))
+            .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+
+          if (!posts.length) {
+            body.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-image-line" }), el("div", { class: "t" }, "No media yet")));
+            return;
+          }
+          const grid = el("div", { class: "grid-3 portrait-grid" }); body.appendChild(grid);
+          posts.forEach((p) => {
+            const mediaItems = Array.isArray(p.media) ? p.media : (p.media ? [p.media] : []);
+            if (!mediaItems.length) return;
+            const m = mediaItems[0];
+            const cell = el("div", { class: "cell portrait-cell", onclick: () => location.hash = `#post/${p.id}` });
+            if (m.type === "video") {
+              cell.appendChild(el("video", { src: m.url, muted: "", playsinline: "", preload: "metadata" }));
+              cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-play-fill" })));
+            } else {
+              cell.appendChild(el("img", { src: m.url, loading: "lazy" }));
+              if (mediaItems.length > 1) cell.appendChild(el("span", { class: "cell-badge" }, el("i", { class: "ri-image-2-line" })));
+            }
+            grid.appendChild(cell);
+          });
+        },
+        () => {}
+      );
+
+    } else if (which === "about") {
+      body.innerHTML = "";
+      body.appendChild(el("div", { class: "settings" },
+        el("div", { class: "group" },
+          el("h3", {}, "About"),
+          el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Joined"), el("div", { class: "d" }, fmtTime(u.createdAt) || "—"))),
+          u.location ? el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Verified location"), el("div", { class: "d" }, u.location.city || `${u.location.lat?.toFixed(2)}, ${u.location.lng?.toFixed(2)}`))) : null,
+          u.showOnline !== false
+            ? el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Status"), el("div", { class: "d" }, u.online ? "Online now" : `Last seen ${fmtTime(u.lastSeen)}`)))
+            : el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Status"), el("div", { class: "d" }, "Online status hidden")),
+        ),
+    )  ));
+    } else if (which === "mutuals") {
+      body.innerHTML = "";
+      const mutualsWrap = el("div", { style: "padding: 0 0 16px;" });
+      body.appendChild(mutualsWrap);
+      renderMutuals(mutualsWrap, false);
+    }
+  };
+  renderTab("posts");
+  $$(".profile-tab", tabs).forEach((t) => t.addEventListener("click", () => {
+    $$(".profile-tab", tabs).forEach((x) => x.classList.toggle("active", x === t));
+    renderTab(t.dataset.ptab);
+  }));
+};
+
+const openProfileEditModal = () => {
+  const modal = document.getElementById("profileEditModal"); if (!modal) return;
+  const ni = document.getElementById("editName");    if (ni) ni.value = state.me.name || "";
+  const ui = document.getElementById("editUsername"); if (ui) ui.value = state.me.username || "";
+  const bi = document.getElementById("editBio");      if (bi) bi.value = state.me.bio || "";
+  const birthdayInput = document.getElementById("editBirthday");
+  if (birthdayInput) {
+    const birthday = String(state.me.birthday || "");
+    const monthDay = /^\d{2}-\d{2}$/.test(birthday) ? birthday : /^\d{4}-\d{2}-\d{2}$/.test(birthday) ? birthday.slice(5) : "";
+    birthdayInput.value = monthDay ? `2000-${monthDay}` : "";
+  }
+  const birthdayAnnounce = document.getElementById("editBirthdayAnnounce");
+  if (birthdayAnnounce) birthdayAnnounce.checked = state.me.birthdayAnnounceEnabled === true;
+  const av = document.getElementById("editAvatar");   if (av) av.src = state.me.photoURL || avatarFor(state.me);
+  const cover = document.getElementById("editCover"); if (cover) {
+    cover.src = profileCoverFor(state.me) || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='180' viewBox='0 0 640 180'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' x2='1'%3E%3Cstop stop-color='%237c5cff'/%3E%3Cstop offset='1' stop-color='%23ff5cae'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='640' height='180' fill='url(%23g)'/%3E%3C/svg%3E";
+  }
+  modal.classList.remove("hidden");
+  modal.style.display = "flex";
+};
+
+const renderProfileByUsername = async (root, username) => {
+  if (!username) { location.hash = "#feed"; return; }
+  const qs = await getDocs(query(collection(db, "users"), where("username", "==", username.toLowerCase()), limit(1)));
+  if (qs.empty) {
+    root.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-user-unfollow-line" }), el("div", { class: "t" }, `@${username} not found`)));
+    return;
+  }
+  const u = { uid: qs.docs[0].id, ...qs.docs[0].data() };
+  renderProfile(root, u.uid);
+};
+
+// =========================================================================
+// 13. SETTINGS — theme, verification, notifications
+// =========================================================================
+const renderSettings = (root) => {
+  const settingSwitch = (key, title, description, onChange = null) => {
+    const defaultValue = !["privateAccount", "hideSensitive"].includes(key);
+    const current = state.me?.[key] ?? defaultValue;
+    const sw = el("button", {
+      class: `switch${current ? " on" : ""}`,
+      type: "button",
+      role: "switch",
+      "aria-checked": String(current),
+      "aria-label": title,
+    });
+    sw.addEventListener("click", async () => {
+      const next = !sw.classList.contains("on");
+      sw.classList.toggle("on", next);
+      sw.setAttribute("aria-checked", String(next));
+      if (state.me) state.me[key] = next;
+      await updateDoc(doc(db, "users", state.uid), { [key]: next }).catch(() => {
+        sw.classList.toggle("on", !next);
+        sw.setAttribute("aria-checked", String(!next));
+        if (state.me) state.me[key] = !next;
+        toast("Could not save setting");
+      });
+      if (onChange) onChange(next);
+    });
+    return el("div", { class: "row setting-row" },
+      el("div", { class: "label" }, el("div", { class: "t" }, title), el("div", { class: "d" }, description)),
+      sw,
+    );
+  };
+
+  const wrap = el("div", { class: "settings" },
+    el("h2", { style: "margin-top:0;font-family:var(--font-display);" }, "Settings"),
+
+    el("div", { class: "group" },
+      el("h3", {}, "Appearance"),
+      el("div", { class: "row" },
+        el("div", { class: "label" },
+          el("div", { class: "t" }, "Theme"),
+          el("div", { class: "d" }, "Choose your visual style — saved across devices."),
+        ),
+        (() => {
+          const _themes = [
+            { id: "dark",  label: "Dark",  icon: "ri-moon-line" },
+            { id: "light", label: "Light", icon: "ri-sun-line" },
+            { id: "glass", label: "Glass", icon: "ri-contrast-2-line" },
+          ];
+          const _cur = document.documentElement.getAttribute("data-theme") || "dark";
+          const picker = el("div", { class: "theme-picker" });
+          _themes.forEach(({ id, label, icon }) => {
+            const btn = el("button", { class: `theme-opt${_cur === id ? " active" : ""}` },
+              el("i", { class: icon }), label);
+            btn.addEventListener("click", () => {
+              applyTheme(id);
+              picker.querySelectorAll(".theme-opt").forEach((b) => b.classList.remove("active"));
+              btn.classList.add("active");
+              updateDoc(doc(db, "users", state.uid), { themePref: id }).catch(() => {});
+            });
+            picker.appendChild(btn);
+          });
+          return picker;
+        })(),
+      ),
+      el("div", { class: "row" },
+        el("div", { class: "label" },
+          el("div", { class: "t" }, "Language"),
+          el("div", { class: "d" }, "Choose your preferred display language."),
+        ),
+        (() => {
+          const LANGUAGES = [
+            { code: "en",    label: "English" },
+            { code: "es",    label: "Español" },
+            { code: "fr",    label: "Français" },
+            { code: "de",    label: "Deutsch" },
+            { code: "pt",    label: "Português" },
+            { code: "it",    label: "Italiano" },
+            { code: "nl",    label: "Nederlands" },
+            { code: "ru",    label: "Русский" },
+            { code: "pl",    label: "Polski" },
+            { code: "uk",    label: "Українська" },
+            { code: "sv",    label: "Svenska" },
+            { code: "no",    label: "Norsk" },
+            { code: "da",    label: "Dansk" },
+            { code: "fi",    label: "Suomi" },
+            { code: "ro",    label: "Română" },
+            { code: "cs",    label: "Čeština" },
+            { code: "hu",    label: "Magyar" },
+            { code: "sk",    label: "Slovenčina" },
+            { code: "bg",    label: "Български" },
+            { code: "hr",    label: "Hrvatski" },
+            { code: "sr",    label: "Српски" },
+            { code: "el",    label: "Ελληνικά" },
+            { code: "tr",    label: "Türkçe" },
+            { code: "ar",    label: "العربية" },
+            { code: "he",    label: "עברית" },
+            { code: "hi",    label: "हिन्दी" },
+            { code: "bn",    label: "বাংলা" },
+            { code: "ja",    label: "日本語" },
+            { code: "ko",    label: "한국어" },
+            { code: "zh-CN", label: "中文 (简体)" },
+            { code: "zh-TW", label: "中文 (繁體)" },
+            { code: "vi",    label: "Tiếng Việt" },
+            { code: "th",    label: "ภาษาไทย" },
+            { code: "id",    label: "Bahasa Indonesia" },
+            { code: "ms",    label: "Bahasa Melayu" },
+          ];
+          const saved = state.me?.langPref || localStorage.getItem("orbit_lang") || "en";
+          const sel = el("select", { class: "settings-lang-select" });
+          LANGUAGES.forEach(({ code, label }) => {
+            const opt = el("option", { value: code }, label);
+            if (code === saved) opt.selected = true;
+            sel.appendChild(opt);
+          });
+          sel.onchange = async () => {
+            const code = sel.value;
+            localStorage.setItem("orbit_lang", code);
+            if (state.me) state.me.langPref = code;
+            await updateDoc(doc(db, "users", state.uid), { langPref: code }).catch(() => {});
+            toast("Language updated — reloading…");
+            setTimeout(() => orbitTranslate(code), 600);
+          };
+          return sel;
+        })(),
+      ),
+    ),
+
+    el("div", { class: "group" },
+      el("h3", {}, "Verification"),
+      el("div", { class: "row" },
+        el("div", { class: "label" },
+          el("div", { class: "t" }, state.me.verified ? "Verified ✓" : "Get verified by location"),
+          el("div", { class: "d" }, state.me.verified
+            ? `You're verified${state.me.location?.city ? " in " + state.me.location.city : ""}.`
+            : "Allow Get better to read your location once. We only store an approximate area, never live tracking."),
+        ),
+        state.me.verified
+          ? el("button", { class: "btn ghost", onclick: async () => {
+              await updateDoc(doc(db, "users", state.uid), { verified: false, location: null });
+              toast("Verification removed");
+              router();
+            }}, "Remove")
+          : el("button", { class: "btn primary", onclick: requestLocationVerification }, "Verify"),
+      ),
+    ),
+
+    el("div", { class: "group" },
+      el("h3", {}, "Notifications"),
+      el("div", { class: "row" },
+        el("div", { class: "label" },
+          el("div", { class: "t" }, "Browser notifications"),
+          el("div", { class: "d" }, "Get pings for new messages and likes.")),
+        el("button", { class: "btn ghost", onclick: async () => {
+          const p = await Notification.requestPermission();
+          toast(p === "granted" ? "Notifications enabled" : "Notifications denied");
+        }}, "Enable"),
+      ),
+      el("div", { class: "row" },
+        el("div", { class: "label" },
+          el("div", { class: "t" }, "Test group notification"),
+          el("div", { class: "d" }, "Send yourself a test push notification for a group message.")),
+        el("button", { class: "btn ghost", onclick: () => {
+          import("./notifications.js").then((m) => m.sendTestGroupNotification());
+        }}, "Send test"),
+      ),
+      settingSwitch("emailNotifications", "Email notifications", "Receive account and social activity updates by email."),
+      settingSwitch("showOnline", "Show when you’re online", "Let people see your online status and last active time."),
+    ),
+
+    el("div", { class: "group" },
+      el("h3", {}, "Privacy & safety"),
+      settingSwitch("privateAccount", "Private account", "Only people you approve can follow you and view your posts."),
+      settingSwitch("allowMessages", "Allow direct messages", "Let other Get better members start a chat with you."),
+      settingSwitch("hideSensitive", "Hide sensitive content", "Hide posts that have been marked as sensitive."),
+    ),
+
+    el("div", { class: "group" },
+      el("h3", {}, "Content preferences"),
+      settingSwitch("autoplayVideos", "Autoplay videos", "Play feed videos automatically when they come into view."),
+      el("div", { class: "row" },
+        el("div", { class: "label" },
+          el("div", { class: "t" }, "Saved posts"),
+          el("div", { class: "d" }, `${(state.me?.saved || []).length} posts saved for later.`),
+        ),
+        el("button", { class: "btn ghost", onclick: () => { location.hash = "#saved"; } }, "View saved"),
+      ),
+    ),
+
+    el("div", { class: "group" },
+      el("h3", {}, "Account"),
+      el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Email"), el("div", { class: "d" }, state.me.email || "—"))),
+      el("div", { class: "row" }, el("div", { class: "label" }, el("div", { class: "t" }, "Username"), el("div", { class: "d" }, "@" + state.me.username))),
+      el("div", { class: "row" },
+        el("div", { class: "label" },
+          el("div", { class: "t" }, "Change password"),
+          el("div", { class: "d" }, "Send a secure password reset link to your email."),
+        ),
+        el("button", { class: "btn ghost", onclick: async () => {
+          if (!state.me.email) { toast("No email address is attached to this account"); return; }
+          await sendPasswordResetEmail(auth, state.me.email).then(
+            () => toast("Password reset link sent"),
+            () => toast("Could not send password reset link"),
+          );
+        }}, "Reset password"),
+      ),
+      el("div", { class: "row" },
+        el("div", { class: "label" },
+          el("div", { class: "t" }, "Download your data"),
+          el("div", { class: "d" }, "Save a copy of your Get better profile and preferences."),
+        ),
+        el("button", { class: "btn ghost", onclick: () => {
+          const blob = new Blob([JSON.stringify(state.me || {}, null, 2)], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url; a.download = "orbit-account-data.json"; a.click();
+          URL.revokeObjectURL(url);
+        }}, "Download"),
+      ),
+      el("div", { class: "row" },
+        el("div", { class: "label" }, el("div", { class: "t" }, "Sign out"), el("div", { class: "d" }, "End your session on this device.")),
+        el("button", { class: "btn ghost", onclick: () => $("#signOutBtn").click() }, "Sign out"),
+      ),
+      el("div", { class: "row danger-setting-row" },
+        el("div", { class: "label" },
+          el("div", { class: "t" }, "Deactivate account"),
+          el("div", { class: "d" }, "Hide your profile until you sign in again."),
+        ),
+        el("button", { class: "btn ghost danger-btn", onclick: async () => {
+          if (!confirm("Deactivate your Get better profile? You can restore it by signing in again.")) return;
+          await updateDoc(doc(db, "users", state.uid), { deactivated: true, online: false, lastSeen: serverTimestamp() });
+          await signOut(auth);
+        }}, "Deactivate"),
+      ),
+    ),
+
+    el("div", { class: "group" },
+      el("h3", {}, el("i", { class: "ri-vip-crown-line", style: "color:var(--grad-1);margin-right:6px;" }), "Get better Pro"),
+      el("div", { class: "row" },
+        el("div", { class: "label" },
+          el("div", { class: "t" }, state.me.isPro ? "Pro activated ✦" : "Go Professional"),
+          el("div", { class: "d" }, state.me.isPro
+            ? "You have access to Get better Score, Tech Stack, Skill Badges, Build in Public and Project Showcase."
+            : "Unlock developer features: Get better Score, Tech Stack, Skill Badges, Build in Public & Project Showcase."),
+        ),
+        state.me.isPro
+          ? el("span", { class: "pro-active-badge" }, el("i", { class: "ri-vip-crown-fill" }), " Active")
+          : el("button", { class: "btn primary", onclick: async (e) => {
+              e.currentTarget.disabled = true;
+              e.currentTarget.textContent = "Activating…";
+              await updateDoc(doc(db, "users", state.uid), { isPro: true }).catch(() => {});
+              state.me.isPro = true;
+              state.cache.users.delete(state.uid);
+              toast("Welcome to Get better Pro! ✦");
+              router();
+            }}, el("i", { class: "ri-vip-crown-line" }), " Activate Pro"),
+      ),
+    ),
+
+    el("div", { class: "group" },
+      el("h3", {}, "Storage"),
+      el("div", { class: "row" }, el("div", { class: "label" },
+        el("div", { class: "t" }, "Cloudinary"),
+        el("div", { class: "d" }, cloudinaryConfig.cloudName.startsWith("YOUR_")
+          ? "Not configured — uploads will fail until you set cloudName + uploadPreset in app.js."
+          : `Connected to "${cloudinaryConfig.cloudName}"`)),
+      ),
+    ),
+  );
+  root.appendChild(wrap);
+};
+
+// Verification by location (one-time geolocation)
+const requestLocationVerification = () => {
+  if (!("geolocation" in navigator)) { toast("Location not available on this device"); return; }
+  toast("Requesting location…");
+  navigator.geolocation.getCurrentPosition(async (pos) => {
+    const { latitude: lat, longitude: lng } = pos.coords;
+    let city = null;
+    try {
+      const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=10`);
+      const j = await r.json();
+      city = j.address?.city || j.address?.town || j.address?.state || j.display_name?.split(",")[0] || null;
+    } catch {}
+    await updateDoc(doc(db, "users", state.uid), {
+      verified: true,
+      verifiedAt: serverTimestamp(),
+      location: { lat: Math.round(lat * 100) / 100, lng: Math.round(lng * 100) / 100, city },
+    });
+    toast("✓ You're verified");
+    router();
+  }, (err) => {
+    toast("Location denied — verification not granted");
+  }, { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 });
+};
+
+// =========================================================================
+// 14. COMPOSE MODAL — posts, groups, build, project
+// =========================================================================
+const composeModal = $("#composeModal");
+const openCompose = (which = "group") => {
+  if ((which === "build" || which === "project") && !state.me?.isPro) {
+    import("./features.js").then((m) => m.showGoProModal()).catch(() => {});
+    return;
+  }
+  composeModal.classList.remove("hidden");
+  $$(".ct").forEach((b) => b.classList.toggle("active", b.dataset.ctab === which));
+  $$(".compose-pane").forEach((p) => p.classList.toggle("hidden", !p.id.startsWith(which)));
+};
+// "Post" now opens the dedicated full-page creation studio (see section 14c)
+// instead of the group/build/project modal above.
+const goCompose = () => {
+  if (location.hash !== "#feed") location.hash = "#feed";
+  setTimeout(() => document.querySelector(".gb-composer textarea")?.focus(), 150);
+};
+$("#composeBtn")?.addEventListener("click", goCompose);
+$("#composeBtnMobile")?.addEventListener("click", goCompose);
+$("#topbarComposeBtn")?.addEventListener("click", goCompose);
+$$(".ct").forEach((b) => b.addEventListener("click", () => openCompose(b.dataset.ctab)));
+
+document.addEventListener("click", (e) => {
+  if (e.target.matches("[data-close-modal]") || e.target.closest("[data-close-modal]")) {
+    composeModal.classList.add("hidden");
+  }
+  if (e.target.matches("[data-close-drawer]") || e.target.closest("[data-close-drawer]")) {
+    $("#chatCustomize").classList.add("hidden");
+  }
+});
+
+// Plain image/video posts are now created via the dedicated full-page
+// studio (openCreatePost, section 14c below) instead of a modal form.
+
+$("#groupForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const name = (fd.get("name") || "").trim();
+  if (!name) { toast("Give the group a name"); return; }
+  const btn = e.target.querySelector("button[type='submit']");
+  btn.disabled = true; btn.textContent = "Creating…";
+  try {
+    const iconFile = fd.get("iconFile");
+    let iconUrl = "";
+    if (iconFile instanceof File && iconFile.size > 0) {
+      btn.textContent = "Uploading picture…";
+      iconUrl = (await uploadToCloudinary(iconFile, "image")).url;
+    }
+    const invitedMemberIds = await resolveGroupMemberIds(fd.get("memberUsernames") || "");
+    const memberIds = [...new Set([state.uid, ...invitedMemberIds])];
+    const ref = await addDoc(collection(db, "groups"), {
+      name,
+      about: fd.get("about") || "",
+      groupLink: (fd.get("groupLink") || "").trim(),
+      iconUrl,
+      isPublic: fd.get("isPublic") === "on",
+      ownerUid: state.uid,
+      admins: [state.uid],
+      members: memberIds,
+      memberCount: memberIds.length,
+      createdAt: serverTimestamp(),
+    });
+    await addDoc(collection(db, "groups", ref.id, "messages"), {
+      type: "system", text: `${state.me.name} created the group`,
+      createdAt: serverTimestamp(),
+    });
+    e.target.reset();
+    composeModal.classList.add("hidden");
+    toast("Group created!");
+    location.hash = `#chats/${ref.id}`;
+  } catch (err) {
+    toast("Failed to create group: " + (err.message || "check Firebase config"));
+  } finally {
+    btn.disabled = false; btn.textContent = "Create group";
+  }
+});
+
+// =========================================================================
+// 14c. CREATE-POST STUDIO — dedicated full-page flow for image/video posts:
+// pick or record media, add text/sticker overlays, attach a song, write a
+// caption, then publish. Replaces the old "Post" tab in the compose modal.
+// =========================================================================
+
+// Music search uses the Internet Archive's public catalog — no API key,
+// signup, or billing required (see crSearchMusic below).
+const CR_STICKERS = ["🔥","❤️","⭐","👍","🎉","😂","💯","✨","🙌","😍","👏","🥳","😎","💜","🎶","⚡"];
+const CR_TEXT_COLORS = ["#ffffff","#000000","#ff5c7a","#ffb04a","#3fdca0","#5cd3ff","#8b6cff","#ff5cae"];
+
+let crState = null;
+const _crFreshState = () => ({
+  step: "pick",           // pick | cam | editor | music | details
+  slides: [],             // [{ type:'image'|'video', file, url, overlays:[], recordedInApp? }]
+  textOnly: false,        // true when publishing a text-only post (no media)
+  isSponsored: false,
+  adHeadline: "",
+  adLink: "",
+  adCta: "Learn more",
+  song: null,             // { id, name, artist, url, duration }
+  caption: "",
+  location: null,
+  activeSlide: 0,
+  selectedLayerId: null,
+  camStream: null,
+  camRecorder: null,
+  camChunks: [],
+  camTimer: null,
+});
+
+// Music can only be attached to a single video that was recorded in-app —
+// never to images, carousels, or videos picked from the device library.
+// Keeps licensing/rights simple and matches how the feature was designed.
+const crCanAddMusic = () =>
+  crState.slides.length === 1 && crState.slides[0].type === "video" && crState.slides[0].recordedInApp === true;
+
+const crLayerId = () => "l" + Math.random().toString(36).slice(2, 9);
+
+function openCreatePost() {
+  if (crState) return; // already open
+  crState = _crFreshState();
+  const root = el("div", { class: "cr-root", id: "crRoot" });
+  document.body.appendChild(root);
+  crRenderShell(root);
+  crGoto("pick");
+}
+
+function crClose() {
+  if (!crState) return;
+  crStopCamera();
+  crState.slides.forEach((s) => { try { URL.revokeObjectURL(s.url); } catch {} });
+  crState = null;
+  $("#crRoot")?.remove();
+}
+
+let _crShellRefs = null;
+function crRenderShell(root) {
+  const closeBtn = el("button", { class: "cr-head-close", onclick: () => crClose() }, el("i", { class: "ri-close-line" }));
+  const backBtn = el("button", { class: "cr-head-close", style: "display:none;", onclick: () => crBack() }, el("i", { class: "ri-arrow-left-line" }));
+  const title = el("div", { class: "cr-head-title", text: "New post" });
+  const nextBtn = el("button", { class: "cr-head-btn primary", type: "button", style: "display:none;" }, "Next");
+  const head = el("div", { class: "cr-head" }, el("div", { style: "display:flex;align-items:center;gap:8px;" }, backBtn, closeBtn), title, nextBtn);
+  const stepsWrap = el("div", { class: "cr-steps" });
+  root.appendChild(head);
+  root.appendChild(stepsWrap);
+  _crShellRefs = { head, backBtn, closeBtn, title, nextBtn, stepsWrap };
+}
+
+function crBack() {
+  if (crState.step === "cam") { crStopCamera(); crGoto("pick"); return; }
+  const order = crState.textOnly
+    ? ["pick", "details"]
+    : (crCanAddMusic() ? ["pick", "editor", "music", "details"] : ["pick", "editor", "details"]);
+  const idx = order.indexOf(crState.step);
+  if (idx <= 0) { crClose(); return; }
+  crGoto(order[idx - 1]);
+}
+
+function crGoto(step) {
+  if (step === "music" && !crCanAddMusic()) step = "details"; // music is video-only + recorded-in-app only
+  crState.step = step;
+  const { stepsWrap, backBtn, nextBtn, title } = _crShellRefs;
+  stepsWrap.innerHTML = "";
+  backBtn.style.display = step === "pick" ? "none" : "";
+  nextBtn.style.display = "none";
+   if (step === "pick") { title.textContent = crState.isSponsored ? "New sponsored ad" : "New post"; stepsWrap.appendChild(crBuildPickStep()); }
+  else if (step === "cam") { title.textContent = "Record video"; stepsWrap.appendChild(crBuildCamStep()); }
+  else if (step === "editor") {
+    title.textContent = "Edit";
+    stepsWrap.appendChild(crBuildEditorStep());
+    nextBtn.style.display = ""; nextBtn.textContent = "Next"; nextBtn.onclick = () => crGoto(crCanAddMusic() ? "music" : "details");
+  } else if (step === "music") {
+    title.textContent = "Add music";
+    stepsWrap.appendChild(crBuildMusicStep());
+    nextBtn.style.display = ""; nextBtn.textContent = "Next"; nextBtn.onclick = () => crGoto("details");
+  } else if (step === "details") {
+     title.textContent = crState.isSponsored ? "Create ad" : "Share";
+    stepsWrap.appendChild(crBuildDetailsStep());
+     nextBtn.style.display = ""; nextBtn.textContent = crState.isSponsored ? "Create ad" : "Post"; nextBtn.onclick = () => crSubmitPost(nextBtn);
+  }
+}
+
+// ---------------- Step 1: pick media ----------------
+function crBuildPickStep() {
+  crState.textOnly = false;
+  const fileInput = el("input", { type: "file", accept: "image/*,video/*", multiple: true, hidden: true });
+  const sponsoredInput = el("input", { type: "checkbox" });
+  sponsoredInput.checked = crState.isSponsored === true;
+  sponsoredInput.addEventListener("change", () => {
+    crState.isSponsored = sponsoredInput.checked;
+    if (_crShellRefs?.title) _crShellRefs.title.textContent = crState.isSponsored ? "New sponsored ad" : "New post";
+  });
+  const sponsoredToggle = el("label", { class: "cr-ad-mode-toggle" },
+    sponsoredInput,
+    el("span", {},
+      el("strong", {}, "Create this as an ad"),
+      el("small", {}, "Adds a Sponsored label and a destination link. No ad budget or paid placement is set up."),
+    ),
+  );
+  fileInput.addEventListener("change", (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    const hasVideo = files.some((f) => f.type.startsWith("video/"));
+    if (hasVideo) {
+      const f = files.find((f) => f.type.startsWith("video/"));
+      // recordedInApp:false — uploaded videos can't have music attached, only ones recorded with the in-app camera.
+      crState.slides = [{ type: "video", file: f, url: URL.createObjectURL(f), overlays: [], recordedInApp: false }];
+    } else {
+      crState.slides = files.slice(0, 10).map((f) => ({ type: "image", file: f, url: URL.createObjectURL(f), overlays: [] }));
+    }
+    crState.activeSlide = 0;
+    crGoto("editor");
+  });
+  const step = el("div", { class: "cr-step active" },
+    el("div", { class: "cr-pick" },
+      el("div", { class: "cr-pick-title" }, "Create a post"),
+      el("div", { class: "cr-pick-sub" }, "Photos, a video, a carousel, or just words."),
+      el("div", { class: "cr-pick-grid" },
+        el("button", { class: "cr-pick-opt", onclick: () => fileInput.click() },
+          el("i", { class: "ri-image-add-line" }), el("span", {}, "Photos / video")),
+        el("button", { class: "cr-pick-opt", onclick: () => crGoto("cam") },
+          el("i", { class: "ri-camera-line" }), el("span", {}, "Record video")),
+        el("button", { class: "cr-pick-opt", onclick: () => { crState.textOnly = true; crState.slides = []; crGoto("details"); } },
+          el("i", { class: "ri-text" }), el("span", {}, "Text post")),
+      ),
+      sponsoredToggle,
+      el("div", { class: "cr-pick-hint" }, "Pick multiple photos to make a swipeable carousel. Music can be added to videos you record in-app."),
+      fileInput,
+    ),
+  );
+  return step;
+}
+
+// ---------------- Camera recording ----------------
+function crStopCamera() {
+  if (crState?.camTimer) { clearInterval(crState.camTimer); crState.camTimer = null; }
+  if (crState?.camRecorder && crState.camRecorder.state !== "inactive") { try { crState.camRecorder.stop(); } catch {} }
+  if (crState?.camStream) { crState.camStream.getTracks().forEach((t) => t.stop()); crState.camStream = null; }
+}
+
+function crBuildCamStep() {
+  const video = el("video", { autoplay: true, muted: true, playsinline: true });
+  const timer = el("div", { class: "cr-cam-timer" }, el("span", { class: "dot" }), el("span", { class: "t" }, "0:00"));
+  const recBtn = el("button", { class: "cr-rec-btn" });
+  const cam = el("div", { class: "cr-cam" },
+    video, timer,
+    el("button", { class: "cr-cam-close", onclick: () => { crStopCamera(); crGoto("pick"); } }, el("i", { class: "ri-close-line" })),
+    el("div", { class: "cr-cam-bar" }, recBtn),
+  );
+  const step = el("div", { class: "cr-step active" }, cam);
+
+  navigator.mediaDevices?.getUserMedia({ video: { facingMode: "user" }, audio: true }).then((stream) => {
+    crState.camStream = stream;
+    video.srcObject = stream;
+  }).catch(() => { toast("Camera access denied or unavailable"); crGoto("pick"); });
+
+  let seconds = 0;
+  recBtn.addEventListener("click", () => {
+    if (!crState.camStream) return;
+    if (!crState.camRecorder || crState.camRecorder.state === "inactive") {
+      crState.camChunks = [];
+      const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus") ? "video/webm;codecs=vp9,opus" : "video/webm";
+      const rec = new MediaRecorder(crState.camStream, { mimeType: mime });
+      rec.ondataavailable = (ev) => { if (ev.data.size) crState.camChunks.push(ev.data); };
+      rec.onstop = () => {
+        const blob = new Blob(crState.camChunks, { type: "video/webm" });
+        const file = new File([blob], `orbit-recording-${Date.now()}.webm`, { type: "video/webm" });
+        crState.slides = [{ type: "video", file, url: URL.createObjectURL(file), overlays: [], recordedInApp: true }];
+        crState.activeSlide = 0;
+        crStopCamera();
+        crGoto("editor");
+      };
+      rec.start();
+      crState.camRecorder = rec;
+      recBtn.classList.add("recording");
+      seconds = 0; timer.classList.add("show");
+      crState.camTimer = setInterval(() => {
+        seconds++;
+        timer.querySelector(".t").textContent = `0:${String(seconds).padStart(2, "0")}`;
+        if (seconds >= 60) recBtn.click(); // 60s cap
+      }, 1000);
+    } else {
+      recBtn.classList.remove("recording");
+      timer.classList.remove("show");
+      if (crState.camTimer) { clearInterval(crState.camTimer); crState.camTimer = null; }
+      crState.camRecorder.stop();
+    }
+  });
+  return step;
+}
+
+// ---------------- Step 2: overlay editor ----------------
+function crFontPx(ov, stageWidth) { return stageWidth * ((ov.sizePct * ov.scale) / 100); }
+
+function crBuildEditorStep() {
+  const stage = el("div", { class: "cr-stage" });
+  const overlayLayer = el("div", { class: "cr-overlay-layer", style: "touch-action:none;" });
+  const dotsNav = el("div", { class: "cr-slides-nav" });
+  const thumbstrip = el("div", { class: "cr-stage-thumbstrip" });
+  const layerControls = el("div", { class: "cr-layer-controls" });
+  const stickerPanel = el("div", { class: "cr-sticker-panel", style: "display:none;" });
+
+  const step = el("div", { class: "cr-step active" },
+    el("div", { class: "cr-editor" },
+      crState.slides.length > 1 ? dotsNav : null,
+      el("div", { class: "cr-stage-wrap" }, stage),
+      crState.slides.length > 1 || crState.slides[0]?.type === "image" ? thumbstrip : null,
+      stickerPanel,
+      layerControls,
+      el("div", { class: "cr-editor-toolbar" },
+        el("button", { class: "cr-tool-btn", onclick: () => crAddTextLayer(stage, overlayLayer) }, el("i", { class: "ri-text" }), "Text"),
+        el("button", { class: "cr-tool-btn", onclick: () => { stickerPanel.style.display = stickerPanel.style.display === "none" ? "flex" : "none"; } }, el("i", { class: "ri-emotion-happy-line" }), "Sticker"),
+        crState.slides[0]?.type === "image" ? el("button", { class: "cr-tool-btn", onclick: () => crAddMoreImages() }, el("i", { class: "ri-add-circle-line" }), "Add photo") : null,
+      ),
+    ),
+  );
+
+  CR_STICKERS.forEach((emo) => {
+    stickerPanel.appendChild(el("button", { class: "cr-sticker-opt", onclick: () => { crAddStickerLayer(stage, overlayLayer, emo); stickerPanel.style.display = "none"; } }, emo));
+  });
+
+  function paintDots() {
+    dotsNav.innerHTML = "";
+    crState.slides.forEach((_, i) => dotsNav.appendChild(el("div", { class: "cr-slide-dot" + (i === crState.activeSlide ? " active" : "") })));
+  }
+  function paintThumbs() {
+    thumbstrip.innerHTML = "";
+    crState.slides.forEach((s, i) => {
+      const t = s.type === "video"
+        ? el("video", { src: s.url, class: "cr-stage-thumb" + (i === crState.activeSlide ? " active" : ""), muted: true })
+        : el("img", { src: s.url, class: "cr-stage-thumb" + (i === crState.activeSlide ? " active" : "") });
+      t.addEventListener("click", () => { crState.activeSlide = i; crState.selectedLayerId = null; paintStage(); });
+      thumbstrip.appendChild(t);
+    });
+    if (crState.slides[0]?.type === "image" && crState.slides.length < 10) {
+      thumbstrip.appendChild(el("div", { class: "cr-stage-thumb-add", onclick: () => crAddMoreImages() }, el("i", { class: "ri-add-line" })));
+    }
+  }
+  function paintLayerControls() {
+    const slide = crState.slides[crState.activeSlide];
+    const ov = slide.overlays.find((o) => o.id === crState.selectedLayerId);
+    layerControls.innerHTML = "";
+    if (!ov) { layerControls.classList.remove("show"); return; }
+    layerControls.classList.add("show");
+    const sizeInput = el("input", { type: "range", min: "40", max: "260", value: String(Math.round(ov.scale * 100)) });
+    sizeInput.addEventListener("input", () => { ov.scale = Number(sizeInput.value) / 100; paintStage(); });
+    const rotInput = el("input", { type: "range", min: "-180", max: "180", value: String(ov.rotation) });
+    rotInput.addEventListener("input", () => { ov.rotation = Number(rotInput.value); paintStage(); });
+    layerControls.appendChild(el("label", {}, "Size", sizeInput));
+    layerControls.appendChild(el("label", {}, "Rotate", rotInput));
+    if (ov.type === "text") {
+      const colorInput = el("input", { type: "color", value: ov.color });
+      colorInput.addEventListener("input", () => { ov.color = colorInput.value; paintStage(); });
+      layerControls.appendChild(colorInput);
+    }
+    layerControls.appendChild(el("button", { class: "icon-btn", onclick: () => {
+      slide.overlays = slide.overlays.filter((o) => o.id !== ov.id);
+      crState.selectedLayerId = null;
+      paintStage();
+    } }, el("i", { class: "ri-delete-bin-line" })));
+  }
+
+  function paintStage() {
+    stage.innerHTML = "";
+    const slide = crState.slides[crState.activeSlide];
+    const media = slide.type === "video"
+      ? el("video", { src: slide.url, muted: true, loop: true, autoplay: true, playsinline: true })
+      : el("img", { src: slide.url });
+    stage.appendChild(media);
+    stage.appendChild(overlayLayer);
+    overlayLayer.innerHTML = "";
+    const rect = () => stage.getBoundingClientRect();
+    slide.overlays.forEach((ov) => {
+      // Note: the layer's scale is already baked into its px font-size below
+      // (via crFontPx), so the CSS transform only handles position + rotation.
+      const layer = el("div", {
+        class: `cr-layer ${ov.type}` + (ov.id === crState.selectedLayerId ? " selected" : ""),
+        style: `left:${ov.x}%;top:${ov.y}%;transform:translate(-50%,-50%) rotate(${ov.rotation}deg);touch-action:none;` +
+          (ov.type === "text" ? `color:${ov.color};` : ""),
+      },
+        ov.type === "text" ? el("span", { text: ov.text, contenteditable: false }) : ov.icon,
+        el("button", { class: "cr-layer-del", onclick: (e) => { e.stopPropagation(); slide.overlays = slide.overlays.filter((o) => o.id !== ov.id); crState.selectedLayerId = null; paintStage(); } }, el("i", { class: "ri-close-line" })),
+      );
+      layer.style.fontSize = crFontPx(ov, rect().width || 320) + "px";
+
+      // Tap-to-edit: a tap (pointerdown+up with negligible movement) on a
+      // layer that was ALREADY selected enters edit mode immediately — this
+      // is far more reliable on touch than waiting for a true dblclick,
+      // which conflicts with the pointer-capture drag logic below. The
+      // first tap on an unselected layer just selects it (shows handles);
+      // the very next tap edits it. Desktop dblclick still works too.
+      let dragging = false, moved = false, sx = 0, sy = 0, ox = 0, oy = 0, wasSelectedBeforeTap = false;
+      layer.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        wasSelectedBeforeTap = crState.selectedLayerId === ov.id;
+        crState.selectedLayerId = ov.id;
+        paintLayerControls();
+        $$(".cr-layer", overlayLayer).forEach((l) => l.classList.remove("selected"));
+        layer.classList.add("selected");
+        dragging = true; moved = false; sx = e.clientX; sy = e.clientY; ox = ov.x; oy = ov.y;
+        layer.setPointerCapture(e.pointerId);
+      }, { passive: false });
+      layer.addEventListener("pointermove", (e) => {
+        if (!dragging) return;
+        e.preventDefault(); // must be non-passive or mobile browsers ignore this
+        const dx = e.clientX - sx, dy = e.clientY - sy;
+        if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
+        const r = rect();
+        ov.x = Math.min(96, Math.max(4, ox + (dx / r.width) * 100));
+        ov.y = Math.min(96, Math.max(4, oy + (dy / r.height) * 100));
+        layer.style.left = ov.x + "%"; layer.style.top = ov.y + "%";
+      }, { passive: false });
+      layer.addEventListener("pointerup", () => {
+        dragging = false;
+        if (!moved && ov.type === "text" && wasSelectedBeforeTap) {
+          // Call directly (no rAF) — iOS Safari only allows focus() inside a
+          // synchronous user-gesture handler; delaying via rAF exits that
+          // stack and iOS silently ignores the focus() call.
+          crEnterTextEdit(layer, ov);
+        }
+      });
+      layer.addEventListener("pointercancel", () => { dragging = false; });
+      if (ov.type === "text") {
+        layer.addEventListener("dblclick", () => crEnterTextEdit(layer, ov));
+      }
+      overlayLayer.appendChild(layer);
+    });
+    paintDots(); paintThumbs(); paintLayerControls();
+  }
+
+  crAddMoreImages = () => {
+    const input = el("input", { type: "file", accept: "image/*", multiple: true, hidden: true });
+    input.addEventListener("change", (e) => {
+      const files = Array.from(e.target.files || []).slice(0, 10 - crState.slides.length);
+      files.forEach((f) => crState.slides.push({ type: "image", file: f, url: URL.createObjectURL(f), overlays: [] }));
+      paintStage();
+      input.remove();
+    });
+    document.body.appendChild(input);
+    input.click();
+  };
+
+  paintStage();
+  return step;
+}
+
+// Reassigned each time the editor step is built (needs access to that
+// step's local paintStage closure); declared once at module scope so the
+// toolbar/thumbstrip buttons above can reference it before it's built.
+let crAddMoreImages = () => {};
+
+function crEnterTextEdit(layer, ov) {
+  const span = layer.querySelector("span");
+  span.contentEditable = "true";
+  span.focus();
+  const sel = getSelection(); sel.selectAllChildren(span);
+  span.addEventListener("blur", () => { ov.text = span.textContent.trim() || "Tap to edit"; span.contentEditable = "false"; span.textContent = ov.text; }, { once: true });
+}
+
+function crAddTextLayer(stage) {
+  const slide = crState.slides[crState.activeSlide];
+  const ov = { id: crLayerId(), type: "text", text: "Tap to edit", x: 50, y: 50, rotation: 0, scale: 1, sizePct: 9, color: "#ffffff" };
+  slide.overlays.push(ov);
+  crState.selectedLayerId = ov.id;
+  crGoto("editor"); // re-render this step to pick up the new layer immediately
+}
+function crAddStickerLayer(stage, overlayLayer, emo) {
+  const slide = crState.slides[crState.activeSlide];
+  const ov = { id: crLayerId(), type: "sticker", icon: emo, x: 50, y: 50, rotation: 0, scale: 1, sizePct: 14 };
+  slide.overlays.push(ov);
+  crState.selectedLayerId = ov.id;
+  crGoto("editor");
+}
+
+// ---------------- Step 3: music ----------------
+let _crPreviewAudio = null;
+function crBuildMusicStep() {
+  const results = el("div", {});
+  const searchInput = el("input", { type: "text", placeholder: "Search songs, artists, moods…" });
+  const step = el("div", { class: "cr-step active" },
+    el("div", { class: "cr-music" },
+      el("div", {
+        class: "cr-music-none" + (!crState.song ? " active" : ""),
+        onclick: () => { crState.song = null; crStopPreview(); crBuildMusicStepPaint(results); },
+      }, el("i", { class: "ri-forbid-line" }), "No music"),
+      el("div", { class: "cr-music-search" }, el("i", { class: "ri-search-line" }), searchInput),
+      results,
+    ),
+  );
+  let t = null;
+  searchInput.addEventListener("input", () => {
+    clearTimeout(t);
+    t = setTimeout(() => crSearchMusic(searchInput.value.trim(), results), 350);
+  });
+  crSearchMusic("", results);
+  return step;
+}
+function crStopPreview() { if (_crPreviewAudio) { _crPreviewAudio.pause(); _crPreviewAudio = null; } }
+
+// Internet Archive's public catalog needs no API key/signup at all — its
+// search + metadata endpoints are open and CORS-enabled. We search the
+// "audio" mediatype for Creative-Commons-friendly netlabel/free-music
+// collections, then resolve a playable mp3 URL per result via /metadata.
+const ARCHIVE_AUDIO_COLLECTIONS = "(collection:netlabels OR collection:opensource_audio OR collection:free_music_archive)";
+async function crSearchMusic(qText, results) {
+  results.innerHTML = `<div class="cr-music-empty"><i class="ri-loader-4-line"></i> Loading…</div>`;
+  try {
+    const q = qText
+      ? `${ARCHIVE_AUDIO_COLLECTIONS} AND mediatype:audio AND (${qText})`
+      : `${ARCHIVE_AUDIO_COLLECTIONS} AND mediatype:audio`;
+    const searchUrl = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(q)}&fl[]=identifier&fl[]=title&fl[]=creator&rows=20&output=json`;
+    const r = await fetch(searchUrl);
+    const j = await r.json();
+    const docs = j.response?.docs || [];
+    results.innerHTML = "";
+    if (!docs.length) { results.appendChild(el("div", { class: "cr-music-empty" }, "No tracks found — try a different search")); return; }
+    docs.forEach((doc) => results.appendChild(crTrackRow(doc, results)));
+  } catch {
+    results.innerHTML = "";
+    results.appendChild(el("div", { class: "cr-music-empty" }, "Couldn't load music right now"));
+  }
+}
+// Each search result is an Archive.org "item" that can contain several
+// files; resolve the first playable mp3/ogg file lazily (only once the
+// user actually previews or picks the track, to avoid 20 metadata calls
+// per search).
+async function crResolveTrackUrl(identifier) {
+  const r = await fetch(`https://archive.org/metadata/${identifier}`);
+  const j = await r.json();
+  const file = (j.files || []).find((f) => /\.(mp3|ogg)$/i.test(f.name) && f.source === "derivative")
+    || (j.files || []).find((f) => /\.(mp3|ogg)$/i.test(f.name));
+  if (!file) return null;
+  return `https://archive.org/download/${identifier}/${encodeURIComponent(file.name)}`;
+}
+function crTrackRow(doc, results) {
+  const isActive = crState.song?.id === doc.identifier;
+  const title = doc.title || doc.identifier;
+  const creator = Array.isArray(doc.creator) ? doc.creator[0] : (doc.creator || "Unknown artist");
+  const playIcon = el("i", { class: "ri-play-fill" });
+  const playBtn = el("button", { class: "cr-track-play" }, playIcon);
+  const pickBtn = el("button", { class: "cr-track-pick" }, isActive ? "Selected" : "Use");
+  const row = el("div", { class: "cr-track" + (isActive ? " active" : "") },
+    el("div", { class: "cr-track-art" }, el("i", { class: "ri-music-2-fill" })),
+    el("div", { class: "cr-track-info" }, el("div", { class: "n" }, title), el("div", { class: "a" }, creator)),
+    playBtn,
+    pickBtn,
+  );
+  playBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (_crPreviewAudio && _crPreviewAudio._identifier === doc.identifier && !_crPreviewAudio.paused) {
+      crStopPreview(); playIcon.className = "ri-play-fill"; return;
+    }
+    crStopPreview();
+    playIcon.className = "ri-loader-4-line";
+    const url = await crResolveTrackUrl(doc.identifier).catch(() => null);
+    if (!url) { playIcon.className = "ri-play-fill"; toast("Couldn't load that track"); return; }
+    _crPreviewAudio = new Audio(url);
+    _crPreviewAudio._identifier = doc.identifier;
+    _crPreviewAudio.play().catch(() => {});
+    playIcon.className = "ri-pause-fill";
+    _crPreviewAudio.addEventListener("ended", () => { playIcon.className = "ri-play-fill"; });
+  });
+  pickBtn.addEventListener("click", async () => {
+    pickBtn.textContent = "…";
+    const url = _crPreviewAudio?._identifier === doc.identifier ? _crPreviewAudio.src : await crResolveTrackUrl(doc.identifier).catch(() => null);
+    if (!url) { toast("Couldn't load that track"); pickBtn.textContent = "Use"; return; }
+    crState.song = { id: doc.identifier, name: title, artist: creator, url };
+    crStopPreview();
+    crBuildMusicStepPaint(results);
+  });
+  return row;
+}
+function crBuildMusicStepPaint(results) {
+  crSearchMusic("", results);
+}
+
+// ---------------- Step 4: details + publish ----------------
+function crBuildDetailsStep() {
+  const thumbSlide = crState.slides[0];
+  const caption = el("textarea", { placeholder: crState.textOnly ? "What's on your mind?" : "Write a caption… use #hashtags and @mentions" });
+  caption.value = crState.caption;
+  caption.addEventListener("input", () => { crState.caption = caption.value; });
+
+  let sponsoredFields = null;
+  if (crState.isSponsored) {
+    const headline = el("input", { type: "text", maxlength: "80", placeholder: "Ad headline (optional)" });
+    headline.value = crState.adHeadline || "";
+    headline.addEventListener("input", () => { crState.adHeadline = headline.value; });
+    const destination = el("input", { type: "url", placeholder: "https://your-site.com" });
+    destination.value = crState.adLink || "";
+    destination.addEventListener("input", () => { crState.adLink = destination.value; });
+    const cta = el("select", {},
+      el("option", { value: "Learn more" }, "Learn more"),
+      el("option", { value: "Shop now" }, "Shop now"),
+      el("option", { value: "Sign up" }, "Sign up"),
+      el("option", { value: "Contact us" }, "Contact us"),
+    );
+    cta.value = crState.adCta || "Learn more";
+    cta.addEventListener("change", () => { crState.adCta = cta.value; });
+    sponsoredFields = el("div", { class: "cr-ad-fields" },
+      el("div", { class: "cr-ad-fields-title" }, el("i", { class: "ri-advertisement-line" }), "Sponsored ad details"),
+      el("label", {}, "Headline", headline),
+      el("label", {}, "Destination link (required)", destination),
+      el("label", {}, "Button text", cta),
+    );
+  }
+
+  const locRow = el("div", { class: "cr-details-row" },
+    el("div", { class: "l" }, el("i", { class: "ri-map-pin-line" }), "Tag location"),
+    el("div", { class: "v" }, crState.location?.city || "Not tagged"),
+  );
+  locRow.addEventListener("click", () => {
+    if (!("geolocation" in navigator)) { toast("Location not available"); return; }
+    locRow.querySelector(".v").textContent = "Locating…";
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+      const { latitude: lat, longitude: lng } = pos.coords; let city = null;
+      try {
+        const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=10`);
+        const j = await r.json();
+        city = j.address?.city || j.address?.town || j.address?.state || (j.display_name || "").split(",")[0] || null;
+      } catch {}
+      crState.location = { lat: Math.round(lat * 100) / 100, lng: Math.round(lng * 100) / 100, city };
+      locRow.querySelector(".v").textContent = city || "My location";
+    }, () => { toast("Location access denied"); locRow.querySelector(".v").textContent = crState.location?.city || "Not tagged"; }, { timeout: 8000 });
+  });
+
+  const musicRow = crCanAddMusic() ? el("div", { class: "cr-details-row" },
+    el("div", { class: "l" }, el("i", { class: "ri-music-2-line" }), "Music"),
+    el("div", { class: "v" }, crState.song ? `${crState.song.name} — ${crState.song.artist}` : "None"),
+  ) : null;
+  musicRow?.addEventListener("click", () => crGoto("music"));
+
+  return el("div", { class: "cr-step active" },
+    el("div", { class: "cr-details" },
+      crState.textOnly ? null : el("div", { class: "cr-details-preview" },
+        thumbSlide.type === "video"
+          ? el("video", { src: thumbSlide.url, class: "cr-details-thumb", muted: true })
+          : el("img", { src: thumbSlide.url, class: "cr-details-thumb" }),
+        el("div", { style: "flex:1;color:var(--text-mute);font-size:13px;" },
+          crState.slides.length > 1 ? `${crState.slides.length} photos in this post` : (thumbSlide.type === "video" ? "1 video" : "1 photo")),
+      ),
+      caption,
+      sponsoredFields,
+      locRow,
+      musicRow,
+    ),
+  );
+}
+
+// Bake all overlays for an image slide into a single flattened image file
+// (video overlays are NOT baked — they're stored as metadata and rendered
+// live over the <video> element during playback; see wireFeedOverlays).
+function crFlattenImageSlide(slide) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+      slide.overlays.forEach((ov) => {
+        ctx.save();
+        const px = (ov.x / 100) * canvas.width, py = (ov.y / 100) * canvas.height;
+        ctx.translate(px, py);
+        ctx.rotate((ov.rotation * Math.PI) / 180);
+        const fontPx = crFontPx(ov, canvas.width);
+        if (ov.type === "text") {
+          ctx.font = `800 ${fontPx}px "Plus Jakarta Sans", sans-serif`;
+          ctx.fillStyle = ov.color; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.shadowColor = "rgba(0,0,0,.5)"; ctx.shadowBlur = fontPx * 0.15;
+          ctx.fillText(ov.text, 0, 0);
+        } else {
+          ctx.font = `${fontPx}px sans-serif`;
+          ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText(ov.icon, 0, 0);
+        }
+        ctx.restore();
+      });
+      canvas.toBlob((blob) => resolve(new File([blob], slide.file.name.replace(/\.\w+$/, "") + "-edited.png", { type: "image/png" })), "image/png", 0.95);
+    };
+    img.onerror = reject;
+    img.src = slide.url;
+  });
+}
+
+async function crSubmitPost(btn) {
+  if (!crState.textOnly && !crState.slides.length) { toast("Pick a photo or video first"); return; }
+  if (crState.textOnly && !crState.caption.trim()) { toast("Write something first"); return; }
+  const isSponsored = crState.isSponsored === true;
+  let adDestinationUrl = "";
+  if (isSponsored) {
+    if (!crState.adLink?.trim()) { toast("Add a destination link for your ad"); return; }
+    if (!crState.caption.trim() && !crState.adHeadline?.trim()) { toast("Add ad text or a headline"); return; }
+    try {
+      const parsedUrl = new URL(crState.adLink.trim());
+      if (!["http:", "https:"].includes(parsedUrl.protocol)) throw new Error("Unsupported link");
+      adDestinationUrl = parsedUrl.href;
+    } catch {
+      toast("Enter a valid link starting with https://");
+      return;
+    }
+  }
+  btn.disabled = true; btn.textContent = isSponsored ? "Creating ad…" : "Posting…";
+  try {
+    let media;
+    if (!crState.textOnly) {
+      toast("Uploading…");
+      if (crState.slides[0].type === "video") {
+        const slide = crState.slides[0];
+        const uploaded = await uploadToCloudinary(slide.file, "video");
+        if (slide.overlays.length) uploaded.overlays = slide.overlays;
+        media = uploaded;
+      } else if (crState.slides.length === 1) {
+        const flat = await crFlattenImageSlide(crState.slides[0]);
+        media = await uploadToCloudinary(flat, "image");
+      } else {
+        const flats = await Promise.all(crState.slides.map(crFlattenImageSlide));
+        media = await Promise.all(flats.map((f) => uploadToCloudinary(f, "image")));
+      }
+    }
+    const text = crState.caption.trim();
+    const hashtags = extractHashtags(text);
+    const postData = {
+      authorUid: state.uid, text, hashtags,
+      orbits: [], orbitCount: 0, commentCount: 0, createdAt: serverTimestamp(),
+    };
+    if (media) postData.media = media;
+    if (crState.location) postData.location = crState.location;
+    if (crState.song) postData.song = crState.song;
+    if (isSponsored) {
+      postData.isSponsored = true;
+      postData.ad = {
+        headline: crState.adHeadline.trim(),
+        destinationUrl: adDestinationUrl,
+        cta: crState.adCta || "Learn more",
+      };
+    }
+    const newPostRef = await addDoc(collection(db, "posts"), postData);
+    sfxPost();
+    toast(isSponsored ? "Ad created and marked Sponsored" : "Posted!");
+    showPostSuccess();
+    crClose();
+    addDoc(collection(db, "notifications", state.uid, "items"), {
+      type: "postConfirm", postId: newPostRef.id, text: "Your post is live!", read: false, createdAt: serverTimestamp(),
+    }).catch(() => {});
+    if (!isSponsored) (async () => {
+      let followers = state.me?.followers || [];
+      try {
+        const freshSnap = await getDoc(doc(db, "users", state.uid));
+        if (freshSnap.exists()) followers = freshSnap.data().followers || followers;
+      } catch {}
+      followers = followers.slice(0, 200);
+      if (!followers.length) return;
+      const preview = (text || "shared new media").slice(0, 60);
+      const postThumb = Array.isArray(media) ? media[0]?.url : media?.url;
+      const { notifyUser } = await import("./notifications.js");
+      followers.forEach((uid) => {
+        writeNotif(uid, "newPost", { postId: newPostRef.id, text: `${state.me?.name || "Someone"} posted: "${preview}"` }).catch(() => {});
+        notifyUser(uid, state.me?.name || "Someone", `New post: ${preview}`, "/#post/" + newPostRef.id, state.me?.photoURL || "", postThumb || "").catch(() => {});
+      });
+    })().catch(() => {});
+  } catch (err) {
+    toast("Failed to post: " + (err.message || "unknown error"));
+    btn.disabled = false; btn.textContent = isSponsored ? "Create ad" : "Post";
+  }
+}
+
+// =========================================================================
+// 14b. INLINE FEED SUGGESTION CARDS (People / Groups / Spaces)
+// =========================================================================
+
+const renderInlinePeopleSuggestion = () => {
+  const scroller = el("div", { class: "feed-sugg-scroller" });
+  const card = el("div", { class: "feed-suggestion-card" },
+    el("div", { class: "feed-sugg-head" },
+      el("span", {}, el("i", { class: "ri-user-add-line" }), " People you may know"),
+      el("span", { class: "feed-sugg-see-all", onclick: () => location.hash = "#explore" }, "See all")
+    ),
+    scroller
+  );
+  getDocs(query(collection(db, "users"), orderBy("createdAt", "desc"), limit(30))).then((snap) => {
+    // Shuffle so a different set appears each time
+    const _all = snap.docs.map(d => ({ uid: d.id, ...d.data() }))
+      .filter(u => u.uid !== state.uid);
+    for (let i = _all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [_all[i], _all[j]] = [_all[j], _all[i]]; }
+    let added = 0;
+    _all.forEach((u) => {
+      if (added >= 6) return;
+      added++;
+      let iFollow = (state.me?.following || []).includes(u.uid);
+      const btn = el("button", {
+        class: `btn sm ${iFollow ? "ghost" : "primary"}`,
+        onclick: async (e) => {
+          const meRef = doc(db, "users", state.uid);
+          const themRef = doc(db, "users", u.uid);
+          const batch = writeBatch(db);
+          if (iFollow) {
+            batch.update(meRef, { following: arrayRemove(u.uid) });
+            batch.update(themRef, { followers: arrayRemove(state.uid) });
+          } else {
+            batch.update(meRef, { following: arrayUnion(u.uid) });
+            batch.update(themRef, { followers: arrayUnion(state.uid) });
+          }
+          await batch.commit();
+          state.cache.users.delete(u.uid);
+          state.cache.users.delete(state.uid);
+          iFollow = !iFollow;
+          btn.textContent = iFollow ? "Following" : "Follow";
+          btn.className = `btn sm ${iFollow ? "ghost" : "primary"}`;
+        }
+      }, iFollow ? "Following" : "Follow");
+      scroller.appendChild(el("div", { class: "feed-sugg-person" },
+        el("img", { class: "avatar md", src: avatarFor(u), onclick: () => location.hash = `#profile/${u.uid}` }),
+        el("div", { class: "feed-sugg-name" }, u.name || "User"),
+        el("div", { class: "feed-sugg-meta" }, "@" + (u.username || "")),
+        btn
+      ));
+    });
+    if (added === 0) card.remove();
+  }).catch(() => card.remove());
+  return card;
+};
+
+const renderInlineGroupSuggestion = () => {
+  const scroller = el("div", { class: "feed-sugg-scroller" });
+  const card = el("div", { class: "feed-suggestion-card" },
+    el("div", { class: "feed-sugg-head" },
+      el("span", {}, el("i", { class: "ri-group-2-line" }), " Communities you might like"),
+      el("span", { class: "feed-sugg-see-all", onclick: () => location.hash = "#communities" }, "See all")
+    ),
+    scroller
+  );
+  getDocs(query(collection(db, "communities"), orderBy("createdAt", "desc"), limit(24))).then((snap) => {
+    if (snap.empty) { card.remove(); return; }
+    const _all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    for (let i = _all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [_all[i], _all[j]] = [_all[j], _all[i]]; }
+    _all.slice(0, 6).forEach((g) => {
+      let member = (g.members || []).includes(state.uid);
+      const btn = el("button", {
+        class: `btn sm ${member ? "ghost" : "primary"}`,
+        onclick: async () => {
+          const ref = doc(db, "communities", g.id);
+          await updateDoc(ref, { members: member ? arrayRemove(state.uid) : arrayUnion(state.uid), memberCount: increment(member ? -1 : 1) });
+          member = !member;
+          btn.textContent = member ? "Joined" : "Join";
+          btn.className = `btn sm ${member ? "ghost" : "primary"}`;
+        }
+      }, member ? "Joined" : "Join");
+      scroller.appendChild(el("div", { class: "feed-sugg-group" },
+        el("div", { class: "feed-sugg-group-cover" }, (g.name || "?")[0].toUpperCase()),
+        el("div", { class: "feed-sugg-name" }, `g/${g.slug || g.id}`),
+        el("div", { class: "feed-sugg-meta" }, `${(g.members || []).length} member${(g.members || []).length !== 1 ? "s" : ""}`),
+        btn
+      ));
+    });
+  }).catch(() => card.remove());
+  return card;
+};
+
+const renderInlineSpaceSuggestion = () => {
+  const scroller = el("div", { class: "feed-sugg-scroller" });
+  const card = el("div", { class: "feed-suggestion-card" },
+    el("div", { class: "feed-sugg-head" },
+      el("span", {}, el("i", { class: "ri-planet-line" }), " Spaces for you"),
+      el("span", { class: "feed-sugg-see-all", onclick: () => location.hash = "#spaces" }, "See all")
+    ),
+    scroller
+  );
+  getDocs(query(collection(db, "spaces"), orderBy("memberCount", "desc"), limit(24))).then((snap) => {
+    if (snap.empty) { card.remove(); return; }
+    const _all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    for (let i = _all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [_all[i], _all[j]] = [_all[j], _all[i]]; }
+    _all.slice(0, 6).forEach((s) => {
+      let joined = (s.members || []).includes(state.uid);
+      const btn = el("button", {
+        class: `btn sm ${joined ? "ghost" : "primary"}`,
+        onclick: async () => {
+          const ref = doc(db, "spaces", s.id);
+          if (joined) {
+            await updateDoc(ref, { members: arrayRemove(state.uid), memberCount: increment(-1) });
+          } else {
+            await updateDoc(ref, { members: arrayUnion(state.uid), memberCount: increment(1) });
+          }
+          joined = !joined;
+          btn.textContent = joined ? "Joined" : "Join";
+          btn.className = `btn sm ${joined ? "ghost" : "primary"}`;
+        }
+      }, joined ? "Joined" : "Join");
+      scroller.appendChild(el("div", { class: "feed-sugg-space" },
+        el("div", { class: "feed-sugg-space-icon", style: `background:${s.color || "var(--grad-1)"}` },
+          el("i", { class: s.icon || "ri-planet-line" })),
+        el("div", { class: "feed-sugg-name" }, s.name),
+        el("div", { class: "feed-sugg-meta" }, `${s.memberCount || 0} member${(s.memberCount || 0) !== 1 ? "s" : ""}`),
+        btn
+      ));
+    });
+  }).catch(() => card.remove());
+  return card;
+};
+
+// =========================================================================
+// 14c. NEW USER ONBOARDING MODAL
+// =========================================================================
+
+const showOnboardingGuide = () => {
+  const overlay = el("div", { class: "onboarding-guide-overlay" });
+  const card = el("div", { class: "onboarding-guide-card" });
+  const progress = el("div", { class: "onboarding-guide-progress" });
+  const body = el("div", { class: "onboarding-guide-body" });
+  let step = 0;
+  const steps = [
+    { icon: "ri-user-smile-line", title: "Set up your profile", sub: "Make your Get better feel like you." },
+    { icon: "ri-user-heart-line", title: "Find your people", sub: "Follow a few people to personalize your feed." },
+    { icon: "ri-group-2-line", title: "Join your communities", sub: "Pick groups that match your interests." },
+  ];
+  const finish = async () => {
+    try {
+      await updateDoc(doc(db, "users", state.uid), { onboardingCompleted: true });
+      state.me.onboardingCompleted = true;
+    } catch {}
+    overlay.remove();
+    showFirstPostPrompt();
+  };
+  const close = () => finish();
+  const renderProgress = () => {
+    progress.innerHTML = "";
+    steps.forEach((s, i) => progress.appendChild(el("span", { class: i <= step ? "active" : "" })));
+  };
+  const renderStep = () => {
+    renderProgress();
+    body.innerHTML = "";
+    const current = steps[step];
+    body.appendChild(el("div", { class: "onboarding-guide-icon" }, el("i", { class: current.icon })));
+    body.appendChild(el("div", { class: "onboarding-guide-kicker" }, `STEP ${step + 1} OF ${steps.length}`));
+    body.appendChild(el("h2", {}, current.title));
+    body.appendChild(el("p", { class: "onboarding-guide-sub" }, current.sub));
+
+    if (step === 0) {
+      const name = el("input", { type: "text", value: state.me?.name || "", placeholder: "Your name" });
+      const username = el("input", { type: "text", value: state.me?.username || "", placeholder: "Username" });
+      const bio = el("textarea", { placeholder: "A short bio (optional)", rows: "3" }, state.me?.bio || "");
+      const save = el("button", { class: "btn primary block" }, "Save profile");
+      save.onclick = async () => {
+        if (!name.value.trim() || !username.value.trim()) { toast("Add your name and username"); return; }
+        save.disabled = true; save.textContent = "Saving…";
+        await updateDoc(doc(db, "users", state.uid), { name: name.value.trim(), username: username.value.trim().toLowerCase().replace(/[^a-z0-9_]/g, ""), bio: bio.value.trim() });
+        Object.assign(state.me, { name: name.value.trim(), username: username.value.trim(), bio: bio.value.trim() });
+        step = 1; renderStep();
+      };
+      body.append(el("div", { class: "onboarding-guide-fields" }, name, username, bio, save));
+    } else {
+      const list = el("div", { class: "onboarding-guide-list" }, el("div", { class: "onboarding-guide-loading" }, el("i", { class: "ri-loader-4-line" }), " Finding suggestions…"));
+      const next = el("button", { class: "btn primary block" }, step === steps.length - 1 ? "Finish setup" : "Continue");
+      next.onclick = () => { if (step === steps.length - 1) finish(); else { step += 1; renderStep(); } };
+      body.append(list, next);
+      const load = async () => {
+        const source = step === 1
+          ? await getDocs(query(collection(db, "users"), orderBy("createdAt", "desc"), limit(6)))
+          : await getDocs(query(collection(db, "communities"), orderBy("createdAt", "desc"), limit(6)));
+        list.innerHTML = "";
+        source.docs.forEach((d) => {
+          const item = { id: d.id, ...d.data() };
+          if (step === 1 && item.id === state.uid) return;
+          let selected = step === 1 ? (state.me.following || []).includes(item.id) : (item.members || []).includes(state.uid);
+          const button = el("button", { class: `onboarding-guide-select${selected ? " selected" : ""}` }, selected ? "Selected" : "Select");
+          button.onclick = async () => {
+            selected = !selected;
+            if (step === 1) {
+              await updateDoc(doc(db, "users", state.uid), { following: selected ? arrayUnion(item.id) : arrayRemove(item.id) });
+              state.me.following = selected ? [...new Set([...(state.me.following || []), item.id])] : (state.me.following || []).filter((id) => id !== item.id);
+            } else {
+              await updateDoc(doc(db, "communities", item.id), { members: selected ? arrayUnion(state.uid) : arrayRemove(state.uid), memberCount: increment(selected ? 1 : -1) });
+            }
+            button.textContent = selected ? "Selected" : "Select";
+            button.classList.toggle("selected", selected);
+          };
+          list.appendChild(el("div", { class: "onboarding-guide-row" },
+            el("img", { class: "avatar sm", src: step === 1 ? avatarFor(item) : (item.iconUrl || item.photoURL || `https://api.dicebear.com/7.x/shapes/svg?seed=${item.id}`) }),
+            el("div", { class: "onboarding-guide-row-info" },
+              el("strong", {}, item.name || "Get better member"),
+              el("small", {}, step === 1 ? `@${item.username || "user"}` : `${(item.members || []).length} members`),
+            ),
+            button,
+          ));
+        });
+        if (!list.children.length) list.appendChild(el("div", { class: "onboarding-guide-empty" }, "No suggestions yet — you can continue."));
+      };
+      load().catch(() => { list.innerHTML = ""; list.appendChild(el("div", { class: "onboarding-guide-empty" }, "You can continue and explore later.")); });
+    }
+  };
+  card.append(
+    el("button", { class: "icon-btn onboarding-guide-close", onclick: close }, el("i", { class: "ri-close-line" })),
+    el("div", { class: "onboarding-guide-brand" }, el("i", { class: "ri-mic-fill" }), " GET BETTER"),
+    progress,
+    body,
+  );
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+  renderStep();
+};
+
+const showFirstPostPrompt = () => {
+  const overlay = el("div", { class: "first-post-overlay" });
+  const card = el("div", { class: "first-post-card" },
+    el("div", { class: "first-post-sparkles" }, "✦  ✧  ✦"),
+    el("div", { class: "first-post-orbit" }, el("i", { class: "ri-quill-pen-line" })),
+    el("h2", {}, "Your Get better is ready"),
+    el("p", {}, "Share something that feels like you and start your first conversation."),
+    el("div", { class: "first-post-actions" },
+      el("button", { class: "btn primary", onclick: () => { overlay.remove(); openCreatePost(); } }, el("i", { class: "ri-add-line" }), " Create your first post"),
+      el("button", { class: "btn ghost", onclick: () => overlay.remove() }, "I’ll do it later"),
+    ),
+  );
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+};
+
+const showOnboardingModal = () => {
+  const overlay = el("div", { class: "onboard-overlay" });
+  const modal   = el("div", { class: "onboard-modal" });
+
+  const close = () => overlay.remove();
+
+  // Header
+  modal.appendChild(el("div", { class: "onboard-header" },
+    el("div", { class: "onboard-logo" }, el("i", { class: "ri-planet-fill" })),
+    el("h2", {}, `Welcome to Get better, ${(state.me?.name || "there").split(" ")[0]}! 🚀`),
+    el("p", {}, "Follow people, join groups, and discover spaces to get started.")
+  ));
+
+  // ── People section ──────────────────────────────────────────────────────
+  const peopleList = el("div", { class: "onboard-section-list" });
+  modal.appendChild(el("div", { class: "onboard-section" },
+    el("div", { class: "onboard-section-title" }, el("i", { class: "ri-user-add-line" }), " Suggested people"),
+    peopleList
+  ));
+  getDocs(query(collection(db, "users"), orderBy("createdAt", "desc"), limit(8))).then((snap) => {
+    let added = 0;
+    snap.docs.forEach((d) => {
+      const u = { uid: d.id, ...d.data() };
+      if (u.uid === state.uid || added >= 5) return;
+      added++;
+      let iFollow = false;
+      const btn = el("button", {
+        class: "btn sm primary",
+        onclick: async () => {
+          const meRef = doc(db, "users", state.uid);
+          const themRef = doc(db, "users", u.uid);
+          const batch = writeBatch(db);
+          if (iFollow) {
+            batch.update(meRef, { following: arrayRemove(u.uid) });
+            batch.update(themRef, { followers: arrayRemove(state.uid) });
+          } else {
+            batch.update(meRef, { following: arrayUnion(u.uid) });
+            batch.update(themRef, { followers: arrayUnion(state.uid) });
+          }
+          await batch.commit();
+          state.cache.users.delete(u.uid);
+          state.cache.users.delete(state.uid);
+          iFollow = !iFollow;
+          btn.textContent = iFollow ? "✓ Following" : "Follow";
+          btn.className = `btn sm ${iFollow ? "ghost" : "primary"}`;
+        }
+      }, "Follow");
+      peopleList.appendChild(el("div", { class: "onboard-row" },
+        el("img", { class: "avatar sm", src: avatarFor(u), style: "cursor:pointer;", onclick: () => location.hash = `#profile/${u.uid}` }),
+        el("div", { class: "onboard-row-meta" },
+          el("div", { class: "onboard-row-name" }, u.name || "User"),
+          el("div", { class: "onboard-row-sub" }, "@" + (u.username || ""))
+        ),
+        btn
+      ));
+    });
+  }).catch(() => {});
+
+  // ── Groups section ──────────────────────────────────────────────────────
+  const groupList = el("div", { class: "onboard-section-list" });
+  modal.appendChild(el("div", { class: "onboard-section" },
+    el("div", { class: "onboard-section-title" }, el("i", { class: "ri-group-2-line" }), " Communities to join"),
+    groupList
+  ));
+  getDocs(query(collection(db, "communities"), orderBy("createdAt", "desc"), limit(4))).then((snap) => {
+    if (snap.empty) return;
+    snap.docs.forEach((d) => {
+      const g = { id: d.id, ...d.data() };
+      let member = false;
+      const btn = el("button", {
+        class: "btn sm primary",
+        onclick: async () => {
+          const ref = doc(db, "communities", g.id);
+          await updateDoc(ref, { members: member ? arrayRemove(state.uid) : arrayUnion(state.uid), memberCount: increment(member ? -1 : 1) });
+          member = !member;
+          btn.textContent = member ? "✓ Joined" : "Join";
+          btn.className = `btn sm ${member ? "ghost" : "primary"}`;
+        }
+      }, "Join");
+      groupList.appendChild(el("div", { class: "onboard-row" },
+        el("div", { class: "onboard-group-icon" }, (g.name || "?")[0].toUpperCase()),
+        el("div", { class: "onboard-row-meta" },
+          el("div", { class: "onboard-row-name" }, `g/${g.slug || g.id}`),
+          el("div", { class: "onboard-row-sub" }, `${(g.members || []).length} members`)
+        ),
+        btn
+      ));
+    });
+  }).catch(() => {});
+
+  // ── Spaces section ──────────────────────────────────────────────────────
+  const spaceList = el("div", { class: "onboard-section-list" });
+  modal.appendChild(el("div", { class: "onboard-section" },
+    el("div", { class: "onboard-section-title" }, el("i", { class: "ri-planet-line" }), " Spaces to explore"),
+    spaceList
+  ));
+  getDocs(query(collection(db, "spaces"), orderBy("memberCount", "desc"), limit(4))).then((snap) => {
+    if (snap.empty) return;
+    snap.docs.forEach((d) => {
+      const s = { id: d.id, ...d.data() };
+      let joined = false;
+      const btn = el("button", {
+        class: "btn sm primary",
+        onclick: async () => {
+          const ref = doc(db, "spaces", s.id);
+          if (joined) {
+            await updateDoc(ref, { members: arrayRemove(state.uid), memberCount: increment(-1) });
+          } else {
+            await updateDoc(ref, { members: arrayUnion(state.uid), memberCount: increment(1) });
+          }
+          joined = !joined;
+          btn.textContent = joined ? "✓ Joined" : "Join";
+          btn.className = `btn sm ${joined ? "ghost" : "primary"}`;
+        }
+      }, "Join");
+      spaceList.appendChild(el("div", { class: "onboard-row" },
+        el("div", { class: "onboard-space-icon", style: `background:${s.color || "var(--grad-1)"}` },
+          el("i", { class: s.icon || "ri-planet-line" })),
+        el("div", { class: "onboard-row-meta" },
+          el("div", { class: "onboard-row-name" }, s.name),
+          el("div", { class: "onboard-row-sub" }, `${s.memberCount || 0} members`)
+        ),
+        btn
+      ));
+    });
+  }).catch(() => {});
+
+  // ── Footer ──────────────────────────────────────────────────────────────
+  modal.appendChild(el("div", { class: "onboard-footer" },
+    el("button", { class: "btn primary full-width", onclick: close }, "🚀 Let's go!")
+  ));
+
+  overlay.appendChild(modal);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  document.body.appendChild(overlay);
+};
+
+// =========================================================================
+// 14c-2. PROFILE SETUP PROMPT — for returning users who skipped onboarding
+// =========================================================================
+
+const checkProfileSetup = () => {
+  // Only once per session
+  if (sessionStorage.getItem("orbit:profile-prompt-dismissed")) return;
+  const hasDefaultAvatar = !state.me.photoURL || state.me.photoURL.includes("dicebear");
+  const hasBio = !!state.me.bio?.trim();
+  if (!hasDefaultAvatar && hasBio) return; // profile looks complete — nothing to prompt
+
+  const banner = document.createElement("div");
+  banner.className = "profile-setup-banner";
+  banner.innerHTML = `
+    <div class="psb-icon"><i class="ri-user-settings-line"></i></div>
+    <div class="psb-body">
+      <div class="psb-title">Complete your profile</div>
+      <div class="psb-sub">${hasDefaultAvatar ? "Add a profile photo" : ""}${hasDefaultAvatar && !hasBio ? " and a " : ""}${!hasBio ? "bio" : ""} so people can find you</div>
+    </div>
+    <button class="btn primary sm psb-btn">Set up</button>
+    <button class="icon-btn psb-dismiss" title="Dismiss"><i class="ri-close-line"></i></button>`;
+
+  const dismiss = () => {
+    banner.remove();
+    sessionStorage.setItem("orbit:profile-prompt-dismissed", "1");
+  };
+
+  banner.querySelector(".psb-btn").onclick = () => {
+    dismiss();
+    location.hash = "#profile/" + state.uid;
+    // Open the edit modal once the profile route has rendered
+    setTimeout(() => {
+      document.querySelector(".profile-actions .btn.ghost")?.click();
+    }, 500);
+  };
+  banner.querySelector(".psb-dismiss").onclick = dismiss;
+
+  // Insert at top of #content after feed has rendered
+  setTimeout(() => {
+    const content = document.getElementById("content");
+    if (content && !document.querySelector(".profile-setup-banner")) {
+      content.insertBefore(banner, content.firstChild);
+    }
+  }, 1200);
+};
+
+// =========================================================================
+// 14d. NEWS / SPORTS / SOCIAL BOT  — posts every 5 hours under official accounts
+// =========================================================================
+
+const NEWS_BOTS = [
+  {
+    uid:      "orbit-news-official",
+    name:     "Get better News Official",
+    username: "orbit_news",
+    emoji:    "📰",
+    badge:    "ri-newspaper-line",
+    rss:      "https://feeds.bbci.co.uk/news/rss.xml",
+    tag:      "news",
+  },
+  {
+    uid:      "orbit-sport-official",
+    name:     "Get better Sport Official",
+    username: "orbit_sport",
+    emoji:    "⚽",
+    badge:    "ri-football-line",
+    rss:      "https://www.espn.com/espn/rss/news",
+    tag:      "sports",
+  },
+  {
+    uid:      "orbit-social-official",
+    name:     "Get better Social Official",
+    username: "orbit_social",
+    emoji:    "🌐",
+    badge:    "ri-global-line",
+    rss:      "https://techcrunch.com/feed/",
+    tag:      "social",
+  },
+];
+
+const _BOT_INTERVAL = 5 * 60 * 60 * 1000; // 5 hours in ms
+const _RSS2JSON     = "https://api.rss2json.com/v1/api.json?count=6&rss_url=";
+
+const startNewsBot = async () => {
+  for (const bot of NEWS_BOTS) {
+    try {
+      // 1. Ensure bot user doc exists in Firestore
+      const botRef  = doc(db, "users", bot.uid);
+      const botSnap = await getDoc(botRef);
+      if (!botSnap.exists()) {
+        await setDoc(botRef, {
+          uid:       bot.uid,
+          name:      bot.name,
+          username:  bot.username,
+          photoURL:  `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(bot.name)}&backgroundColor=6c63ff`,
+          bio:       `Official ${bot.tag} updates curated by Get better. Refreshed every 5 hours.`,
+          verified:  true,
+          isBot:     true,
+          followers: [],
+          following: [],
+          online:    false,
+          createdAt: serverTimestamp(),
+        });
+      }
+
+      // 2. Check when the bot last posted — skip if < 5 hours ago
+      const lastSnap = await getDocs(
+        query(collection(db, "posts"),
+          where("authorUid", "==", bot.uid),
+          orderBy("createdAt", "desc"),
+          limit(1)
+        )
+      );
+      if (!lastSnap.empty) {
+        const lastMs = lastSnap.docs[0].data().createdAt?.toMillis?.() || 0;
+        if (Date.now() - lastMs < _BOT_INTERVAL) continue;
+      }
+
+      // 3. Fetch RSS via rss2json (free, no key needed)
+      const res = await fetch(`${_RSS2JSON}${encodeURIComponent(bot.rss)}`);
+      if (!res.ok) continue;
+      const feed  = await res.json();
+      const items = (feed.items || []).slice(0, 3);
+      if (!items.length) continue;
+
+      // 4. Post each headline to the feed
+      const avatar = botSnap.exists()
+        ? botSnap.data().photoURL
+        : `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(bot.name)}&backgroundColor=6c63ff`;
+
+      for (const item of items) {
+        const clean = (item.description || "")
+          .replace(/<[^>]*>/g, "")
+          .trim()
+          .slice(0, 220);
+        await addDoc(collection(db, "posts"), {
+          authorUid:    bot.uid,
+          authorName:   bot.name,
+          authorAvatar: avatar,
+          kind:         "news",
+          text:         `${bot.emoji} *${item.title.trim()}*\n\n${clean}${clean.length >= 220 ? "…" : ""}`,
+          link:         item.link || "",
+          hashtags:     [bot.tag],
+          orbitCount:   0,
+          commentCount: 0,
+          likes:        [],
+          createdAt:    serverTimestamp(),
+        });
+      }
+    } catch (e) {
+      // Silently skip — bot failure should never break the app
+    }
+  }
+};
+
+// =========================================================================
+// 15. SUGGESTIONS + TRENDING right rail
+// =========================================================================
+const startSuggestions = () => {
+  // Suggested users — fetch more then shuffle so the rail feels different each session
+  onSnapshot(query(collection(db, "users"), orderBy("createdAt", "desc"), limit(20)), (snap) => {
+    const list = $("#suggestList"); if (!list) return;
+    list.innerHTML = "";
+    const _all = snap.docs.map(d => ({ uid: d.id, ...d.data() }))
+      .filter(u => u.uid !== state.uid);
+    for (let i = _all.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [_all[i], _all[j]] = [_all[j], _all[i]]; }
+    _all.slice(0, 5).forEach((u) => {
+      const iFollow = (state.me.following || []).includes(u.uid);
+      list.appendChild(el("div", { class: "suggest-row" },
+        el("img", { class: "avatar sm", src: avatarFor(u), onclick: () => location.hash = `#profile/${u.uid}` }),
+        el("div", { class: "meta" },
+          el("div", { class: "name" }, u.name,
+            u.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null),
+          el("div", { class: "uname" }, "@" + u.username),
+        ),
+        el("button", { class: `btn sm ${iFollow ? "ghost" : "primary"}`, onclick: async () => {
+          const meRef = doc(db, "users", state.uid);
+          const themRef = doc(db, "users", u.uid);
+          const batch = writeBatch(db);
+          if (iFollow) {
+            batch.update(meRef, { following: arrayRemove(u.uid) });
+            batch.update(themRef, { followers: arrayRemove(state.uid) });
+          } else {
+            batch.update(meRef, { following: arrayUnion(u.uid) });
+            batch.update(themRef, { followers: arrayUnion(state.uid) });
+          }
+          await batch.commit();
+          state.cache.users.delete(u.uid);
+          state.cache.users.delete(state.uid);
+        }}, iFollow ? "Following" : "Follow"),
+      ));
+    });
+  });
+
+  // Trending posts
+  onSnapshot(query(collection(db, "posts"), orderBy("orbitCount", "desc"), limit(5)), (snap) => {
+    const list = $("#trendList"); if (!list) return;
+    list.innerHTML = "";
+    snap.docs.forEach((d) => {
+      const p = d.data();
+      list.appendChild(el("div", {},
+        el("div", { class: "trend-tag", text: (p.text || "Untitled").slice(0, 60) }),
+        el("div", { class: "trend-meta" }, `${p.orbitCount || 0} likes · ${fmtTime(p.createdAt)}`),
+      ));
+    });
+  });
+};
+
+// Search
+$("#globalSearch").addEventListener("keydown", async (e) => {
+  if (e.key !== "Enter") return;
+  const q1 = e.target.value.trim().toLowerCase().replace(/^@/, "");
+  if (!q1) return;
+  const qs = await getDocs(query(collection(db, "users"), where("username", ">=", q1), where("username", "<=", q1 + "\uf8ff"), limit(1)));
+  if (qs.empty) { toast("No user found"); return; }
+  location.hash = `#profile/${qs.docs[0].id}`;
+});
+
+// =========================================================================
+// 15b. PROFILE EDIT MODAL
+// =========================================================================
+(() => {
+  const modal = document.getElementById("profileEditModal");
+  const save  = document.getElementById("editProfileSave");
+  if (!modal || !save) return;
+  let pendingAvFile = null;
+  let pendingCoverFile = null;
+  const closeModal = () => { modal.style.display = "none"; modal.classList.add("hidden"); pendingAvFile = null; pendingCoverFile = null; };
+  document.getElementById("profileEditClose")?.addEventListener("click", closeModal);
+  document.getElementById("editProfileCancel")?.addEventListener("click", closeModal);
+  modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+  document.getElementById("editAvatarWrap")?.addEventListener("click", () => document.getElementById("editAvatarInput")?.click());
+  document.getElementById("editAvatarInput")?.addEventListener("change", (e) => { const f = e.target.files?.[0]; if (!f) return; pendingAvFile = f; const av = document.getElementById("editAvatar"); if (av) av.src = URL.createObjectURL(f); });
+  document.getElementById("editCoverWrap")?.addEventListener("click", () => document.getElementById("editCoverInput")?.click());
+  document.getElementById("editCoverInput")?.addEventListener("change", (e) => {
+    const f = e.target.files?.[0]; if (!f) return;
+    pendingCoverFile = f;
+    const cover = document.getElementById("editCover");
+    if (cover) cover.src = URL.createObjectURL(f);
+  });
+  save.addEventListener("click", async () => {
+    const nameV = (document.getElementById("editName")?.value || "").trim();
+    const userV = (document.getElementById("editUsername")?.value || "").trim().toLowerCase().replace(/[^a-z0-9_]/g, "");
+    const bioV  = (document.getElementById("editBio")?.value || "").trim();
+    const birthdayDate = document.getElementById("editBirthday")?.value || "";
+    const birthday = /^\d{4}-(\d{2}-\d{2})$/.exec(birthdayDate)?.[1] || null;
+    const birthdayAnnounceEnabled = !!birthday && document.getElementById("editBirthdayAnnounce")?.checked === true;
+    if (!nameV) { toast("Name cannot be empty"); return; }
+    const st = document.getElementById("editSaveText"); if (st) st.textContent = "Saving..."; save.disabled = true;
+    try {
+      const updates = {
+        name: nameV, bio: bioV, username: userV || state.me.username,
+        birthday, birthdayAnnounceEnabled,
+      };
+      if (pendingAvFile) { toast("Uploading photo..."); const up = await uploadToCloudinary(pendingAvFile, "image"); updates.photoURL = up.url; }
+      if (pendingCoverFile) { toast("Uploading cover photo..."); const up = await uploadToCloudinary(pendingCoverFile, "image"); updates.coverURL = up.url; }
+      await updateDoc(doc(db, "users", state.uid), updates);
+      state.me = { ...state.me, ...updates };
+      state.cache.users.delete(state.uid);
+      announceBirthdayIfDue().catch((err) => console.warn("Birthday announcement failed:", err));
+      toast("Profile updated"); closeModal(); router();
+    } catch (err) { toast("Save failed: " + (err.message || "unknown")); }
+    finally { save.disabled = false; if (st) st.textContent = "Save changes"; }
+  });
+})();
+
+// =========================================================================
+// 16. AI ASSISTANT — Chat interface, settings, and chat-list injection
+// =========================================================================
+
+// --- AI Chat state ---
+let _aiMessages = [];
+let _aiTyping   = false;
+
+// --- Inject AI entry into chat list (Snapchat-style, survives onSnapshot resets) ---
+let _aiChatObserver = null;
+const _injectAIChatEntry = () => {
+  // Disconnect any previous observer
+  if (_aiChatObserver) { _aiChatObserver.disconnect(); _aiChatObserver = null; }
+
+  const buildAIRow = () => {
+    const toneInfo = AI_TONES[state.aiTone] || AI_TONES.friendly;
+    return el("div", {
+      class: "orbit-ai-entry chat-row",
+      style: "display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer;border-bottom:1px solid var(--border,rgba(255,255,255,0.07));background:linear-gradient(90deg,rgba(108,99,255,0.10) 0%,transparent 100%);flex-shrink:0;",
+      onclick: () => location.hash = "#chats/ai",
+    },
+      el("div", { class: "av", style: "position:relative;" },
+        el("div", { style: "width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#6c63ff,#ff6b9d);display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0;" }, state.aiAvatar),
+        el("span", { style: "position:absolute;bottom:1px;right:1px;width:10px;height:10px;border-radius:50%;background:#22c55e;border:2px solid var(--bg2,#1a1a2e);" }),
+      ),
+      el("div", { class: "meta", style: "min-width:0;flex:1;" },
+        el("div", { class: "name", style: "font-weight:700;font-size:15px;" }, state.aiName,
+          el("span", { style: "font-size:10px;font-weight:700;color:#6c63ff;margin-left:6px;background:rgba(108,99,255,.15);padding:1px 6px;border-radius:20px;" }, "AI"),
+        ),
+        el("div", { class: "preview", style: "font-size:12px;color:var(--text3);margin-top:2px;" }, `${toneInfo.emoji} ${toneInfo.label} · Always here for you`),
+      ),
+    );
+  };
+
+  const ensureInjected = (scroll) => {
+    if (!scroll) return;
+    // Only inject if the list has real content (not just loader/empty state)
+    const hasRows = scroll.querySelector(".chat-row:not(.orbit-ai-entry)") || scroll.querySelector(".empty");
+    if (!hasRows) return;
+    if (scroll.querySelector(".orbit-ai-entry")) return; // already there
+    scroll.insertBefore(buildAIRow(), scroll.firstChild);
+  };
+
+  // Watch #chatsScroll for DOM changes (loadChatsList clears it on every snapshot)
+  const attachObserver = () => {
+    const scroll = document.getElementById("chatsScroll");
+    if (!scroll) return false;
+    ensureInjected(scroll);
+    _aiChatObserver = new MutationObserver(() => ensureInjected(document.getElementById("chatsScroll")));
+    _aiChatObserver.observe(scroll, { childList: true });
+    return true;
+  };
+
+  // Poll until #chatsScroll appears in the DOM
+  if (!attachObserver()) {
+    const poll = setInterval(() => { if (attachObserver()) clearInterval(poll); }, 80);
+    setTimeout(() => clearInterval(poll), 8000);
+  }
+
+  // Clean up when user navigates away from chats
+  window.addEventListener("hashchange", () => {
+    if (_aiChatObserver) { _aiChatObserver.disconnect(); _aiChatObserver = null; }
+  }, { once: true });
+};
+
+// --- Render AI message bubble ---
+const _aiBubbleEl = (m) => {
+  const isAI = m.role === "ai";
+  const wrap = el("div", { class: `chat-bubble-wrap ${isAI ? "ai" : "user"}`, style: `display:flex;align-items:flex-end;gap:8px;margin:6px 14px;${isAI ? "" : "flex-direction:row-reverse;"}` });
+  if (isAI) {
+    wrap.appendChild(el("div", { style: "width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--grad-1,#6c63ff),var(--grad-2,#ff6b9d));display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;" }, state.aiAvatar));
+  }
+  const bubble = el("div", { style: `max-width:75%;padding:10px 14px;border-radius:${isAI ? "4px 18px 18px 18px" : "18px 4px 18px 18px"};background:${isAI ? "var(--bg3,#2a2a3a)" : "var(--primary,#6c63ff)"};color:${isAI ? "var(--text)" : "#fff"};font-size:14px;line-height:1.5;word-break:break-word;` });
+  bubble.textContent = m.text;
+  wrap.appendChild(bubble);
+  return wrap;
+};
+
+// --- Render AI messages list ---
+const _aiRenderMessages = () => {
+  const box = document.getElementById("aiChatMessages");
+  if (!box) return;
+  if (!_aiMessages.length && !_aiTyping) {
+    box.innerHTML = `<div style="text-align:center;padding:40px 20px;color:var(--text3);font-size:14px;">${state.aiAvatar}<br><br>Say something to ${state.aiName}…</div>`;
+    return;
+  }
+  box.innerHTML = "";
+  _aiMessages.forEach((m) => box.appendChild(_aiBubbleEl(m)));
+  if (_aiTyping) {
+    const typingWrap = el("div", { style: "display:flex;align-items:flex-end;gap:8px;margin:6px 14px;" });
+    typingWrap.appendChild(el("div", { style: "width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--grad-1,#6c63ff),var(--grad-2,#ff6b9d));display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;" }, state.aiAvatar));
+    const dots = el("div", { style: "padding:12px 16px;border-radius:4px 18px 18px 18px;background:var(--bg3,#2a2a3a);" });
+    dots.innerHTML = `<span style="display:inline-flex;gap:4px;align-items:center;height:14px;"><span style="width:6px;height:6px;border-radius:50%;background:var(--text3);animation:aiDot 1.2s infinite 0s;"></span><span style="width:6px;height:6px;border-radius:50%;background:var(--text3);animation:aiDot 1.2s infinite .2s;"></span><span style="width:6px;height:6px;border-radius:50%;background:var(--text3);animation:aiDot 1.2s infinite .4s;"></span></span>`;
+    typingWrap.appendChild(dots);
+    box.appendChild(typingWrap);
+  }
+  box.scrollTop = box.scrollHeight;
+};
+
+// Inject typing dot animation styles once
+let _aiStylesInjected = false;
+const _aiInjectStyles = () => {
+  if (_aiStylesInjected) return;
+  _aiStylesInjected = true;
+  const s = document.createElement("style");
+  s.textContent = `
+    @keyframes aiDot { 0%,80%,100% { opacity:.3; transform:scale(.8); } 40% { opacity:1; transform:scale(1); } }
+    .ai-chat-page { display:flex;flex-direction:column;height:100%;max-height:100dvh;overflow:hidden; }
+    .ai-chat-header { display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border,rgba(255,255,255,0.07));flex-shrink:0;background:var(--bg2,#1a1a2e); }
+    .ai-chat-messages { flex:1;overflow-y:auto;padding:12px 0; }
+    .ai-chat-bottom { flex-shrink:0;border-top:1px solid var(--border,rgba(255,255,255,0.07));padding:10px 14px;display:flex;flex-direction:column;gap:8px;background:var(--bg2,#1a1a2e); }
+    .ai-chat-input-row { display:flex;align-items:center;gap:8px; }
+    .ai-chat-textarea { flex:1;resize:none;border:1px solid var(--border,rgba(255,255,255,0.12));border-radius:22px;padding:10px 16px;background:var(--bg3,#2a2a3a);color:var(--text);font-size:14px;outline:none;max-height:120px;line-height:1.4; }
+    .ai-chat-textarea:focus { border-color:var(--primary,#6c63ff); }
+    .ai-chat-send-btn { width:40px;height:40px;border-radius:50%;background:var(--primary,#6c63ff);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#fff; }
+    .ai-chat-send-btn:hover { opacity:.85; }
+    .ai-settings-sheet { display:flex;flex-direction:column;gap:10px;max-height:80dvh;overflow-y:auto; }
+    .ai-settings-section { font-size:11px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--text3);margin-top:8px; }
+    .ai-name-input { width:100%;padding:10px 14px;border:1px solid var(--border,rgba(255,255,255,0.12));border-radius:12px;background:var(--bg3);color:var(--text);font-size:14px;outline:none;box-sizing:border-box; }
+    .ai-avatar-grid { display:flex;flex-wrap:wrap;gap:8px;margin-top:4px; }
+    .ai-avatar-opt { width:42px;height:42px;border-radius:50%;border:2px solid transparent;display:flex;align-items:center;justify-content:center;font-size:22px;cursor:pointer;background:var(--bg3);transition:border-color .15s; }
+    .ai-avatar-opt.sel { border-color:var(--primary,#6c63ff); }
+    .ai-tone-list { display:flex;flex-direction:column;gap:6px;margin-top:4px; }
+    .ai-tone-opt { display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:12px;border:1px solid transparent;cursor:pointer;background:var(--bg3);transition:border-color .15s; }
+    .ai-tone-opt.sel { border-color:var(--primary,#6c63ff);background:rgba(108,99,255,.1); }
+    .ai-tone-emoji { font-size:18px; }
+    .ai-tone-label { font-size:14px;color:var(--text); }
+  `;
+  document.head.appendChild(s);
+};
+
+// --- Send message to AI ---
+window._aiSend = async function() {
+  const ta   = document.getElementById("aiChatInput");
+  const text = ta?.value?.trim();
+  if (!text || _aiTyping) return;
+  if (!window.GROQ_API_KEY) { toast("Set window.GROQ_API_KEY to use the AI assistant"); return; }
+  ta.value = "";
+  ta.style.height = "auto";
+
+  _aiMessages.push({ role: "user", text });
+  _aiTyping = true;
+  _aiRenderMessages();
+
+  try {
+    const history = _aiMessages.slice(-14).map((m) => ({
+      role:    m.role === "ai" ? "assistant" : "user",
+      content: m.text,
+    }));
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${window.GROQ_API_KEY}` },
+      body: JSON.stringify({
+        model:       window.GROQ_MODEL,
+        messages:    [{ role: "system", content: getAIChatSystem() }, ...history],
+        max_tokens:  280,
+        temperature: 0.9,
+      }),
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.error?.message || `API error ${res.status}`);
+    }
+    const data  = await res.json();
+    const reply = data.choices?.[0]?.message?.content?.trim();
+    if (!reply) throw new Error("Empty response from AI");
+    _aiMessages.push({ role: "ai", text: reply });
+  } catch (err) {
+    _aiMessages.push({ role: "ai", text: `⚠️ ${err.message || "Something went wrong. Check your API key and try again."}` });
+  }
+
+  _aiTyping = false;
+  _aiRenderMessages();
+  await saveAIHistory(_aiMessages);
+};
+
+window._aiKeydown = function(e) {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); window._aiSend(); }
+};
+
+window._aiClear = async function() {
+  if (!confirm(`Clear chat history with ${state.aiName}?`)) return;
+  _aiMessages = [];
+  await saveAIHistory([]);
+  _aiRenderMessages();
+};
+
+// --- AI Settings modal ---
+window._aiOpenSettings = function() {
+  const overlay = el("div", { style: "position:fixed;inset:0;z-index:1500;background:rgba(0,0,0,.6);display:flex;align-items:flex-end;justify-content:center;", onclick: (e) => { if (e.target === overlay) overlay.remove(); } });
+  const sheet = el("div", { style: "background:var(--bg2,#1a1a2e);border-radius:20px 20px 0 0;padding:20px 18px 32px;width:100%;max-width:480px;max-height:90dvh;overflow-y:auto;" });
+  sheet.innerHTML = "";
+
+  // Header
+  sheet.appendChild(el("div", { style: "display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;" },
+    el("h3", { style: "font-size:18px;font-weight:700;margin:0;" }, "✨ Customise AI"),
+    el("button", { class: "icon-btn", onclick: () => overlay.remove() }, el("i", { class: "ri-close-line" })),
+  ));
+  sheet.appendChild(el("p", { style: "font-size:12px;color:var(--text3);margin:0 0 12px;" }, "Changes apply to new messages immediately."));
+
+  // AI Name
+  sheet.appendChild(el("div", { class: "ai-settings-section" }, "AI Name"));
+  const nameInput = el("input", { class: "ai-name-input", type: "text", placeholder: "e.g. Aria, Nova, Rex…", value: state.aiName, maxlength: "24" });
+  sheet.appendChild(nameInput);
+
+  // Avatar
+  sheet.appendChild(el("div", { class: "ai-settings-section" }, "Avatar"));
+  const avatarGrid = el("div", { class: "ai-avatar-grid" });
+  let _pendingAvatar = state.aiAvatar;
+  AI_AVATARS.forEach((a) => {
+    const opt = el("div", { class: `ai-avatar-opt${a === _pendingAvatar ? " sel" : ""}` }, a);
+    opt.addEventListener("click", () => {
+      _pendingAvatar = a;
+      avatarGrid.querySelectorAll(".ai-avatar-opt").forEach((el2) => el2.classList.toggle("sel", el2.textContent === a));
+    });
+    avatarGrid.appendChild(opt);
+  });
+  sheet.appendChild(avatarGrid);
+
+  // Tone
+  sheet.appendChild(el("div", { class: "ai-settings-section" }, "Personality Tone"));
+  const toneList = el("div", { class: "ai-tone-list" });
+  let _pendingTone = state.aiTone;
+  Object.entries(AI_TONES).forEach(([key, t]) => {
+    const opt = el("div", { class: `ai-tone-opt${key === _pendingTone ? " sel" : ""}` },
+      el("span", { class: "ai-tone-emoji" }, t.emoji),
+      el("span", { class: "ai-tone-label" }, t.label),
+    );
+    opt.addEventListener("click", () => {
+      _pendingTone = key;
+      toneList.querySelectorAll(".ai-tone-opt").forEach((el2, i) => el2.classList.toggle("sel", Object.keys(AI_TONES)[i] === key));
+    });
+    toneList.appendChild(opt);
+  });
+  sheet.appendChild(toneList);
+
+  // Save button
+  const saveBtn = el("button", { class: "btn primary", style: "width:100%;margin-top:20px;", onclick: () => {
+    const name = nameInput.value.trim() || "Aria";
+    state.aiName   = name;
+    state.aiAvatar = _pendingAvatar;
+    state.aiTone   = _pendingTone;
+    localStorage.setItem("orbit:ai_name",   state.aiName);
+    localStorage.setItem("orbit:ai_avatar", state.aiAvatar);
+    localStorage.setItem("orbit:ai_tone",   state.aiTone);
+    overlay.remove();
+    toast(`${state.aiAvatar} ${state.aiName} is ready!`);
+    // Re-render AI chat if open
+    const chatContent = document.getElementById("aiChatMessages");
+    if (chatContent) renderAIChat(document.querySelector(".ai-chat-page")?.parentElement || document.getElementById("content"));
+  }}, "Save Changes");
+  sheet.appendChild(saveBtn);
+
+  overlay.appendChild(sheet);
+  document.body.appendChild(overlay);
+};
+
+// --- Main AI Chat render ---
+const renderAIChat = async (root) => {
+  _aiInjectStyles();
+  root.innerHTML = "";
+
+  const toneInfo = AI_TONES[state.aiTone] || AI_TONES.friendly;
+  const page = el("div", { class: "ai-chat-page" });
+
+  // Header
+  const header = el("div", { class: "ai-chat-header" },
+    el("button", { class: "icon-btn", onclick: () => history.back() }, el("i", { class: "ri-arrow-left-line" })),
+    el("div", { style: "width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,var(--grad-1,#6c63ff),var(--grad-2,#ff6b9d));display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;" }, state.aiAvatar),
+    el("div", { style: "flex:1;min-width:0;" },
+      el("div", { style: "font-weight:700;font-size:15px;" }, state.aiName),
+      el("div", { style: "font-size:12px;color:var(--text3);" }, `${toneInfo.emoji} ${toneInfo.label}`),
+    ),
+    el("button", { class: "icon-btn", title: "Customise AI", onclick: () => window._aiOpenSettings() },
+      el("i", { class: "ri-settings-3-line" }),
+    ),
+    el("button", { class: "icon-btn", title: "Clear chat", onclick: () => window._aiClear() },
+      el("i", { class: "ri-delete-bin-line" }),
+    ),
+  );
+  page.appendChild(header);
+
+  // Messages area
+  const messagesDiv = el("div", { class: "ai-chat-messages", id: "aiChatMessages" });
+  messagesDiv.innerHTML = `<div style="text-align:center;padding:40px 20px;color:var(--text3);font-size:14px;">${state.aiAvatar}<br><br>Loading…</div>`;
+  page.appendChild(messagesDiv);
+
+  // Bottom input area
+  const bottom = el("div", { class: "ai-chat-bottom" });
+  const inputRow = el("div", { class: "ai-chat-input-row" });
+  const textarea = el("textarea", {
+    class: "ai-chat-textarea",
+    id: "aiChatInput",
+    placeholder: `Message ${state.aiName}…`,
+    rows: "1",
+    onkeydown: "window._aiKeydown(event)",
+    oninput: "this.style.height='auto';this.style.height=this.scrollHeight+'px'",
+  });
+  const sendBtn = el("button", { class: "ai-chat-send-btn", onclick: () => window._aiSend() },
+    el("i", { class: "ri-send-plane-fill", style: "font-size:18px;" }),
+  );
+  inputRow.appendChild(textarea);
+  inputRow.appendChild(sendBtn);
+  bottom.appendChild(inputRow);
+  page.appendChild(bottom);
+  root.appendChild(page);
+
+  // Load history and render
+  _aiMessages = await loadAIHistory();
+  _aiTyping   = false;
+  _aiRenderMessages();
+};
+
+// Expose so router can call it
+window.renderAIChat = renderAIChat;
+
+// =========================================================================
+// 17. INIT
+// =========================================================================
+initTheme();
+// Boot screen is hidden by onAuthStateChanged — do NOT hide it on a timer,
+// or there will be a blank-page flash while Firebase resolves auth state.
+
+// =========================================================================
+// 15. GET BETTER — Discord-style voice feed, server rail, threaded post view
+//     (styles live at the bottom of style.css, section "GET BETTER FEED")
+// =========================================================================
+let _gb = null;
+const gb = () => _gb || (_gb = _gbInit());
+function _gbInit() {
+  const PAGE_SIZE = 20;
+  const MAX_POST_SEC = 120;
+  const MAX_COMMENT_SEC = 60;
+  const MAX_NEST = 4; // visual nesting depth in the thread view; deeper replies stay in the same column
+
+  const optImg = (url, w = 900) => (url || "").replace("/image/upload/", `/image/upload/f_auto,q_auto,w_${w}/`);
+  const fmtDur = (s) => {
+    s = Math.max(0, Math.round(s || 0));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  };
+  const when = (ts) => fmtTime(ts) || "just now";
+  const isVoicePost = (p) => p.kind === "voice" || (!p.kind && !p.media && !!p.text);
+  const postHidden = (p) => (state.me?.hiddenPosts || []).includes(p.id);
+  const goProfile = (uid) => { if (uid) location.hash = `#profile/${uid}`; };
+
+  // -------------------------------------------------------------------------
+  // RECORDING
+  // -------------------------------------------------------------------------
+  const pickMime = () =>
+    ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"]
+      .find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
+
+  const shapeWave = (peaks, n = 48) => {
+    if (!peaks.length) return Array(n).fill(20);
+    const out = [];
+    const step = peaks.length / n;
+    for (let i = 0; i < n; i++) {
+      const a = Math.floor(i * step);
+      const b = Math.max(a + 1, Math.floor((i + 1) * step));
+      let m = 0;
+      for (let j = a; j < b && j < peaks.length; j++) m = Math.max(m, peaks[j]);
+      out.push(m);
+    }
+    const top = Math.max(...out, 0.05);
+    return out.map((v) => Math.max(12, Math.round((v / top) * 100)));
+  };
+
+  const startRecorder = async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mime = pickMime();
+    const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    const chunks = [];
+    const peaks = [];
+    let ctx = null, tick = null;
+    try {
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const an = ctx.createAnalyser();
+      an.fftSize = 512;
+      ctx.createMediaStreamSource(stream).connect(an);
+      const buf = new Uint8Array(an.fftSize);
+      tick = setInterval(() => {
+        an.getByteTimeDomainData(buf);
+        let m = 0;
+        for (const v of buf) m = Math.max(m, Math.abs(v - 128));
+        peaks.push(m / 128);
+      }, 80);
+    } catch { /* waveform is optional */ }
+
+    const startedAt = Date.now();
+    rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    const done = new Promise((resolve) => {
+      rec.onstop = () => {
+        if (tick) clearInterval(tick);
+        stream.getTracks().forEach((t) => t.stop());
+        if (ctx) ctx.close().catch(() => {});
+        const type = rec.mimeType || mime || "audio/webm";
+        resolve({
+          blob: new Blob(chunks, { type }),
+          type,
+          duration: (Date.now() - startedAt) / 1000,
+          waveform: shapeWave(peaks),
+        });
+      };
+    });
+    rec.start();
+    const stop = () => { if (rec.state !== "inactive") rec.stop(); };
+    return { startedAt, stop, cancel: stop, done };
+  };
+
+  const uploadVoice = async (v) => {
+    const ext = v.type.includes("mp4") ? "m4a" : v.type.includes("ogg") ? "ogg" : "webm";
+    const file = new File([v.blob], `voice-${Date.now()}.${ext}`, { type: v.type });
+    const up = await uploadToCloudinary(file, "video"); // Cloudinary stores audio under the "video" resource type
+    return {
+      url: up.url,
+      duration: Math.round((up.duration || v.duration) * 10) / 10,
+      waveform: v.waveform,
+    };
+  };
+
+  // -------------------------------------------------------------------------
+  // PLAYER
+  // -------------------------------------------------------------------------
+  let _playing = null;
+  const stopAllAudio = () => {
+    try { _playing?.pause(); } catch {}
+    _playing = null;
+  };
+  const SPEEDS = [1, 1.5, 2];
+  const realDuration = (au, fallback) => (isFinite(au.duration) && au.duration > 0 ? au.duration : fallback || 0);
+
+  const buildVoicePlayer = (a, { compact = false } = {}) => {
+    const bars = a.waveform?.length ? a.waveform : Array.from({ length: 40 }, (_, i) => 25 + ((i * 53) % 60));
+    const icon = el("i", { class: "ri-play-fill" });
+    const btn = el("button", { class: "gb-play", type: "button", "aria-label": "Play voice note" }, icon);
+    const wave = el("div", { class: "gb-wave" },
+      ...bars.map((h) => el("i", { style: `height:${Math.max(12, Math.min(100, h))}%` })));
+    const time = el("span", { class: "gb-time" }, fmtDur(a.duration));
+    const speedBtn = el("button", { class: "gb-speed", type: "button", title: "Playback speed" }, "1×");
+    const root = el("div", { class: `gb-voice${compact ? " compact" : ""}` }, btn, wave, time, speedBtn);
+    const barEls = [...wave.children];
+    let audio = null, speedIdx = 0;
+
+    const paint = (ratio) => {
+      const n = Math.round(Math.max(0, Math.min(1, ratio)) * barEls.length);
+      barEls.forEach((b, i) => b.classList.toggle("on", i < n));
+    };
+    const reset = () => { icon.className = "ri-play-fill"; root.classList.remove("playing"); };
+    const ensure = () => {
+      if (audio) return audio;
+      audio = new Audio(a.url);
+      audio.preload = "metadata";
+      audio.addEventListener("timeupdate", () => {
+        const d = realDuration(audio, a.duration);
+        paint(d ? audio.currentTime / d : 0);
+        time.textContent = fmtDur(audio.currentTime);
+      });
+      audio.addEventListener("ended", () => {
+        reset(); paint(0); time.textContent = fmtDur(a.duration); audio.currentTime = 0;
+      });
+      audio.addEventListener("pause", reset);
+      return audio;
+    };
+
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const au = ensure();
+      if (!au.paused) { au.pause(); return; }
+      if (_playing && _playing !== au) _playing.pause();
+      _playing = au;
+      au.playbackRate = SPEEDS[speedIdx];
+      au.play()
+        .then(() => { icon.className = "ri-pause-fill"; root.classList.add("playing"); })
+        .catch(() => toast("Couldn't play this voice note"));
+    });
+    wave.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const au = ensure();
+      const r = wave.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+      const d = realDuration(au, a.duration);
+      if (d) { au.currentTime = ratio * d; paint(ratio); time.textContent = fmtDur(au.currentTime); }
+    });
+    speedBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      speedIdx = (speedIdx + 1) % SPEEDS.length;
+      speedBtn.textContent = `${SPEEDS[speedIdx]}×`;
+      if (audio) audio.playbackRate = SPEEDS[speedIdx];
+    });
+    return root;
+  };
+
+  // -------------------------------------------------------------------------
+  // COMPOSER (text + voice only)
+  // -------------------------------------------------------------------------
+  const buildComposer = ({ placeholder, maxSec, onSend, allowImage = false, allowVideo = false, maxChars = 1000 }) => {
+    const input = el("textarea", { rows: "1", placeholder, maxlength: String(maxChars), autocomplete: "off", enterkeyhint: "send" });
+    const grow = () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 132) + "px"; };
+    input.addEventListener("input", grow);
+    const mic = el("button", { class: "gb-icon-btn gb-mic", type: "button", title: "Record a voice note" }, el("i", { class: "ri-mic-fill" }));
+    const send = el("button", { class: "gb-send hidden", type: "button", title: "Send" }, el("i", { class: "ri-send-plane-fill" }));
+    const imgBtn = allowImage ? el("button", { class: "gb-icon-btn", type: "button", title: "Add a cover image" }, el("i", { class: "ri-image-add-line" })) : null;
+    const fileIn = allowImage ? el("input", { type: "file", accept: "image/*", class: "hidden" }) : null;
+    const vidBtn = allowVideo ? el("button", { class: "gb-icon-btn", type: "button", title: "Add a video note" }, el("i", { class: "ri-video-add-line" })) : null;
+    const vidIn = allowVideo ? el("input", { type: "file", accept: "video/*", class: "hidden" }) : null;
+    const attach = el("div", { class: "gb-attach hidden" });
+    let image = null, imageUrl = null, imageEdit = null, video = null, videoEdit = null, videoUrl = null, promptCtx = null;
+    const extras = [];
+    if (imgBtn) extras.push(imgBtn, fileIn);
+    if (vidBtn) extras.push(vidBtn, vidIn);
+    const bar = el("div", { class: "gb-input-bar" }, input, ...extras, mic, send);
+    const rec = el("div", { class: "gb-rec hidden" });
+    const bannerText = el("span", {});
+    const bannerClose = el("button", { class: "gb-icon-btn sm", type: "button" }, el("i", { class: "ri-close-line" }));
+    const banner = el("div", { class: "gb-reply-banner hidden" }, el("i", { class: "ri-corner-down-right-line" }), bannerText, bannerClose);
+    const root = el("div", { class: "gb-composer" }, banner, attach, bar, rec);
+
+    let session = null, timer = null, onClear = null;
+    const setBusy = (b) => root.classList.toggle("busy", b);
+    const syncButtons = () => {
+      const has = input.value.trim().length > 0 || !!video;
+      send.classList.toggle("hidden", !has);
+      mic.classList.toggle("hidden", has);
+    };
+    input.addEventListener("input", syncButtons);
+
+    const clearImage = () => {
+      image = null; imageEdit = null; if (imageUrl) URL.revokeObjectURL(imageUrl); imageUrl = null;
+      if (video) return;
+      attach.classList.add("hidden"); attach.innerHTML = ""; if (fileIn) fileIn.value = "";
+    };
+    const clearVideo = () => {
+      video = null; videoEdit = null; if (videoUrl) URL.revokeObjectURL(videoUrl); videoUrl = null;
+      attach.classList.add("hidden"); attach.innerHTML = ""; if (vidIn) vidIn.value = ""; syncButtons();
+    };
+    const showAttach = (kind) => {
+      attach.innerHTML = "";
+      const thumb = kind === "video"
+        ? el("video", { src: videoUrl + "#t=" + ((videoEdit?.poster ?? videoEdit?.start ?? 0) + 0.1), muted: "", playsinline: "", preload: "metadata" })
+        : el("img", { src: imageUrl, alt: "", style: FX[imageEdit?.fx]?.css ? `filter:${FX[imageEdit.fx].css}` : "" });
+      const label = kind === "video"
+        ? `Video note · ${fmtDur((videoEdit.end || 0) - (videoEdit.start || 0))}${videoEdit.muted ? " · muted" : ""}`
+        : "Cover image · write something to go over it";
+      const editBtn = el("button", { class: "gb-icon-btn sm", type: "button", title: "Edit" , onclick: async () => {
+        const e = await openStudio({ kind, file: kind === "video" ? video : image, edit: kind === "video" ? videoEdit : imageEdit });
+        if (!e) return;
+        if (kind === "video") videoEdit = e; else imageEdit = e;
+        showAttach(kind);
+      } }, el("i", { class: "ri-scissors-2-line" }));
+      const x = el("button", { class: "gb-icon-btn sm", type: "button", title: "Remove", onclick: kind === "video" ? clearVideo : () => { clearImage(); attach.classList.add("hidden"); attach.innerHTML = ""; if (fileIn) fileIn.value = ""; } }, el("i", { class: "ri-close-line" }));
+      attach.append(thumb, el("span", { class: "gb-attach-t" }, label), editBtn, x);
+      attach.classList.remove("hidden");
+    };
+    const pick = (inp, kind) => async () => {
+      const f = inp.files?.[0]; inp.value = "";
+      if (!f) return;
+      if (kind === "image") {
+        if (!f.type.startsWith("image/")) { toast("Please choose an image"); return; }
+        if (f.size > 10 * 1024 * 1024) { toast("Image is too large (max 10 MB)"); return; }
+      } else {
+        if (!f.type.startsWith("video/")) { toast("Please choose a video"); return; }
+        if (f.size > 100 * 1024 * 1024) { toast("Video is too large (max 100 MB)"); return; }
+      }
+      const e = await openStudio({ kind, file: f });
+      if (!e) return;
+      if (kind === "image") {
+        clearVideo(); image = f; imageEdit = e; if (imageUrl) URL.revokeObjectURL(imageUrl); imageUrl = URL.createObjectURL(f);
+      } else {
+        clearImage(); video = f; videoEdit = e; if (videoUrl) URL.revokeObjectURL(videoUrl); videoUrl = URL.createObjectURL(f);
+      }
+      showAttach(kind); syncButtons(); input.focus();
+    };
+    if (imgBtn) { imgBtn.addEventListener("click", () => fileIn.click()); fileIn.addEventListener("change", pick(fileIn, "image")); }
+    if (vidBtn) { vidBtn.addEventListener("click", () => vidIn.click()); vidIn.addEventListener("change", pick(vidIn, "video")); }
+
+    const sendText = async () => {
+      const text = input.value.trim();
+      if ((!text && !video) || root.classList.contains("busy")) return;
+      setBusy(true);
+      const label = attach.querySelector(".gb-attach-t");
+      const progress = (f) => { if (label) label.textContent = `Uploading ${Math.round(f * 100)}%…`; };
+      try {
+        await onSend({ text, voice: null, image, imageEdit, video, videoEdit, progress, prompt: promptCtx }); root.setPrompt(null);
+        input.value = ""; grow(); image = null; imageEdit = null; if (imageUrl) URL.revokeObjectURL(imageUrl); imageUrl = null;
+        clearVideo(); attach.classList.add("hidden"); attach.innerHTML = ""; syncButtons();
+      }
+      catch (err) { toast("Couldn't send: " + (err.message || "try again")); if (video) showAttach("video"); }
+      finally { setBusy(false); }
+    };
+    send.addEventListener("click", sendText);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !window.matchMedia("(pointer: coarse)").matches) { e.preventDefault(); sendText(); } });
+
+    const endRec = () => { clearInterval(timer); rec.classList.add("hidden"); bar.classList.remove("hidden"); };
+    mic.addEventListener("click", async () => {
+      if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+        toast("Voice recording isn't supported on this browser"); return;
+      }
+      try { session = await startRecorder(); } catch { toast("Microphone access denied"); return; }
+      const t = el("span", { class: "gb-rec-time" }, "0:00");
+      const cancel = el("button", { class: "gb-icon-btn", type: "button", title: "Discard" }, el("i", { class: "ri-delete-bin-line" }));
+      const done = el("button", { class: "gb-send", type: "button", title: "Send voice note" }, el("i", { class: "ri-send-plane-fill" }));
+      rec.innerHTML = "";
+      rec.append(
+        el("span", { class: "gb-rec-dot" }), t,
+        el("div", { class: "gb-rec-live" }, ...Array.from({ length: 22 }, (_, i) => el("i", { style: `animation-delay:${(i % 7) * 0.1}s` }))),
+        cancel, done,
+      );
+      bar.classList.add("hidden");
+      rec.classList.remove("hidden");
+      timer = setInterval(() => {
+        const s = (Date.now() - session.startedAt) / 1000;
+        t.textContent = fmtDur(s);
+        if (s >= maxSec) done.click();
+      }, 250);
+      cancel.addEventListener("click", () => { session?.cancel(); session = null; endRec(); });
+      done.addEventListener("click", async () => {
+        if (!session) return;
+        const s = session; session = null;
+        s.stop();
+        const result = await s.done;
+        clearInterval(timer);
+        if (result.duration < 0.8) { endRec(); toast("That was too short — try again"); return; }
+        const ok = await reviewVoice(result, rec);
+        endRec();
+        if (!ok) return;
+        setBusy(true);
+        try {
+          await onSend({ text: input.value.trim(), voice: result, prompt: promptCtx }); root.setPrompt(null);
+          input.value = ""; syncButtons();
+        } catch (err) { toast("Couldn't send: " + (err.message || "try again")); }
+        finally { setBusy(false); }
+      });
+    });
+
+    bannerClose.addEventListener("click", () => root.setReply(null));
+    root.setReply = (label, clearCb) => {
+      onClear = clearCb || null;
+      if (!label) { banner.classList.add("hidden"); input.placeholder = placeholder; if (onClear) onClear(); return; }
+      bannerText.textContent = `Replying to ${label}`;
+      banner.classList.remove("hidden");
+      input.placeholder = `Reply to ${label}…`;
+      input.focus();
+    };
+    root.setPrompt = (ctx) => {
+      promptCtx = ctx || null;
+      if (!ctx) { banner.classList.add("hidden"); input.placeholder = placeholder; return; }
+      onClear = () => { promptCtx = null; };
+      bannerText.textContent = `Today's question: ${ctx.q}`;
+      banner.classList.remove("hidden");
+      input.placeholder = "Your answer…";
+      input.focus();
+    };
+    root.focusInput = () => input.focus();
+    root.dispose = () => { clearImage(); if (videoUrl) URL.revokeObjectURL(videoUrl); clearInterval(timer); session?.cancel(); session = null; };
+    return root;
+  };
+
+  // -------------------------------------------------------------------------
+  // SERVER RAIL — joined communities
+  // -------------------------------------------------------------------------
+  const buildRail = () => {
+    const groupsBox = el("div", { class: "gb-rail-groups" });
+    const add = el("button", { class: "gb-srv gb-add", type: "button", title: "Find or create communities", onclick: () => { location.hash = "#communities"; } },
+      el("i", { class: "ri-add-line" }));
+    const rail = el("nav", { class: "gb-rail", "aria-label": "Your communities" }, groupsBox, add);
+    myComms().then((cs) => {
+      cs.forEach((g) => {
+        groupsBox.appendChild(el("button", {
+          class: "gb-srv", type: "button", title: `g/${g.slug || g.id}`,
+          onclick: () => { location.hash = `#community/${encodeURIComponent(g.id)}`; },
+        }, g.iconUrl ? el("img", { src: optImg(g.iconUrl, 120), alt: g.name || "" }) : el("span", {}, (g.slug || g.id || "?").slice(0, 2).toUpperCase())));
+      });
+    });
+    return rail;
+  };
+
+  // -------------------------------------------------------------------------
+  // POST CREATION / COMMENT CREATION
+  // -------------------------------------------------------------------------
+  const createPost = async ({ text, voice, image, imageEdit, video, videoEdit, progress, prompt }) => {
+    const data = { authorUid: state.uid, kind: "voice", text: text || "", hashtags: extractHashtags(text || "") };
+    if (voice) data.audio = await uploadVoice(voice);
+    if (image && text) {
+      const up = await uploadXHR(image, "image", progress);
+      data.cover = { url: up.url, fit: imageEdit?.fit || "4:5", fx: imageEdit?.fx || "none", ...(up.width ? { width: up.width } : {}), ...(up.height ? { height: up.height } : {}) };
+    }
+    if (prompt?.day) data.prompt = { day: prompt.day, q: prompt.q };
+    if (video) {
+      const up = await uploadXHR(video, "video", progress);
+      const e = videoEdit || {};
+      const dur = up.duration || e.duration || 0;
+      data.video = { url: up.url, publicId: up.publicId, duration: Math.round(dur * 10) / 10,
+        start: e.start || 0, end: Math.min(e.end || dur, dur) || dur, muted: !!e.muted, fit: e.fit || "4:5",
+        poster: e.poster ?? e.start ?? 0, width: up.width || e.width || 0, height: up.height || e.height || 0 };
+    }
+    const target = _postTarget;
+    if (target) Object.assign(data, { communityId: target.id, communitySlug: target.slug || target.id, communityName: target.name || target.slug || target.id });
+    Object.assign(data, { orbits: [], orbitCount: 0, commentCount: 0, createdAt: serverTimestamp() });
+    const ref = await addDoc(collection(db, "posts"), data);
+    if (target) {
+      updateDoc(doc(db, "communities", target.id), { postCount: increment(1), lastPostAt: serverTimestamp() }).catch(() => {});
+      if (!_targetLocked) { _postTarget = null; repaintChips(); }
+    }
+    sfxPost();
+    toast("Posted");
+    trackAction("post", { video: !!video, prompt: !!prompt, words: (text || "").trim().split(/\s+/).filter(Boolean).length });
+    (async () => {
+      const followers = (state.me?.followers || []).slice(0, 100);
+      if (!followers.length) return;
+      const preview = (text || "").slice(0, 60);
+      const msg = preview ? `posted: "${preview}"` : (video ? "posted a video note" : "posted a voice note");
+      const { notifyUser } = await import("./notifications.js");
+      followers.forEach((uid) => {
+        writeNotif(uid, "newPost", { postId: ref.id, text: `${state.me?.name || "Someone"} ${msg}` }).catch(() => {});
+        notifyUser(uid, state.me?.name || "Someone", msg, "/#post/" + ref.id, state.me?.photoURL || "", "").catch(() => {});
+      });
+    })().catch(() => {});
+  };
+
+  const createComment = async (p, author, { text, voice }, replyTo) => {
+    const data = { text: text || "", authorUid: state.uid, likes: [], createdAt: serverTimestamp() };
+    if (voice) data.audio = await uploadVoice(voice);
+    if (replyTo) {
+      data.parentCommentId = replyTo.id;
+      data.replyToUid = replyTo.uid || null;
+      data.replyToName = replyTo.name || "";
+      data.replyToUsername = replyTo.username || "";
+    }
+    await addDoc(collection(db, "posts", p.id, "comments"), data);
+    await updateDoc(doc(db, "posts", p.id), { commentCount: increment(1) });
+    sfxComment();
+    trackAction("comment");
+    const snippet = text ? `"${text.slice(0, 60)}"` : "sent a voice note";
+    const me = state.me?.name || "Someone";
+    if (author?.uid && author.uid !== state.uid) {
+      writeNotif(author.uid, "comment", { postId: p.id, text: `${me} commented: ${snippet}` }).catch(() => {});
+      import("./notifications.js").then(({ notifyUser }) =>
+        notifyUser(author.uid, me, "commented on your post", "/#post/" + p.id, state.me?.photoURL || "", "")).catch(() => {});
+    }
+    if (replyTo?.uid && replyTo.uid !== state.uid && replyTo.uid !== author?.uid) {
+      writeNotif(replyTo.uid, "commentReply", { postId: p.id, text: `${me} replied to your comment: ${snippet}` }).catch(() => {});
+      import("./notifications.js").then(({ notifyUser }) =>
+        notifyUser(replyTo.uid, me, "replied to your comment", "/#post/" + p.id, state.me?.photoURL || "")).catch(() => {});
+    }
+  };
+
+  // -------------------------------------------------------------------------
+  // POST ROW
+  // -------------------------------------------------------------------------
+  const nameLine = (u, ts, full = false) => el("div", { class: "gb-line" },
+    el("span", { class: "gb-name", onclick: (e) => { e.stopPropagation(); goProfile(u?.uid); } },
+      u?.name || "User",
+      u?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null),
+    full ? el("span", { class: "gb-sub" }, `@${u?.username || "user"}`) : null,
+    full ? el("span", { class: "gb-dot" }, "·") : null,
+    el("span", { class: "gb-sub" }, when(ts)),
+  );
+
+  // -------------------------------------------------------------------------
+  // MEDIA HELPERS — edits are stored as parameters and applied through Cloudinary delivery URLs
+  // -------------------------------------------------------------------------
+  const FX = {
+    none:  { label: "Original", css: "none",                                          cl: "" },
+    vivid: { label: "Vivid",    css: "saturate(1.45) contrast(1.05)",                  cl: "e_vibrance:50" },
+    warm:  { label: "Warm",     css: "sepia(.28) saturate(1.2) hue-rotate(-8deg)",     cl: "e_sepia:25" },
+    mono:  { label: "Mono",     css: "grayscale(1) contrast(1.05)",                    cl: "e_grayscale" },
+    fade:  { label: "Fade",     css: "contrast(.88) brightness(1.08) saturate(.8)",    cl: "e_contrast:-20/e_brightness:10/e_saturation:-20" },
+  };
+  const FITS = [["4:5", "Portrait"], ["1:1", "Square"], ["orig", "Original"]];
+  const arOf = (fit, w, h) => fit === "1:1" ? 1 : fit === "orig" && w && h ? Math.min(1.78, Math.max(0.56, w / h)) : 0.8;
+  const cropStep = (fit, w) => fit === "orig" ? `c_limit,w_${w}` : `c_fill,ar_${fit === "1:1" ? "1:1" : "4:5"},g_auto,w_${w}`;
+
+  // image: cover = { url, width, height, fit, fx }
+  const coverUrl = (c, w = 900, { crop = true } = {}) => {
+    if (!c?.url || !c.url.includes("/image/upload/")) return c?.url || "";
+    const fx = FX[c.fx]?.cl;
+    const chain = [crop ? cropStep(c.fit || "4:5", w) : `c_limit,w_${w}`, fx, "f_auto,q_auto"].filter(Boolean).join("/");
+    return c.url.replace("/image/upload/", `/image/upload/${chain}/`);
+  };
+  // video: v = { url, duration, start, end, muted, fit, poster, width, height }
+  const vidSrc = (v) => {
+    if (!v?.url.includes("/video/upload/")) return v?.url || "";
+    const tx = [`so_${(v.start || 0).toFixed(1)}`, v.end ? `eo_${v.end.toFixed(1)}` : null, cropStep(v.fit || "4:5", 720), v.muted ? "ac_none" : null, "vc_h264", "q_auto"].filter(Boolean).join(",");
+    return v.url.replace("/video/upload/", `/video/upload/${tx}/`).replace(/\.\w+$/, ".mp4");
+  };
+  const vidPoster = (v) => {
+    if (!v?.url.includes("/video/upload/")) return "";
+    const tx = [`so_${(v.poster ?? v.start ?? 0).toFixed(1)}`, cropStep(v.fit || "4:5", 720), "f_jpg", "q_auto"].join(",");
+    return v.url.replace("/video/upload/", `/video/upload/${tx}/`).replace(/\.\w+$/, ".jpg");
+  };
+
+  const uploadXHR = (file, kind, onProgress) => new Promise((resolve, reject) => {
+    if (cloudinaryConfig.cloudName.startsWith("YOUR_")) { toast("Cloudinary not configured"); return reject(new Error("Cloudinary not configured")); }
+    const x = new XMLHttpRequest();
+    x.open("POST", `https://api.cloudinary.com/v1_1/${cloudinaryConfig.cloudName}/${kind === "video" ? "video" : "image"}/upload`);
+    x.upload.onprogress = (e) => { if (e.lengthComputable) onProgress?.(e.loaded / e.total); };
+    x.onerror = () => reject(new Error("Network error"));
+    x.onload = () => {
+      let j = {}; try { j = JSON.parse(x.responseText); } catch {}
+      if (x.status >= 200 && x.status < 300 && j.secure_url) {
+        const out = { url: j.secure_url, publicId: j.public_id };
+        if (j.width) out.width = j.width; if (j.height) out.height = j.height; if (j.duration) out.duration = j.duration;
+        resolve(out);
+      } else reject(new Error(j.error?.message || "Upload failed"));
+    };
+    const fd = new FormData(); fd.append("file", file); fd.append("upload_preset", cloudinaryConfig.uploadPreset);
+    x.send(fd);
+  });
+
+  // -------------------------------------------------------------------------
+  // STUDIO — edit before posting. Video: trim, cover frame, sound, framing. Image: framing + filter.
+  // Resolves with the edit parameters, or null if cancelled.
+  // -------------------------------------------------------------------------
+  const MAX_VIDEO_SEC = 60;
+  const openStudio = ({ kind, file, edit }) => new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    let ov;
+    const finish = (val) => { try { vid?.pause(); } catch {} ov.remove(); URL.revokeObjectURL(url); document.body.classList.remove("gb-studio-open"); resolve(val); };
+    const isVid = kind === "video";
+    const st = { fit: edit?.fit || "4:5", fx: edit?.fx || "none", start: edit?.start || 0, end: edit?.end || 0,
+                 muted: !!edit?.muted, poster: edit?.poster ?? null, dur: 0, w: 0, h: 0 };
+
+    const frame = el("div", { class: "gb-st-frame" });
+    const setFrame = () => {
+      frame.style.aspectRatio = String(arOf(st.fit, st.w, st.h));
+      frame.classList.toggle("contain", false);
+    };
+    let vid = null, img = null;
+    if (isVid) {
+      vid = el("video", { src: url, playsinline: "", loop: "", preload: "auto" });
+      vid.muted = st.muted;
+      frame.append(vid);
+    } else {
+      img = el("img", { src: url, alt: "" });
+      frame.append(img);
+      img.addEventListener("load", () => { st.w = img.naturalWidth; st.h = img.naturalHeight; setFrame(); });
+    }
+    setFrame();
+    const applyFx = () => { if (img) img.style.filter = FX[st.fx].css; };
+
+    // ---- video controls
+    let trimBox = null, tInfo = null;
+    const fmt = (n) => fmtDur(n);
+    const refreshTrim = () => {
+      if (!trimBox) return;
+      const p = (n) => (st.dur ? (n / st.dur) * 100 : 0);
+      sel.style.left = p(st.start) + "%"; sel.style.width = Math.max(0, p(st.end) - p(st.start)) + "%";
+      a.value = st.start; b.value = st.end;
+      tInfo.textContent = `${fmt(st.start)} – ${fmt(st.end)} · ${fmt(st.end - st.start)} selected`;
+    };
+    let a, b, sel, playBtn, soundBtn;
+    if (isVid) {
+      const track = el("div", { class: "gb-trim-track" });
+      sel = el("div", { class: "gb-trim-sel" });
+      a = el("input", { type: "range", min: "0", max: "1", step: "0.1", value: "0" });
+      b = el("input", { type: "range", min: "0", max: "1", step: "0.1", value: "1" });
+      track.append(sel, a, b);
+      tInfo = el("div", { class: "gb-trim-info" }, "Loading…");
+      trimBox = el("div", { class: "gb-trim" }, el("div", { class: "gb-st-label" }, "Trim"), track, tInfo);
+      a.addEventListener("input", () => {
+        st.start = Math.min(parseFloat(a.value), st.end - 0.5);
+        if (st.end - st.start > MAX_VIDEO_SEC) st.end = st.start + MAX_VIDEO_SEC;
+        vid.currentTime = st.start; refreshTrim();
+      });
+      b.addEventListener("input", () => {
+        st.end = Math.max(parseFloat(b.value), st.start + 0.5);
+        if (st.end - st.start > MAX_VIDEO_SEC) st.start = st.end - MAX_VIDEO_SEC;
+        vid.currentTime = Math.max(st.start, st.end - 0.3); refreshTrim();
+      });
+      vid.addEventListener("loadedmetadata", () => {
+        st.dur = Number.isFinite(vid.duration) ? vid.duration : 0;
+        st.w = vid.videoWidth; st.h = vid.videoHeight;
+        if (!st.end || st.end > st.dur) st.end = Math.min(st.dur, st.start + MAX_VIDEO_SEC);
+        a.max = b.max = String(st.dur); setFrame(); refreshTrim();
+        if (st.dur > MAX_VIDEO_SEC) toast(`Videos are up to ${MAX_VIDEO_SEC}s. Trim the part you want.`);
+        vid.currentTime = st.start;
+      });
+      vid.addEventListener("timeupdate", () => {
+        if (vid.currentTime >= st.end || vid.currentTime < st.start - 0.3) vid.currentTime = st.start;
+      });
+      playBtn = el("button", { class: "gb-st-play", type: "button", title: "Play / pause" }, el("i", { class: "ri-play-fill" }));
+      const syncPlay = () => { playBtn.firstChild.className = vid.paused ? "ri-play-fill" : "ri-pause-fill"; frame.classList.toggle("playing", !vid.paused); };
+      const toggle = () => { vid.paused ? vid.play().catch(() => {}) : vid.pause(); };
+      playBtn.addEventListener("click", toggle); frame.addEventListener("click", toggle);
+      vid.addEventListener("play", syncPlay); vid.addEventListener("pause", syncPlay);
+      frame.append(playBtn);
+    } else applyFx();
+
+    // ---- framing chips (both)
+    const fitRow = el("div", { class: "gb-chips" });
+    FITS.forEach(([k, label]) => {
+      const c = el("button", { class: `gb-chip${st.fit === k ? " on" : ""}`, type: "button", onclick: () => {
+        st.fit = k; [...fitRow.children].forEach((x) => x.classList.toggle("on", x === c)); setFrame();
+      } }, label);
+      fitRow.appendChild(c);
+    });
+    const tools = el("div", { class: "gb-st-tools" }, el("div", { class: "gb-st-label" }, "Framing"), fitRow);
+
+    if (isVid) {
+      soundBtn = el("button", { class: `gb-chip${st.muted ? " on" : ""}`, type: "button", onclick: () => {
+        st.muted = !st.muted; vid.muted = st.muted; soundBtn.classList.toggle("on", st.muted);
+        soundBtn.innerHTML = st.muted ? '<i class="ri-volume-mute-fill"></i> Muted' : '<i class="ri-volume-up-fill"></i> Sound on';
+      } });
+      soundBtn.innerHTML = st.muted ? '<i class="ri-volume-mute-fill"></i> Muted' : '<i class="ri-volume-up-fill"></i> Sound on';
+      const coverBtn = el("button", { class: "gb-chip", type: "button", onclick: () => {
+        st.poster = Math.min(st.end, Math.max(st.start, vid.currentTime)); toast(`Cover set at ${fmt(st.poster)}`);
+      } }, el("i", { class: "ri-image-line" }), " Use this frame as cover");
+      tools.append(el("div", { class: "gb-st-label" }, "Options"), el("div", { class: "gb-chips" }, soundBtn, coverBtn));
+    } else {
+      const fxRow = el("div", { class: "gb-chips" });
+      Object.entries(FX).forEach(([k, f]) => {
+        const c = el("button", { class: `gb-chip${st.fx === k ? " on" : ""}`, type: "button", onclick: () => {
+          st.fx = k; [...fxRow.children].forEach((x) => x.classList.toggle("on", x === c)); applyFx();
+        } }, f.label);
+        fxRow.appendChild(c);
+      });
+      tools.append(el("div", { class: "gb-st-label" }, "Filter"), fxRow);
+    }
+
+    const done = el("button", { class: "gb-st-done", type: "button", onclick: () => {
+      if (isVid) {
+        if (!st.dur) { toast("Video is still loading"); return; }
+        finish({ kind: "video", fit: st.fit, start: +st.start.toFixed(1), end: +st.end.toFixed(1), muted: st.muted, poster: st.poster, width: st.w, height: st.h, duration: st.dur });
+      } else finish({ kind: "image", fit: st.fit, fx: st.fx, width: st.w, height: st.h });
+    } }, "Done");
+    const top = el("div", { class: "gb-st-top" },
+      el("button", { class: "gb-icon-btn", type: "button", title: "Cancel", onclick: () => finish(null) }, el("i", { class: "ri-close-line" })),
+      el("strong", {}, isVid ? "Video studio" : "Photo studio"), done);
+    ov = el("div", { class: "gb-studio" }, top, el("div", { class: "gb-st-body" }, frame, isVid ? trimBox : null, tools));
+    document.body.classList.add("gb-studio-open");
+    document.body.appendChild(ov);
+    if (isVid) vid.play().catch(() => {});
+  });
+
+  // -------------------------------------------------------------------------
+  // VOICE REVIEW — listen back before sending (fills the recording bar)
+  // -------------------------------------------------------------------------
+  const reviewVoice = (result, rec) => new Promise((resolve) => {
+    const url = URL.createObjectURL(result.blob);
+    const au = new Audio(url);
+    const play = el("button", { class: "gb-send", type: "button", title: "Play" }, el("i", { class: "ri-play-fill" }));
+    const time = el("span", { class: "gb-rec-time" }, fmtDur(result.duration));
+    const bars = el("div", { class: "gb-rec-live review" }, ...shapeWave(result.waveform || [], 28).map((h) => el("i", { style: `height:${Math.max(12, h)}%;animation:none` })));
+    const bin = el("button", { class: "gb-icon-btn", type: "button", title: "Discard" }, el("i", { class: "ri-delete-bin-line" }));
+    const go = el("button", { class: "gb-send", type: "button", title: "Send voice note" }, el("i", { class: "ri-send-plane-fill" }));
+    const end = (v) => { au.pause(); URL.revokeObjectURL(url); resolve(v); };
+    play.addEventListener("click", () => { if (au.paused) { stopAllAudio(); au.play().catch(() => {}); } else au.pause(); });
+    au.addEventListener("play", () => { play.firstChild.className = "ri-pause-fill"; });
+    au.addEventListener("pause", () => { play.firstChild.className = "ri-play-fill"; });
+    au.addEventListener("ended", () => { play.firstChild.className = "ri-play-fill"; });
+    bin.addEventListener("click", () => end(false)); go.addEventListener("click", () => end(true));
+    rec.innerHTML = ""; rec.classList.remove("hidden");
+    rec.append(play, bars, time, bin, go);
+  });
+
+  // -------------------------------------------------------------------------
+  // VIDEO NOTE — rounded frame, muted autoplay in view, tap to pause, sound toggle, seek bar
+  // -------------------------------------------------------------------------
+  let _soundVid = null;
+  const buildVideoNote = (v, ctx = null, openAll = null) => {
+    const ar = arOf(v.fit || "4:5", v.width, v.height);
+    const vid = el("video", { playsinline: "", loop: "", preload: "metadata", poster: vidPoster(v) });
+    vid.muted = true; vid.src = vidSrc(v);
+    let fallback = false;
+    vid.addEventListener("error", () => {
+      if (fallback) return; fallback = true;
+      vid.src = `${v.url}#t=${v.start || 0},${v.end || ""}`;
+      vid.addEventListener("timeupdate", () => { if (v.end && vid.currentTime >= v.end) vid.currentTime = v.start || 0; });
+    });
+    const len = (v.end || v.duration || 0) - (v.start || 0);
+    const chip = el("span", { class: "gb-vid-dur" }, fmtDur(len));
+    const prog = el("div", { class: "gb-vid-prog" }, el("i", {}));
+    const sound = v.muted ? null : el("button", { class: "gb-vid-snd", type: "button", title: "Sound" }, el("i", { class: "ri-volume-mute-fill" }));
+    const badge = el("div", { class: "gb-vid-play" }, el("i", { class: "ri-play-fill" }));
+    const box = el("div", { class: "gb-vid", style: `aspect-ratio:${ar}` }, vid, badge, chip, sound, prog);
+    vid.addEventListener("timeupdate", () => {
+      const s = v.start || 0, e = v.end || vid.duration || 1, f = Math.min(1, Math.max(0, (vid.currentTime - s) / (e - s || 1)));
+      prog.firstChild.style.width = f * 100 + "%";
+    });
+    badge.style.pointerEvents = "none";
+    vid.addEventListener("play", () => { box.classList.remove("paused"); badge.style.pointerEvents = "none"; });
+    vid.addEventListener("pause", () => { box.classList.add("paused"); badge.style.pointerEvents = "auto"; });
+    box.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (e.target.closest(".gb-vid-snd")) return;
+      // tap the video (not the play badge / sound / seek bar) -> full-screen viewer with Like / Comment / React
+      if (ctx && !e.target.closest(".gb-vid-prog,.gb-vid-play")) {
+        try { vid.pause(); } catch {} vid._manual = false;
+        const _tx = v.url.includes("/video/upload/") ? [`so_${(v.start || 0).toFixed(1)}`, v.end ? `eo_${v.end.toFixed(1)}` : null, "vc_h264", "q_auto"].filter(Boolean).join(",") : "";
+        if (openAll) { openAll(); return; }
+        openVideoViewer([{ type: "video", url: _tx ? v.url.replace("/video/upload/", `/video/upload/${_tx}/`).replace(/\.\w+$/, ".mp4") : v.url }], 0, ctx); return;
+      }
+      if (e.target.closest(".gb-vid-prog")) {
+        const r = prog.getBoundingClientRect(), f = (e.clientX - r.left) / r.width, s = v.start || 0, en = v.end || vid.duration || 1;
+        vid.currentTime = s + f * (en - s); return;
+      }
+      if (vid.paused) { vid._manual = false; vid.play().catch(() => {}); } else { vid._manual = true; vid.pause(); }
+    });
+    sound?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      vid.muted = !vid.muted;
+      sound.firstChild.className = vid.muted ? "ri-volume-mute-fill" : "ri-volume-up-fill";
+      if (!vid.muted) {
+        stopAllAudio();
+        if (_soundVid && _soundVid !== vid) { _soundVid.muted = true; _soundVid._btn && (_soundVid._btn.firstChild.className = "ri-volume-mute-fill"); }
+        _soundVid = vid; vid._btn = sound;
+        if (vid.paused) vid.play().catch(() => {});
+      }
+    });
+    if (window.IntersectionObserver) {
+      new IntersectionObserver((ents) => ents.forEach((en) => {
+        if (en.isIntersecting && en.intersectionRatio >= 0.6) { if (!vid._manual) vid.play().catch(() => {}); }
+        else { vid.pause(); if (!vid.muted) { vid.muted = true; sound && (sound.firstChild.className = "ri-volume-mute-fill"); } }
+      }), { threshold: [0, 0.6] }).observe(box);
+    }
+    return box;
+  };
+
+
+  // -------------------------------------------------------------------------
+  // DAILY PROMPT — one question a day for everyone (same on every device)
+  // -------------------------------------------------------------------------
+  const PROMPTS = [
+    "What made you smile today?", "What's one thing you're proud of this week?", "Tell us about someone who changed your life.",
+    "What song is stuck in your head right now?", "What's a small win you had today?", "What did you want to be when you were a kid?",
+    "What's the best advice you've ever received?", "Describe your perfect Sunday.", "What's something you're learning right now?",
+    "What's a food that tastes like home to you?", "Who do you want to say thank you to today?", "What's a fear you've overcome?",
+    "If you could talk to your younger self, what would you say?", "What's the kindest thing a stranger has done for you?",
+    "What's one habit you're building?", "Tell us your funniest school memory.", "What's a place that feels like peace to you?",
+    "What are you looking forward to this month?", "What's something you believe that not everyone does?", "What's the best thing you ate this week?",
+    "What's a skill you wish you had?", "Tell us about your day in 30 seconds.", "What's a movie or show you can watch again and again?",
+    "What does 'belonging' feel like to you?", "What's a dream you haven't told anyone?", "Who inspires you, and why?",
+    "What's the hardest thing you've done that you're glad you did?", "What's a tradition from your family or culture you love?",
+    "What would you do with a free day and no phone?", "What's something that always cheers you up?", "What's a mistake that taught you something?",
+    "What's one thing you're grateful for right now?", "Describe your hometown to someone who's never been.", "What's a book, video or voice that changed how you think?",
+    "What's a goal you're chasing this year?", "What's your favourite sound in the world?", "What's the best compliment you've ever received?",
+    "What's something you're building or making?", "If today had a theme song, what would it be?", "What do you wish more people knew about you?",
+  ];
+  const dayKey = (d = new Date()) => d.toISOString().slice(0, 10);
+  const promptFor = (day = dayKey()) => {
+    const n = Math.floor(Date.parse(day + "T00:00:00Z") / 86400000);
+    return { day, q: PROMPTS[((n % PROMPTS.length) + PROMPTS.length) % PROMPTS.length] };
+  };
+
+  const buildPromptCard = (composer) => {
+    const pr = promptFor();
+    const me = { ...defaultCharacter(state.uid), ...(state.me?.character || {}) };
+    const art = el("div", { class: "gb-pc-art", html: characterSVG(me, 56), onclick: () => { location.hash = "#character"; }, title: "Customise your character" });
+    const count = el("button", { class: "gb-pc-link", type: "button", onclick: () => { location.hash = `#prompt/${pr.day}`; } }, "See answers");
+    const ans = el("button", { class: "gb-pc-go", type: "button", onclick: () => composer.setPrompt(pr) }, el("i", { class: "ri-mic-fill" }), " Answer");
+    const card = el("div", { class: "gb-pc" }, art,
+      el("div", { class: "gb-pc-body" },
+        el("div", { class: "gb-pc-k" }, "Today's question"),
+        el("div", { class: "gb-pc-q" }, pr.q),
+        el("div", { class: "gb-pc-row" }, ans, count)));
+    getDocs(query(collection(db, "posts"), where("prompt.day", "==", pr.day), limit(100))).then((snap) => {
+      const n = snap.size, mine = snap.docs.some((d) => d.data().authorUid === state.uid);
+      count.textContent = n ? `${n}${n >= 100 ? "+" : ""} answer${n === 1 ? "" : "s"}` : "Be the first";
+      if (mine) { ans.innerHTML = '<i class="ri-check-line"></i> Answered'; ans.classList.add("done"); }
+    }).catch(() => {});
+    return card;
+  };
+
+  const renderPromptPage = (root, day) => {
+    const pr = promptFor(day || dayKey());
+    const list = el("div", { class: "gb-list" });
+    const col = el("div", { class: "gb-col gb-page" },
+      el("div", { class: "gb-head" },
+        el("button", { class: "gb-icon-btn", type: "button", onclick: () => history.back() }, el("i", { class: "ri-arrow-left-line" })),
+        el("div", { class: "gb-head-t" }, el("strong", {}, "Daily question"))),
+      el("div", { class: "gb-pc solo" }, el("div", { class: "gb-pc-body" }, el("div", { class: "gb-pc-k" }, pr.day), el("div", { class: "gb-pc-q big" }, pr.q))),
+      list);
+    root.appendChild(col);
+    list.append(skeletonRow(), skeletonRow());
+    const unsub = onSnapshot(query(collection(db, "posts"), where("prompt.day", "==", pr.day), limit(100)), async (snap) => {
+      const posts = snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      const users = await Promise.all([...new Set(posts.map((p) => p.authorUid))].map(fetchUser));
+      const map = Object.fromEntries(users.filter(Boolean).map((u) => [u.uid, u]));
+      list.innerHTML = "";
+      if (!posts.length) { list.appendChild(el("div", { class: "empty" }, el("i", { class: "ri-mic-line" }), el("div", { class: "t" }, "No answers yet. Go to the feed and be the first!"))); return; }
+      posts.forEach((p) => list.appendChild(renderVoicePost(p, map[p.authorUid])));
+    }, () => { list.innerHTML = ""; });
+    return () => { unsub(); stopAllAudio(); };
+  };
+
+  // -------------------------------------------------------------------------
+  // VOICE REACTIONS — a 5-second voice clip as a reaction (one per person per post)
+  // -------------------------------------------------------------------------
+  const REACT_MAX_SEC = 5;
+  const playReact = (url, chip) => {
+    stopAllAudio();
+    const a = new Audio(url);
+    chip.classList.add("playing");
+    const off = () => chip.classList.remove("playing");
+    a.addEventListener("ended", off); a.addEventListener("pause", off);
+    _playing = a; a.play().catch(off);
+  };
+  const reactChip = (r, u) => {
+    const b = el("button", { class: "gb-vr-chip", type: "button", title: `${u?.name || "Someone"}'s voice reaction` },
+      el("img", { src: avatarFor(u), alt: "" }), el("i", { class: "ri-play-fill" }));
+    b.addEventListener("click", (e) => { e.stopPropagation(); playReact(r.audio.url, b); });
+    return b;
+  };
+  const buildReactions = (p, author, detail) => {
+    const row = el("div", { class: "gb-vr hidden" });
+    const rec = el("div", { class: "gb-vr-rec hidden" });
+    const addChip = (r, u) => { row.classList.remove("hidden"); row.prepend(reactChip(r, u)); };
+    const load = async () => {
+      const snap = await getDocs(query(collection(db, "posts", p.id, "vreacts"), orderBy("createdAt", "desc"), limit(10)));
+      const items = snap.docs.map((d) => d.data()).filter((r) => r.audio?.url);
+      const users = await Promise.all(items.map((r) => fetchUser(r.uid)));
+      row.innerHTML = "";
+      items.forEach((r, i) => row.appendChild(reactChip(r, users[i])));
+      row.classList.toggle("hidden", !items.length);
+    };
+    if (detail || p.vreactCount > 0) load().catch(() => {});
+
+    const btn = el("button", { class: "gb-act", type: "button", title: "React with your voice" }, el("i", { class: "ri-mic-line" }), el("span", {}, "Voice"));
+    let session = null, timer = null;
+    const close = () => { clearInterval(timer); session?.cancel?.(); session = null; rec.classList.add("hidden"); rec.innerHTML = ""; btn.classList.remove("on"); };
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!rec.classList.contains("hidden")) { close(); return; }
+      if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) { toast("Voice recording isn't supported on this browser"); return; }
+      stopAllAudio();
+      try { session = await startRecorder(); } catch { toast("Microphone access denied"); return; }
+      btn.classList.add("on");
+      const t = el("span", { class: "gb-rec-time" }, `0:00 / 0:0${REACT_MAX_SEC}`);
+      const x = el("button", { class: "gb-icon-btn sm", type: "button", title: "Cancel", onclick: (ev) => { ev.stopPropagation(); close(); } }, el("i", { class: "ri-close-line" }));
+      const go = el("button", { class: "gb-send sm", type: "button", title: "Send reaction" }, el("i", { class: "ri-send-plane-fill" }));
+      const finish = async () => {
+        if (!session) return;
+        const s = session; session = null; clearInterval(timer); s.stop();
+        const result = await s.done;
+        rec.classList.add("busy");
+        if (result.duration < 0.5) { rec.classList.remove("busy"); close(); toast("Too short. Try again."); return; }
+        try {
+          const audio = await uploadVoice(result);
+          const ref = doc(db, "posts", p.id, "vreacts", state.uid);
+          const had = (await getDoc(ref)).exists();
+          await setDoc(ref, { uid: state.uid, audio, createdAt: serverTimestamp() });
+          if (!had) updateDoc(doc(db, "posts", p.id), { vreactCount: increment(1) }).catch(() => {});
+          row.querySelectorAll(".gb-vr-chip").forEach((c) => { if (c.title.startsWith((state.me?.name || "") + "'s")) c.remove(); });
+          addChip({ audio }, state.me);
+          sfxComment(); toast("Reaction sent"); trackAction("react");
+          if (author?.uid && author.uid !== state.uid && !had) writeNotif(author.uid, "comment", { postId: p.id, text: `${state.me?.name || "Someone"} reacted to your post with a voice note` }).catch(() => {});
+        } catch (err) { toast("Couldn't send: " + (err.message || "try again")); }
+        rec.classList.remove("busy"); close();
+      };
+      go.addEventListener("click", (ev) => { ev.stopPropagation(); finish(); });
+      rec.innerHTML = ""; rec.append(el("span", { class: "gb-rec-dot" }), t, el("span", { class: "gb-vr-hint" }, "Say it in 5 seconds"), x, go);
+      rec.classList.remove("hidden");
+      const t0 = Date.now();
+      timer = setInterval(() => {
+        const sec = Math.min(REACT_MAX_SEC, (Date.now() - t0) / 1000);
+        t.textContent = `0:0${Math.floor(sec)} / 0:0${REACT_MAX_SEC}`;
+        if (sec >= REACT_MAX_SEC) finish();
+      }, 150);
+    });
+    return { btn, row, rec };
+  };
+
+  const openLightbox = (url) => {
+    const img = el("img", { src: url, alt: "" });
+    const close = () => { ov.remove(); document.removeEventListener("keydown", onKey); };
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    const x = el("button", { class: "gb-lb-x", type: "button", title: "Close", onclick: close }, el("i", { class: "ri-close-line" }));
+    const ov = el("div", { class: "gb-lightbox", onclick: close }, img, x);
+    document.addEventListener("keydown", onKey);
+    document.body.appendChild(ov);
+  };
+
+  // Text post with an image. Feed: text overlays a blurred lower half (clamped, "See more" moves the
+  // full text below the image). Detail page: image and text are separate. Tap image = original photo.
+  // Long text posts: clamp in the feed, "Read more" opens the post page
+  const longText = (p, detail) => {
+    const t = el("div", { class: "gb-text allow-select", html: linkify(p.text) });
+    if (detail || (p.text.length < 420 && p.text.split("\n").length < 8)) return el("div", { class: "gb-text-wrap" }, t);
+    t.classList.add("clamp");
+    return el("div", { class: "gb-text-wrap" }, t, el("button", { class: "gb-more", type: "button", onclick: () => { location.hash = `#post/${p.id}`; } }, "Read more"));
+  };
+
+  const buildCover = (p, detail, ctx = null) => {
+    const open = (e) => { if (e.target.closest("a,button")) return; e.stopPropagation(); if (ctx) openImageZoom(coverUrl(p.cover, 1800, { crop: false }), ctx); else openLightbox(coverUrl(p.cover, 1800, { crop: false })); };
+    if (detail) {
+      return el("div", { class: "gb-cover-plain" },
+        el("img", { src: coverUrl(p.cover, 1200), alt: "", loading: "lazy", onclick: open }),
+        el("div", { class: "gb-text allow-select", html: linkify(p.text) }));
+    }
+    const clamp = el("div", { class: "gb-cover-clamp", html: linkify(p.text) });
+    const more = el("button", { class: "gb-cover-more hidden", type: "button" }, "See more");
+    const less = el("button", { class: "gb-cover-more", type: "button" }, "See less");
+    const full = el("div", { class: "gb-cover-full hidden" },
+      el("div", { class: "gb-text allow-select", html: linkify(p.text) }), less);
+    const card = el("div", { class: "gb-cover", style: `aspect-ratio:${arOf(p.cover.fit || "4:5", p.cover.width, p.cover.height)}`, onclick: open },
+      el("img", { class: "gb-cover-img", src: coverUrl(p.cover), alt: "", loading: "lazy" }),
+      el("div", { class: "gb-cover-text" }, clamp, more));
+    const wrap = el("div", { class: "gb-cover-wrap" }, card, full);
+    const toggle = (openIt) => (e) => {
+      e.stopPropagation();
+      wrap.classList.toggle("open", openIt);
+      full.classList.toggle("hidden", !openIt);
+      if (!openIt) measure();
+    };
+    const measure = () => { if (!wrap.classList.contains("open")) more.classList.toggle("hidden", !(clamp.scrollHeight > clamp.clientHeight + 1)); };
+    more.addEventListener("click", toggle(true));
+    less.addEventListener("click", toggle(false));
+    if (window.ResizeObserver) new ResizeObserver(measure).observe(clamp); else more.classList.remove("hidden");
+    return wrap;
+  };
+
+  // -------------------------------------------------------------------------
+  // DROP-STYLE POST CARD — header / swipe media / actions / reactions / caption
+  // -------------------------------------------------------------------------
+  const EMOJI = [["fire", "🔥"], ["love", "❤️"], ["lol", "😂"], ["wow", "😮"], ["clap", "👏"]];
+
+  const vidViewerUrl = (v) => {
+    if (!v.url.includes("/video/upload/")) return v.url;
+    const tx = [`so_${(v.start || 0).toFixed(1)}`, v.end ? `eo_${v.end.toFixed(1)}` : null, "vc_h264", "q_auto"].filter(Boolean).join(",");
+    return v.url.replace("/video/upload/", `/video/upload/${tx}/`).replace(/\.\w+$/, ".mp4");
+  };
+
+  // Horizontal swipe carousel: image cover and video note are slides of the same strip.
+  const buildMedia = (p, ctx) => {
+    const items = [];
+    if (p.cover?.url) items.push({ type: "image", src: coverUrl(p.cover, 1000), full: coverUrl(p.cover, 1800, { crop: false }), ar: arOf(p.cover.fit || "4:5", p.cover.width, p.cover.height) });
+    if (p.video?.url) items.push({ type: "video", v: p.video, ar: arOf(p.video.fit || "4:5", p.video.width, p.video.height) });
+    if (!items.length) return null;
+    const viewerItems = items.map((it) => it.type === "video" ? { type: "video", url: vidViewerUrl(it.v) } : { type: "image", url: it.full });
+    const openAt = (i) => {
+      if (items.length === 1 && items[0].type === "image") openImageZoom(items[0].full, ctx);
+      else openVideoViewer(viewerItems, i, ctx);
+    };
+    const track = el("div", { class: "dp-track" });
+    items.forEach((it, i) => {
+      track.appendChild(el("div", { class: "dp-slide" }, it.type === "image"
+        ? el("img", { src: it.src, alt: "", loading: "lazy", draggable: "false", onclick: (e) => { e.stopPropagation(); openAt(i); } })
+        : buildVideoNote(it.v, ctx, () => openAt(i))));
+    });
+    const wrap = el("div", { class: `dp-media${items.length > 1 ? " multi" : ""}`, style: `aspect-ratio:${items[0].ar}` }, track);
+    if (items.length > 1) {
+      const counter = el("div", { class: "dp-counter" }, `1/${items.length}`);
+      const dots = items.map((_, i) => el("span", { class: `dp-dot${i ? "" : " active"}` }));
+      const idxNow = () => Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
+      track.addEventListener("scroll", () => {
+        const i = Math.min(items.length - 1, Math.max(0, idxNow()));
+        counter.textContent = `${i + 1}/${items.length}`;
+        dots.forEach((d, k) => d.classList.toggle("active", k === i));
+        prev.classList.toggle("hidden", i === 0); next.classList.toggle("hidden", i === items.length - 1);
+      }, { passive: true });
+      const go = (d) => (e) => { e.stopPropagation(); track.scrollTo({ left: (idxNow() + d) * track.clientWidth, behavior: "smooth" }); };
+      const prev = el("button", { class: "dp-arrow l hidden", type: "button", "aria-label": "Previous", onclick: go(-1) }, el("i", { class: "ri-arrow-left-s-line" }));
+      const next = el("button", { class: "dp-arrow r", type: "button", "aria-label": "Next", onclick: go(1) }, el("i", { class: "ri-arrow-right-s-line" }));
+      wrap.append(counter, el("div", { class: "dp-dots" }, ...dots), prev, next);
+    }
+    return wrap;
+  };
+
+  // Emoji reaction chips + picker (Drop). Voice reactions stay in buildReactions().
+  const buildEmoji = (p, author) => {
+    let my = (p.userReactions || {})[state.uid] || null;
+    const counts = { ...(p.reactions || {}) };
+    const row = el("div", { class: "dp-reacts" });
+    const showPop = (anchor) => {
+      document.getElementById("dp-pop")?.remove();
+      const pop = el("div", { class: "dp-pop", id: "dp-pop" }, ...EMOJI.map(([k, e]) =>
+        el("button", { type: "button", onclick: (ev) => { ev.stopPropagation(); pop.remove(); toggle(k); } }, e)));
+      document.body.appendChild(pop);
+      const r = anchor.getBoundingClientRect();
+      pop.style.top = Math.max(8, r.top - pop.offsetHeight - 8) + "px";
+      pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 8)) + "px";
+      setTimeout(() => document.addEventListener("click", () => pop.remove(), { once: true }), 0);
+    };
+    const draw = () => {
+      row.innerHTML = "";
+      EMOJI.forEach(([k, e]) => {
+        const c = Math.max(0, counts[k] || 0);
+        if (!c && my !== k) return;
+        row.appendChild(el("button", { class: `dp-chip${my === k ? " active" : ""}`, type: "button", onclick: (ev) => { ev.stopPropagation(); toggle(k); } },
+          el("span", { class: "emoji" }, e), c ? el("span", { class: "count" }, String(c)) : null));
+      });
+      const pick = el("button", { class: "dp-picker", type: "button", "aria-label": "Add reaction" }, el("span", {}, "😊"), el("span", { class: "plus" }, "+"));
+      pick.addEventListener("click", (ev) => { ev.stopPropagation(); showPop(pick); });
+      row.appendChild(pick);
+    };
+    const toggle = (k) => {
+      const prevKey = my, upd = {};
+      if (prevKey === k) {
+        counts[k] = Math.max(0, (counts[k] || 0) - 1); my = null;
+        upd[`reactions.${k}`] = increment(-1); upd[`userReactions.${state.uid}`] = deleteField();
+      } else {
+        if (prevKey) { counts[prevKey] = Math.max(0, (counts[prevKey] || 0) - 1); upd[`reactions.${prevKey}`] = increment(-1); }
+        counts[k] = (counts[k] || 0) + 1; my = k;
+        upd[`reactions.${k}`] = increment(1); upd[`userReactions.${state.uid}`] = k;
+        sfxOrbit(); trackAction("react");
+        if (author?.uid && author.uid !== state.uid && !prevKey) {
+          writeNotif(author.uid, "orbit", { postId: p.id, text: `${state.me?.name || "Someone"} reacted ${EMOJI.find((x) => x[0] === k)[1]} to your post` }).catch(() => {});
+        }
+      }
+      draw();
+      updateDoc(doc(db, "posts", p.id), upd).catch(() => toast("Couldn't save reaction"));
+    };
+    draw();
+    return row;
+  };
+
+  const renderVoicePost = (p, author, { detail = false } = {}) => {
+    const mine = p.authorUid === state.uid;
+    let liked = (p.orbits || []).includes(state.uid);
+    const _vctx = {};   // used by the full-screen media viewer (Like / Comment / React)
+    const post = el("article", { class: `gb-post dp-card${detail ? " detail" : ""}`, data: { postId: p.id } });
+    const openPost = () => { location.hash = `#post/${p.id}`; };
+
+    // header: avatar · name  g/community · @user · time · tools
+    const commSlug = p.communitySlug || p.communityId;
+    const comm = p.communityId ? el("a", { class: "dp-comm", href: `#community/${encodeURIComponent(p.communityId)}`, onclick: (e) => e.stopPropagation() }, `g/${commSlug}`) : null;
+    const tools = el("div", { class: "dp-tools" },
+      mine ? el("button", { class: "dp-ibtn danger", type: "button", title: "Delete", onclick: async (e) => {
+        e.stopPropagation();
+        if (!confirm("Delete this post for everyone?")) return;
+        await deleteDoc(doc(db, "posts", p.id)).catch(() => {});
+        toast("Post deleted");
+        if (detail) location.hash = "#feed"; else post.remove();
+      } }, el("i", { class: "ri-delete-bin-line" })) : null,
+      !mine && !detail ? el("button", { class: "dp-ibtn", type: "button", title: "Hide this post", onclick: async (e) => {
+        e.stopPropagation();
+        await updateDoc(doc(db, "users", state.uid), { hiddenPosts: arrayUnion(p.id) }).catch(() => {});
+        state.me.hiddenPosts = [...new Set([...(state.me.hiddenPosts || []), p.id])];
+        post.remove();
+        toast("You won't see this again");
+      } }, el("i", { class: "ri-eye-off-line" })) : null,
+    );
+    const head = el("header", { class: "dp-head" },
+      el("img", { class: "dp-av", src: avatarFor(author), alt: "", onclick: (e) => { e.stopPropagation(); goProfile(author?.uid); } }),
+      el("div", { class: "dp-head-t" },
+        el("div", { class: "dp-un-line" },
+          el("span", { class: "dp-un", onclick: (e) => { e.stopPropagation(); goProfile(author?.uid); } },
+            author?.name || "User",
+            author?.verified ? el("span", { class: "verified", html: '<i class="ri-check-line"></i>' }) : null),
+          comm),
+        el("span", { class: "dp-time" }, `@${author?.username || "user"} · ${when(p.createdAt)}`)),
+      tools);
+
+    // actions
+    const likeIcon = el("i", { class: liked ? "ri-heart-3-fill" : "ri-heart-3-line" });
+    const likeCount = el("span", { class: "dp-count" }, String(p.orbitCount || 0));
+    const likeBtn = el("button", { class: `dp-act${liked ? " liked" : ""}`, type: "button", title: "Like" }, likeIcon, likeCount);
+    likeBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      liked = !liked;
+      if (liked) sfxOrbit();
+      likeIcon.className = liked ? "ri-heart-3-fill" : "ri-heart-3-line";
+      likeBtn.classList.toggle("liked", liked);
+      likeBtn.classList.remove("pulse"); void likeBtn.offsetWidth; if (liked) likeBtn.classList.add("pulse");
+      p.orbitCount = Math.max(0, (p.orbitCount || 0) + (liked ? 1 : -1));
+      likeCount.textContent = String(p.orbitCount);
+      trackAction("like", { on: liked });
+      await updateDoc(doc(db, "posts", p.id), {
+        orbits: liked ? arrayUnion(state.uid) : arrayRemove(state.uid),
+        orbitCount: increment(liked ? 1 : -1),
+      }).catch(() => {});
+      if (liked && author?.uid && author.uid !== state.uid) {
+        writeNotif(author.uid, "orbit", { postId: p.id, text: `${state.me?.name || "Someone"} liked your post` }).catch(() => {});
+      }
+    });
+    const commentBtn = el("button", { class: "dp-act", type: "button", title: "Comments", onclick: (e) => { e.stopPropagation(); if (!detail) openPost(); else document.querySelector(".gb-composer textarea")?.focus(); } },
+      el("i", { class: "ri-chat-1-line" }), el("span", { class: "dp-count" }, String(p.commentCount || 0)));
+    const shareBtn = el("button", { class: "dp-act", type: "button", title: "Share", onclick: async (e) => {
+      e.stopPropagation();
+      const url = postPublicUrl(p.id);
+      try { if (navigator.share) { await navigator.share({ url, text: (p.text || "").slice(0, 100) }); return; } } catch { return; }
+      try { await navigator.clipboard.writeText(url); toast("Link copied"); } catch { window.prompt("Copy this link:", url); }
+    } }, el("i", { class: "ri-share-forward-line" }));
+    const vr = buildReactions(p, author, detail);
+    vr.btn.className = "dp-act voice";
+    const actions = el("div", { class: "dp-actions" }, likeBtn, commentBtn, shareBtn, vr.btn);
+    Object.assign(_vctx, {
+      likeIcons: ["ri-heart-3-fill", "ri-heart-3-line"],
+      isLiked: () => liked,
+      likeCount: () => p.orbitCount || 0,
+      like: () => likeBtn.click(),
+      commentCount: () => p.commentCount || 0,
+      comment: () => { if (!detail) openPost(); },
+      react: () => vr.btn.click(),
+      share: () => shareBtn.click(),
+    });
+
+    // body
+    const hasMedia = !!(p.cover?.url || p.video?.url);
+    const media = hasMedia ? buildMedia(p, _vctx) : null;
+    let bodyText = null, caption = null;
+    if (p.text && !hasMedia) bodyText = longText(p, detail);
+    if (p.text && hasMedia) {
+      const txt = el("span", { class: `dp-cap-text allow-select${detail ? "" : " clamp"}`, html: linkify(p.text) });
+      caption = el("p", { class: "dp-caption" }, el("b", { class: "dp-cap-un", onclick: (e) => { e.stopPropagation(); goProfile(author?.uid); } }, author?.name || "User"), " ", txt);
+      if (!detail && (p.text.length > 120 || p.text.includes("\n"))) {
+        const more = el("button", { class: "dp-more", type: "button", onclick: (e) => { e.stopPropagation(); const on = txt.classList.toggle("clamp"); more.textContent = on ? "more" : "less"; } }, "more");
+        caption.append(" ", more);
+      }
+    }
+    const stats = detail ? el("div", { class: "dp-stats" },
+      el("span", {}, el("strong", {}, String(p.orbitCount || 0)), " likes"),
+      el("span", {}, el("strong", {}, String(p.commentCount || 0)), " comments"),
+      p.vreactCount ? el("span", {}, el("strong", {}, String(p.vreactCount)), " voice reactions") : null) : null;
+
+    post.append(...[
+      head,
+      p.prompt?.q ? el("a", { class: "gb-ptag dp-ptag", href: `#prompt/${p.prompt.day}`, onclick: (e) => e.stopPropagation() }, el("i", { class: "ri-chat-quote-line" }), ` ${p.prompt.q}`) : null,
+      bodyText ? el("div", { class: "dp-body" }, bodyText) : null,
+      media,
+      p.audio?.url ? el("div", { class: "dp-voice" }, buildVoicePlayer(p.audio)) : null,
+      actions, vr.rec, buildEmoji(p, author), vr.row,
+      caption,
+      stats,
+      !detail && (p.commentCount || 0) > 0 ? el("button", { class: "dp-viewall", type: "button", onclick: (e) => { e.stopPropagation(); openPost(); } },
+        `View all ${p.commentCount} comment${p.commentCount === 1 ? "" : "s"}`) : el("div", { class: "dp-pad" }),
+    ].filter(Boolean));
+    if (!detail) post.addEventListener("click", (e) => { if (!e.target.closest("button,a,.gb-voice,.dp-media,.dp-reacts,.gb-vr,.gb-vr-rec,input,textarea")) openPost(); });
+    return post;
+  };
+
+  // -------------------------------------------------------------------------
+  // COMMUNITIES (Reddit-style) — replaces Groups. Doc id = lowercase slug.
+  //   communities/{slug}: { name, slug, description, iconUrl, createdBy, members[], memberCount, postCount, createdAt, lastPostAt }
+  //   posts get: communityId, communitySlug, communityName
+  // -------------------------------------------------------------------------
+  let _postTarget = null, _targetLocked = false, _myComms = null;
+  const _chips = new Set();
+  const repaintChips = () => _chips.forEach((f) => f());
+  const slugify = (s) => (s || "").toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 21);
+  const commHue = (s) => { let h = 0; for (const c of s || "x") h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+  const isMember = (c) => (c.members || []).includes(state.uid);
+  const trendScore = (c) => {
+    const ageD = c.lastPostAt?.seconds ? (Date.now() / 1000 - c.lastPostAt.seconds) / 86400 : 99;
+    return (c.memberCount || 0) + (c.postCount || 0) * 2 + Math.max(0, 7 - ageD) * 5;
+  };
+  const commIcon = (c, size = 44) => c.iconUrl
+    ? el("img", { class: "cm-ico", src: optImg(c.iconUrl, 160), alt: "", style: `width:${size}px;height:${size}px` })
+    : el("span", { class: "cm-ico ph", style: `width:${size}px;height:${size}px;font-size:${Math.round(size * 0.42)}px;background:linear-gradient(135deg,hsl(${commHue(c.slug || c.id)} 75% 52%),hsl(${(commHue(c.slug || c.id) + 40) % 360} 75% 42%))` }, (c.name || c.slug || "?").slice(0, 1).toUpperCase());
+  const myComms = () => _myComms || (_myComms = getDocs(query(collection(db, "communities"), where("members", "array-contains", state.uid), limit(60)))
+    .then((s) => s.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (b.lastPostAt?.seconds || 0) - (a.lastPostAt?.seconds || 0)))
+    .catch(() => { _myComms = null; return []; }));
+
+  const toggleJoin = async (c, btn) => {
+    const was = isMember(c);
+    c.members = was ? (c.members || []).filter((u) => u !== state.uid) : [...(c.members || []), state.uid];
+    c.memberCount = Math.max(0, (c.memberCount || 0) + (was ? -1 : 1));
+    const paint = () => { btn.textContent = isMember(c) ? "Joined" : "Join"; btn.classList.toggle("joined", isMember(c)); };
+    paint(); _myComms = null;
+    try {
+      await updateDoc(doc(db, "communities", c.id), { members: was ? arrayRemove(state.uid) : arrayUnion(state.uid), memberCount: increment(was ? -1 : 1) });
+      if (!was) trackAction("join");
+    } catch {
+      c.members = was ? [...(c.members || []), state.uid] : (c.members || []).filter((u) => u !== state.uid);
+      c.memberCount = Math.max(0, (c.memberCount || 0) + (was ? 1 : -1)); paint(); toast("Couldn't update. Try again.");
+    }
+    return isMember(c);
+  };
+  const joinBtn = (c, onChange) => {
+    const b = el("button", { class: `cm-join${isMember(c) ? " joined" : ""}`, type: "button" }, isMember(c) ? "Joined" : "Join");
+    b.addEventListener("click", async (e) => { e.stopPropagation(); b.disabled = true; const now = await toggleJoin(c, b); b.disabled = false; onChange?.(now); });
+    return b;
+  };
+
+  // "Posting to" chip that lives in the composer
+  const openSheet = (title, bodyNode) => {
+    const close = () => ov.remove();
+    const ov = el("div", { class: "cm-ov", onclick: (e) => { if (e.target === ov) close(); } },
+      el("div", { class: "cm-sheet" }, el("div", { class: "cm-sheet-h" }, el("strong", {}, title), el("button", { class: "dp-ibtn", type: "button", onclick: close }, el("i", { class: "ri-close-line" }))), bodyNode));
+    document.body.appendChild(ov);
+    return close;
+  };
+  const buildTargetChip = () => {
+    const label = el("span", {}, "Everyone");
+    const chip = el("button", { class: "cm-target", type: "button", title: "Choose where to post" }, el("i", { class: "ri-group-2-line" }), label, el("i", { class: "ri-arrow-down-s-line" }));
+    const paint = () => {
+      label.textContent = _postTarget ? `g/${_postTarget.slug || _postTarget.id}` : "Everyone";
+      chip.classList.toggle("on", !!_postTarget);
+      chip.disabled = _targetLocked;
+      chip.classList.toggle("locked", _targetLocked);
+    };
+    _chips.add(() => { if (chip.isConnected) paint(); });
+    chip.addEventListener("click", async () => {
+      const box = el("div", { class: "cm-pick" });
+      const close = openSheet("Post to", box);
+      const row = (c) => el("button", { class: "cm-pick-row", type: "button", onclick: () => { _postTarget = c; paint(); close(); } },
+        c ? commIcon(c, 34) : el("span", { class: "cm-ico ph all", style: "width:34px;height:34px" }, el("i", { class: "ri-earth-line" })),
+        el("span", {}, c ? `g/${c.slug || c.id}` : "Everyone", el("small", {}, c ? `${c.memberCount || 0} members` : "No community, just your followers")));
+      box.appendChild(row(null));
+      (await myComms()).forEach((c) => box.appendChild(row(c)));
+      box.appendChild(el("a", { class: "cm-pick-find", href: "#communities", onclick: close }, el("i", { class: "ri-compass-3-line" }), " Find or create communities"));
+    });
+    paint();
+    return chip;
+  };
+
+  // Create dialog
+  const openCreateCommunity = () => {
+    const name = el("input", { type: "text", maxlength: "21", placeholder: "community_name", autocomplete: "off", autocapitalize: "off" });
+    const about = el("textarea", { rows: "3", maxlength: "200", placeholder: "What is this community about?" });
+    const file = el("input", { type: "file", accept: "image/*", class: "hidden" });
+    const prev = el("button", { class: "cm-pickicon", type: "button" }, el("i", { class: "ri-image-add-line" }));
+    let iconFile = null;
+    prev.onclick = () => file.click();
+    file.onchange = () => { iconFile = file.files[0] || null; if (iconFile) { prev.innerHTML = ""; prev.appendChild(el("img", { src: URL.createObjectURL(iconFile), alt: "" })); } };
+    const err = el("div", { class: "cm-err" });
+    const go = el("button", { class: "cm-primary", type: "submit" }, "Create community");
+    const form = el("form", { class: "cm-form" },
+      el("div", { class: "cm-form-top" }, prev, file, el("div", { class: "cm-nameWrap" }, el("span", {}, "g/"), name)),
+      about, err, go);
+    const close = openSheet("Create a community", form);
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault(); err.textContent = "";
+      const slug = slugify(name.value);
+      if (slug.length < 3) { err.textContent = "Name needs at least 3 letters, numbers or underscores."; return; }
+      go.disabled = true; go.textContent = "Creating…";
+      try {
+        const ref = doc(db, "communities", slug);
+        if ((await getDoc(ref)).exists()) { err.textContent = `g/${slug} is already taken.`; go.disabled = false; go.textContent = "Create community"; return; }
+        let iconUrl = "";
+        if (iconFile) { try { iconUrl = (await uploadToCloudinary(iconFile, "image")).url; } catch { /* icon is optional */ } }
+        await setDoc(ref, { name: slug, slug, description: about.value.trim(), iconUrl, createdBy: state.uid, members: [state.uid], memberCount: 1, postCount: 0, createdAt: serverTimestamp(), lastPostAt: null });
+        _myComms = null; trackAction("community"); toast(`g/${slug} created`); close();
+        location.hash = `#community/${encodeURIComponent(slug)}`;
+      } catch (ex) { err.textContent = "Couldn't create it: " + (ex.message || "try again"); go.disabled = false; go.textContent = "Create community"; }
+    });
+    setTimeout(() => name.focus(), 50);
+  };
+
+  const commRow = (c) => el("div", { class: "cm-row", onclick: () => { location.hash = `#community/${encodeURIComponent(c.id)}`; } },
+    commIcon(c, 46),
+    el("div", { class: "cm-row-t" },
+      el("strong", {}, `g/${c.slug || c.id}`),
+      el("small", {}, `${c.memberCount || 0} member${c.memberCount === 1 ? "" : "s"} · ${c.postCount || 0} post${c.postCount === 1 ? "" : "s"}`),
+      c.description ? el("p", {}, c.description) : null),
+    joinBtn(c));
+
+  const renderCommunities = (root) => {
+    const col = el("div", { class: "gb-col gb-page" });
+    const head = el("div", { class: "gb-head" }, el("i", { class: "ri-group-2-fill gb-head-ic" }),
+      el("div", { class: "gb-head-t" }, el("strong", {}, "Communities")),
+      el("button", { class: "cm-create", type: "button", onclick: openCreateCommunity }, el("i", { class: "ri-add-line" }), " Create"));
+    const search = el("input", { class: "cm-search", type: "search", placeholder: "Search communities", autocomplete: "off" });
+    const pills = el("div", { class: "gb-pills" });
+    const list = el("div", { class: "cm-list" }, el("div", { class: "gb-empty small" }, gbLoader("", true)));
+    let all = [], tab = "trending";
+    const draw = () => {
+      const q = search.value.trim().toLowerCase().replace(/^g\//, "");
+      let rows = all.filter((c) => !q || (c.slug || c.id).includes(q) || (c.description || "").toLowerCase().includes(q));
+      if (tab === "joined") rows = rows.filter(isMember);
+      if (tab === "trending") rows = [...rows].sort((a, b) => trendScore(b) - trendScore(a));
+      if (tab === "new") rows = [...rows].sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      list.innerHTML = "";
+      if (!rows.length) {
+        list.appendChild(el("div", { class: "gb-empty" }, el("i", { class: "ri-group-2-line" }),
+          el("div", { class: "t" }, tab === "joined" ? "You haven't joined any communities" : "No communities yet"),
+          el("div", {}, "Start one — it takes ten seconds."),
+          el("button", { class: "cm-primary", type: "button", onclick: openCreateCommunity }, "Create a community")));
+        return;
+      }
+      rows.forEach((c) => list.appendChild(commRow(c)));
+    };
+    [["trending", "🔥 Trending"], ["joined", "Joined"], ["new", "New"]].forEach(([k, label]) => {
+      const b = el("button", { class: `gb-pill${k === tab ? " on" : ""}`, type: "button", onclick: () => { tab = k; [...pills.children].forEach((x) => x.classList.toggle("on", x === b)); draw(); } }, label);
+      pills.appendChild(b);
+    });
+    search.addEventListener("input", draw);
+    col.append(head, el("div", { class: "cm-searchwrap" }, search), pills, list);
+    root.appendChild(col);
+    let dead = false;
+    getDocs(query(collection(db, "communities"), orderBy("createdAt", "desc"), limit(120)))
+      .then((s) => { if (dead) return; all = s.docs.map((d) => ({ id: d.id, ...d.data() })); draw(); })
+      .catch(() => { list.innerHTML = ""; list.appendChild(el("div", { class: "gb-empty" }, el("i", { class: "ri-wifi-off-line" }), el("div", { class: "t" }, "Couldn't load communities"))); });
+    return () => { dead = true; };
+  };
+
+  // Trending rail for Explore
+  const buildTrendingRail = () => {
+    const rail = el("div", { class: "cm-trend-rail" });
+    const sec = el("section", { class: "cm-trend hidden" },
+      el("div", { class: "cm-trend-h" }, el("strong", {}, "🔥 Trending communities"), el("a", { href: "#communities" }, "See all ›")), rail);
+    getDocs(query(collection(db, "communities"), orderBy("memberCount", "desc"), limit(40))).then((s) => {
+      const rows = s.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => trendScore(b) - trendScore(a)).slice(0, 10);
+      if (!rows.length) { sec.appendChild(el("div", { class: "cm-trend-empty" }, "No communities yet. ", el("a", { href: "#communities" }, "Start the first one"))); sec.classList.remove("hidden"); rail.remove(); return; }
+      rows.forEach((c, i) => rail.appendChild(el("div", { class: "cm-card", onclick: () => { location.hash = `#community/${encodeURIComponent(c.id)}`; } },
+        el("span", { class: "cm-rank" }, `#${i + 1}`), commIcon(c, 48),
+        el("strong", {}, `g/${c.slug || c.id}`), el("small", {}, `${c.memberCount || 0} members`), joinBtn(c))));
+      sec.classList.remove("hidden");
+    }).catch(() => {});
+    return sec;
+  };
+
+  // Community page
+  const renderCommunity = (root, id) => {
+    if (!id) { location.hash = "#communities"; return () => {}; }
+    id = decodeURIComponent(id);
+    const col = el("div", { class: "gb-col gb-page" });
+    const head = el("div", { class: "gb-head" },
+      el("button", { class: "gb-icon-btn", type: "button", onclick: () => history.back() }, el("i", { class: "ri-arrow-left-line" })),
+      el("div", { class: "gb-head-t" }, el("strong", {}, `g/${id}`)));
+    const top = el("div", { class: "cm-top" });
+    const list = el("div", { class: "gb-list" }, skeletonRow(), skeletonRow());
+    const dock = el("div", { class: "cm-dock" });
+    col.append(head, top, list, dock);
+    root.appendChild(col);
+    let dead = false, unsub = null, composer = null, c = null;
+    const setDock = () => {
+      if (!c) return;
+      composer?.dispose?.(); composer = null; dock.innerHTML = "";
+      if (isMember(c)) {
+        _postTarget = c; _targetLocked = true; repaintChips();
+        composer = buildComposer({ placeholder: `Post to g/${c.slug || c.id}…`, maxSec: MAX_POST_SEC, onSend: createPost, allowImage: true, allowVideo: true, maxChars: 2500 });
+        dock.appendChild(composer);
+      } else {
+        _postTarget = null; _targetLocked = false;
+        dock.appendChild(el("div", { class: "cm-joinbar" }, el("span", {}, "Join to post in this community"), joinBtn(c, () => { paintTop(); setDock(); })));
+      }
+    };
+    const paintTop = () => {
+      top.innerHTML = "";
+      const hue = commHue(c.slug || c.id);
+      top.append(...[
+        el("div", { class: "cm-banner", style: `background:linear-gradient(135deg,hsl(${hue} 75% 50%),hsl(${(hue + 50) % 360} 70% 38%))` }),
+        el("div", { class: "cm-info" },
+          commIcon(c, 64),
+          el("div", { class: "cm-info-t" }, el("h2", {}, `g/${c.slug || c.id}`), el("small", {}, `${c.memberCount || 0} members · ${c.postCount || 0} posts`)),
+          joinBtn(c, () => { paintTop(); setDock(); })),
+        c.description ? el("p", { class: "cm-desc" }, c.description) : null].filter(Boolean));
+    };
+    const unsubDoc = onSnapshot(doc(db, "communities", id), (s) => {
+      if (dead) return;
+      if (!s.exists()) { top.innerHTML = ""; list.innerHTML = ""; list.appendChild(el("div", { class: "gb-empty" }, el("i", { class: "ri-ghost-line" }), el("div", { class: "t" }, `g/${id} doesn't exist`), el("button", { class: "cm-primary", type: "button", onclick: openCreateCommunity }, "Create it"))); return; }
+      const first = !c; c = { id: s.id, ...s.data() };
+      paintTop(); if (first) setDock();
+    }, () => {});
+    let sig = "";
+    unsub = onSnapshot(query(collection(db, "posts"), where("communityId", "==", id), limit(60)), async (snap) => {
+      const posts = snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((p) => !postHidden(p)).sort((a, b) => (b.createdAt?.seconds || 9e9) - (a.createdAt?.seconds || 9e9));
+      const s2 = posts.map((p) => p.id).join(",");
+      if (s2 === sig) return; sig = s2;
+      const users = await Promise.all([...new Set(posts.map((p) => p.authorUid))].map(fetchUser));
+      if (dead) return;
+      const map = Object.fromEntries(users.filter(Boolean).map((u) => [u.uid, u]));
+      list.innerHTML = "";
+      if (!posts.length) { list.appendChild(el("div", { class: "gb-empty" }, el("i", { class: "ri-chat-smile-3-line" }), el("div", { class: "t" }, "No posts yet"), el("div", {}, "Be the first to post here."))); return; }
+      posts.forEach((p) => list.appendChild(renderVoicePost(p, map[p.authorUid])));
+    }, () => { list.innerHTML = ""; list.appendChild(el("div", { class: "gb-empty" }, el("i", { class: "ri-wifi-off-line" }), el("div", { class: "t" }, "Couldn't load posts"))); });
+    return () => { dead = true; unsub?.(); unsubDoc(); composer?.dispose?.(); stopAllAudio(); _postTarget = null; _targetLocked = false; repaintChips(); };
+  };
+
+  // -------------------------------------------------------------------------
+  // FEED
+  // -------------------------------------------------------------------------
+  const skeletonRow = () => el("div", { class: "gb-post gb-skel" },
+    el("div", { class: "gb-avcol" }, el("div", { class: "gb-av sk" })),
+    el("div", { class: "gb-main" },
+      el("div", { class: "sk-line w40" }), el("div", { class: "sk-line w90" }), el("div", { class: "sk-voice" })));
+
+  // ---- Games strips: "Friends are playing" cards with Tap to beat + chat (repeat through the feed)
+  const gameTile = (e, u) => {
+    const def = gmDef(e.gameId), first = (u.name || u.username || "Friend").split(" ")[0];
+    return el("div", { class: "gb-gt" },
+      el("div", { class: "gb-gt-who" },
+        el("button", { class: "gb-gt-av", type: "button", title: "View profile", onclick: () => { location.hash = `#profile/${u.uid}`; } }, gmAvatar(u, 40)),
+        el("div", {}, el("b", {}, u.name || u.username || "Friend"), el("small", {}, `${def.name}${e.at ? " · " + fmtTime(e.at) : ""}`))),
+      el("div", { class: "gb-gt-score" }, el("span", { class: "gb-gt-art", html: def.art() }),
+        el("div", {}, el("small", {}, `${first} scored`), el("strong", {}, gmFmt(e.gameId, e.score)))),
+      el("div", { class: "gb-gt-act" },
+        el("button", { class: "gb-gt-beat", type: "button", onclick: () => gmChallenge(e) }, el("i", { class: "ri-sword-line" }), " Tap to beat"),
+        el("button", { class: "gb-gt-chat", type: "button", title: `Message ${first}`, onclick: () => { location.hash = `#chats/${e.uid}`; } }, el("i", { class: "ri-chat-3-line" }))));
+  };
+  const promoTile = (id) => {
+    const def = gmDef(id);
+    return el("div", { class: "gb-gt promo" },
+      el("span", { class: "gb-gt-art big", html: def.art() }), el("strong", {}, def.name),
+      el("small", {}, def.tagline),
+      el("button", { class: "gb-gt-beat", type: "button", onclick: () => { location.hash = `#games/${id}`; } }, el("i", { class: "ri-play-fill" }), " Play now"));
+  };
+  const gameStrip = (title, tiles) => el("section", { class: "gb-gstrip" },
+    el("div", { class: "gb-gstrip-h" }, el("strong", {}, title), el("a", { href: "#games" }, "All games ›")),
+    el("div", { class: "gb-gstrip-rail" }, ...tiles));
+  const friendTiles = async (limitN) => {
+    const entries = (await gmFriendScores()).filter((e) => gmDef(e.gameId)).slice(0, limitN);
+    const users = await Promise.all(entries.map((e) => fetchUser(e.uid).catch(() => null)));
+    return entries.map((e, i) => (users[i] ? gameTile(e, users[i]) : null)).filter(Boolean);
+  };
+  // For the Games page: one strip, only if friends have played.
+  const buildGameStrip = async () => {
+    const t = await friendTiles(10);
+    return t.length ? gameStrip("🎮 Friends are playing", t) : null;
+  };
+  // For the feed: several strips, spread out. Friend scores first, then game suggestions.
+  const buildGameStrips = async () => {
+    const t = await friendTiles(16), out = [];
+    const titles = ["🎮 Friends are playing", "⚔️ Think you can beat them?", "🔥 Your friends are on a roll", "🏆 Challenge time"];
+    for (let i = 0; i < t.length && out.length < 4; i += 3) out.push(gameStrip(titles[out.length], t.slice(i, i + 3)));
+    const day = Math.floor(Date.now() / 864e5), ids = ["g2048", "snake", "word", "memory", "reaction", "bubble"];
+    const rot = (n) => ids.slice(n).concat(ids.slice(0, n));
+    out.push(gameStrip("🎮 Take a game break", rot(day % 6).slice(0, 3).map(promoTile)));
+    if (out.length < 3) out.push(gameStrip("🕹️ Try something new", rot((day + 3) % 6).slice(0, 3).map(promoTile)));
+    return out;
+  };
+
+  const renderVoiceFeed = (root) => {
+    const shell = el("div", { class: "gb-shell" });
+    const col = el("div", { class: "gb-col" });
+    const list = el("div", { class: "gb-list" });
+    [1, 2, 3, 4].forEach(() => list.appendChild(skeletonRow()));
+    const sentinel = el("div", { class: "gb-sentinel" });
+    const composer = buildComposer({ placeholder: "Share a thought, or tap the mic…", maxSec: MAX_POST_SEC, onSend: createPost, allowImage: true, allowVideo: true, maxChars: 2500 });
+    composer.insertBefore(buildTargetChip(), composer.querySelector(".gb-attach"));
+    col.append(buildPromptCard(composer), list, composer);
+    shell.append(buildRail(), col);
+    root.appendChild(shell);
+
+    let lastDoc = null, loading = false, allLoaded = false, renderSeq = 0, lastIds = "";
+    const rendered = new Set();
+    let strips = [], bros = [];
+    const placeStrips = () => {
+      if (!strips.length) return;
+      const posts = [...list.children].filter((c) => c.classList.contains("gb-post") && !c.classList.contains("gb-skel"));
+      strips.forEach((st, k) => { const ref = posts[2 + k * 6]; if (ref) list.insertBefore(st, ref); else if (st.parentNode === list) st.remove(); });
+      bros.forEach((b, k) => { const ref = posts[4 + k * 6]; if (ref) list.insertBefore(b, ref); else if (b.parentNode === list) b.remove(); });
+    };
+    try { bros = broFeedNodes(); } catch { bros = []; }
+    buildGameStrips().then((n) => { strips = n; placeStrips(); }).catch(() => {});
+
+    const appendPosts = async (posts) => {
+      const fresh = posts.filter((p) => isVoicePost(p) && !postHidden(p) && !rendered.has(p.id));
+      const users = await Promise.all([...new Set(fresh.map((p) => p.authorUid))].map(fetchUser));
+      const map = Object.fromEntries(users.filter(Boolean).map((u) => [u.uid, u]));
+      fresh.forEach((p) => {
+        rendered.add(p.id);
+        const node = renderVoicePost(p, map[p.authorUid]);
+        if (sentinel.parentNode === list) list.insertBefore(node, sentinel); else list.appendChild(node);
+      });
+      placeStrips();
+    };
+
+    const showEmptyIfNeeded = () => {
+      if (rendered.size === 0 && allLoaded && !list.querySelector(".gb-empty")) {
+        list.insertBefore(el("div", { class: "gb-empty" },
+          el("i", { class: "ri-mic-line" }),
+          el("div", { class: "t" }, "It's quiet in here"),
+          el("div", {}, "Record the first voice note and get the conversation started.")), sentinel);
+      }
+    };
+
+    const loadMore = async () => {
+      if (loading || allLoaded || !lastDoc) return;
+      loading = true;
+      sentinel.innerHTML = ""; sentinel.appendChild(gbLoader("", true));
+      try {
+        const snap = await getDocs(query(collection(db, "posts"), orderBy("createdAt", "desc"), startAfter(lastDoc), limit(PAGE_SIZE)));
+        if (snap.docs.length < PAGE_SIZE) allLoaded = true;
+        if (!snap.empty) {
+          lastDoc = snap.docs[snap.docs.length - 1];
+          await appendPosts(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        }
+      } catch { /* observer retries on next scroll */ }
+      loading = false;
+      sentinel.innerHTML = "";
+      if (allLoaded) {
+        io.disconnect();
+        showEmptyIfNeeded();
+        if (rendered.size) sentinel.textContent = "You're all caught up";
+      } else {
+        // sparse pages (non-voice posts filtered out) can leave the sentinel in view
+        requestAnimationFrame(() => {
+          if (!allLoaded && sentinel.getBoundingClientRect().top < window.innerHeight + 300) loadMore();
+        });
+      }
+    };
+    const io = new IntersectionObserver((en) => { if (en[0].isIntersecting) loadMore(); }, { rootMargin: "300px" });
+
+    const unsub = onSnapshot(
+      query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(PAGE_SIZE)),
+      async (snap) => {
+        const ids = snap.docs.map((d) => d.id).join(",");
+        if (ids === lastIds && !list.querySelector(".gb-skel")) return;
+        lastIds = ids;
+        const seq = ++renderSeq;
+        const posts = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        const users = await Promise.all([...new Set(posts.filter(isVoicePost).map((p) => p.authorUid))].map(fetchUser));
+        if (seq !== renderSeq) return;
+        list.innerHTML = "";
+        list.appendChild(sentinel);
+        sentinel.innerHTML = "";
+        rendered.clear();
+        lastDoc = snap.docs[snap.docs.length - 1] || null;
+        allLoaded = snap.docs.length < PAGE_SIZE;
+        const map = Object.fromEntries(users.filter(Boolean).map((u) => [u.uid, u]));
+        posts.filter((p) => isVoicePost(p) && !postHidden(p)).forEach((p) => {
+          rendered.add(p.id);
+          list.insertBefore(renderVoicePost(p, map[p.authorUid]), sentinel);
+        });
+        io.disconnect();
+        placeStrips();
+        if (!allLoaded) io.observe(sentinel); else showEmptyIfNeeded();
+        if (!allLoaded) requestAnimationFrame(() => {
+          if (!loading && sentinel.getBoundingClientRect().top < window.innerHeight + 300) loadMore();
+        });
+      },
+      () => {
+        list.innerHTML = "";
+        list.appendChild(el("div", { class: "gb-empty" }, el("i", { class: "ri-wifi-off-line" }), el("div", { class: "t" }, "Couldn't load the feed")));
+      },
+    );
+
+    return () => { unsub(); io.disconnect(); composer.dispose(); stopAllAudio(); broStopAll(); };
+  };
+
+  // -------------------------------------------------------------------------
+  // POST DETAIL — Discord-style thread tree
+  // -------------------------------------------------------------------------
+  const renderVoiceDetail = (root, postId) => {
+    if (!postId) { location.hash = "#feed"; return () => {}; }
+    let dead = false, unsubComments = null, composerRef = null;
+    const dispose = () => { dead = true; unsubComments?.(); composerRef?.dispose(); stopAllAudio(); };
+
+    const col = el("div", { class: "gb-col dp-detail" });
+    const head = el("div", { class: "gb-head" },
+      el("button", { class: "gb-icon-btn", type: "button", onclick: () => history.back() }, el("i", { class: "ri-arrow-left-line" })),
+      el("div", { class: "gb-head-t" }, el("strong", {}, "Post")));
+    const body = el("div", { class: "gb-list" }, skeletonRow());
+    col.append(head, body);
+    root.appendChild(el("div", { class: "gb-shell dp-shell" }, col));
+
+    (async () => {
+      const snap = await getDoc(doc(db, "posts", postId)).catch(() => null);
+      if (dead) return;
+      if (!snap || !snap.exists()) {
+        body.innerHTML = "";
+        body.appendChild(el("div", { class: "gb-empty" }, el("i", { class: "ri-ghost-line" }), el("div", { class: "t" }, "Post not found")));
+        return;
+      }
+      const p = { id: snap.id, ...snap.data() };
+      const author = await fetchUser(p.authorUid);
+      if (dead) return;
+      body.innerHTML = "";
+      body.appendChild(renderVoicePost(p, author, { detail: true }));
+
+      const section = el("div", { class: "gb-section" }, el("span", { class: "gb-section-t" }, "Comments"));
+      const tree = el("div", { class: "gb-tree" });
+      body.append(section, tree);
+
+      let replyTo = null;
+      const composer = buildComposer({
+        placeholder: "Reply with text or a voice note…",
+        maxSec: MAX_COMMENT_SEC,
+        onSend: async (payload) => { await createComment(p, author, payload, replyTo); replyTo = null; composer.setReply(null); },
+      });
+      composerRef = composer;
+      col.appendChild(composer);
+
+      const startReply = (c, u) => {
+        replyTo = { id: c.id, uid: u?.uid, name: u?.name || "user", username: u?.username || "" };
+        composer.setReply(`@${u?.username || u?.name || "user"}`, () => { replyTo = null; });
+      };
+
+      let authors = {};
+      const buildNodes = (n, depth) => {
+        const { c, kids } = n;
+        const u = authors[c.authorUid];
+        let cLiked = (c.likes || []).includes(state.uid);
+        const nested = depth < MAX_NEST && kids.length > 0;
+        const wrap = el("div", { class: depth === 0 ? "gb-node gb-root" : "gb-node gb-child" });
+
+        const likeIcon = el("i", { class: cLiked ? "ri-heart-3-fill" : "ri-heart-3-line" });
+        const likeCt = el("span", {}, (c.likes || []).length ? String((c.likes || []).length) : "");
+        const likeBtn = el("button", { class: `gb-act sm${cLiked ? " on" : ""}`, type: "button" }, likeIcon, likeCt);
+        likeBtn.addEventListener("click", async () => {
+          cLiked = !cLiked;
+          likeIcon.className = cLiked ? "ri-heart-3-fill" : "ri-heart-3-line";
+          likeBtn.classList.toggle("on", cLiked);
+          const n2 = Math.max(0, (c.likes?.length || 0) + (cLiked ? 1 : -1));
+          likeCt.textContent = n2 ? String(n2) : "";
+          await updateDoc(doc(db, "posts", p.id, "comments", c.id), {
+            likes: cLiked ? arrayUnion(state.uid) : arrayRemove(state.uid),
+          }).catch(() => {});
+          if (cLiked && u?.uid && u.uid !== state.uid) {
+            writeNotif(u.uid, "commentLike", { postId: p.id, text: `${state.me?.name || "Someone"} liked your comment` }).catch(() => {});
+          }
+        });
+        const replyBtn = el("button", { class: "gb-act sm", type: "button", onclick: () => startReply(c, u) },
+          el("i", { class: "ri-reply-line" }), el("span", {}, "Reply"));
+
+        const avcol = el("div", { class: "gb-cav" },
+          el("img", { class: "gb-av sm2", src: avatarFor(u), alt: "", onclick: () => goProfile(u?.uid) }),
+          nested ? el("div", { class: "gb-avline" }) : null);
+        const cbody = el("div", { class: "gb-cbody" },
+          el("div", { class: "gb-line" },
+            el("span", { class: "gb-name sm", onclick: () => goProfile(u?.uid) }, u?.name || "User"),
+            el("span", { class: "gb-sub" }, when(c.createdAt))),
+          c.replyToUsername || c.replyToName
+            ? el("div", { class: "gb-replyto" }, el("i", { class: "ri-corner-down-right-line" }), `@${c.replyToUsername || c.replyToName}`) : null,
+          c.text ? el("div", { class: "gb-text allow-select", html: linkify(c.text) }) : null,
+          c.audio?.url ? buildVoicePlayer(c.audio, { compact: true }) : null,
+          el("div", { class: "gb-actions" }, replyBtn, likeBtn),
+        );
+        wrap.appendChild(el("div", { class: "gb-crow" }, avcol, cbody));
+
+        const out = [wrap];
+        if (depth < MAX_NEST) {
+          if (kids.length) {
+            const box = el("div", { class: "gb-children" });
+            kids.forEach((k) => buildNodes(k, depth + 1).forEach((e) => box.appendChild(e)));
+            wrap.appendChild(box);
+          }
+        } else {
+          kids.forEach((k) => out.push(...buildNodes(k, depth)));
+        }
+        return out;
+      };
+
+      let lastSig = "";
+      unsubComments = onSnapshot(
+        query(collection(db, "posts", p.id, "comments"), orderBy("createdAt", "asc"), limit(300)),
+        async (cs) => {
+          const sig = cs.docs.map((d) => d.id).join(",");
+          if (sig === lastSig) return;
+          lastSig = sig;
+          const comments = cs.docs.map((d) => ({ id: d.id, ...d.data() }));
+          const users = await Promise.all([...new Set(comments.map((c) => c.authorUid))].map(fetchUser));
+          if (dead || sig !== lastSig) return;
+          authors = Object.fromEntries(users.filter(Boolean).map((u) => [u.uid, u]));
+          section.querySelector(".gb-section-t").textContent = comments.length ? `Comments · ${comments.length}` : "Comments";
+          tree.innerHTML = "";
+          if (!comments.length) {
+            tree.appendChild(el("div", { class: "gb-empty small" }, el("div", {}, "No comments yet. Be the first, with text or a voice note.")));
+            return;
+          }
+          const byId = new Map(comments.map((c) => [c.id, { c, kids: [] }]));
+          const roots = [];
+          byId.forEach((n) => {
+            const pid = n.c.parentCommentId;
+            if (pid && byId.has(pid)) byId.get(pid).kids.push(n); else roots.push(n);
+          });
+          stopAllAudio();
+          roots.forEach((r) => buildNodes(r, 0).forEach((e) => tree.appendChild(e)));
+        },
+      );
+    })();
+
+    return dispose;
+  };
+  return { renderCommunities, renderCommunity, buildTrendingRail, openCreateCommunity, renderVoiceFeed, renderVoiceDetail, renderVoicePost, renderPromptPage, stopAllAudio, buildGameStrip, buildGameStrips };
+}
+
+// =========================================================================
+// 16. KEYBOARD / VIEWPORT FIT — keep the app exactly the size of the visible screen so the
+//     on-screen keyboard never pans the page or pushes the top bar out of view.
+// =========================================================================
+(() => {
+  const vv = window.visualViewport, root = document.documentElement;
+  const sync = () => {
+    root.style.setProperty("--app-h", `${Math.round(vv ? vv.height : window.innerHeight)}px`);
+    if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+  };
+  sync();
+  (vv || window).addEventListener("resize", sync);
+  vv?.addEventListener("scroll", sync);
+  window.addEventListener("orientationchange", () => setTimeout(sync, 250));
+})();
+
+// =========================================================================
+// 17. GAMES — dedicated games page (#games). Add new games to GAMES below.
+//     Each game: { id, name, tagline, art(): html, mount(root, { exit }) -> dispose }
+// =========================================================================
+const _gmSvg = (inner) => `<svg viewBox="0 0 120 90">${inner}</svg>`;
+const GAMES = [
+  {
+    id: "bubble", tips: ["Drag to aim, release to shoot", "Match 3+ bubbles of one colour to pop them", "Tap the NEXT bubble to swap it"], name: "Bubble Pop", tagline: "Aim, shoot and pop the bubbles. 24 levels.", fmt: (s) => `${s}★`,
+    art: () => '<svg viewBox="0 0 120 90"><defs><radialGradient id="gbp1" cx="35%" cy="30%"><stop offset="0" stop-color="#fff" stop-opacity=".9"/><stop offset=".25" stop-color="#fff" stop-opacity=".1"/></radialGradient></defs>' +
+      [[20,18,"#ef4444"],[44,18,"#facc15"],[68,18,"#22c55e"],[92,18,"#3b82f6"],[32,40,"#3b82f6"],[56,40,"#ef4444"],[80,40,"#a855f7"],[44,62,"#22c55e"],[68,62,"#facc15"]]
+        .map(([x, y, c]) => `<circle cx="${x}" cy="${y}" r="12" fill="${c}" stroke="#1e1b4b" stroke-width="2.4"/><circle cx="${x}" cy="${y}" r="12" fill="url(#gbp1)"/>`).join("") +
+      '<circle cx="60" cy="84" r="6" fill="#fb923c" stroke="#1e1b4b" stroke-width="2.4"/></svg>',
+    mount: (root, ctx) => mountBubblePop(root, ctx),
+  },
+  {
+    id: "compound", tips: ["Be the last fighter standing in the compound", "Stay inside the purple safe zone as it shrinks", "Roll to dodge bullets, climb stairs to rooftops and towers", "Pick up medkits, armor and ammo"], name: "Compound Clash", tagline: "3D battle in a walled compound. 15 bots, one winner.", fmt: (s) => `${Number(s).toLocaleString()} pts`,
+    art: () => _gmSvg('<rect width="120" height="90" fill="#25205a"/><rect x="8" y="8" width="104" height="74" rx="6" fill="#3b4a6b" stroke="#c4a1ff" stroke-width="3" stroke-dasharray="6 4"/><rect x="18" y="16" width="30" height="20" fill="#9c5b45"/><rect x="70" y="20" width="32" height="14" fill="#7d90b0"/><rect x="22" y="52" width="36" height="22" fill="#8d96a8"/><rect x="74" y="50" width="22" height="22" fill="#d94c4c"/><circle cx="60" cy="45" r="7" fill="#fde047" stroke="#1e1b4b" stroke-width="2"/><path d="M60 45 L84 30" stroke="#fde047" stroke-width="2" stroke-dasharray="3 3"/>'),
+    mount: (root, ctx) => mountCompound(root, ctx),
+  },
+  {
+    id: "boxing", tips: ["Jab to wear them down, heavy punch to stagger", "Hold Block to cut damage, but it drains stamina", "Dodge-roll to avoid a big punch", "Grab power-ups: Rage, Shield, Speed, Heal, Iron Fist", "Best of 3 rounds against a real player or a bot"], name: "Boxing Arena", tagline: "Best of 3 rounds. Real players or bots.", gline: "3D boxing ring with power-ups. We find you a real challenger, or a bot.", fmt: (s) => `${Number(s).toLocaleString()} pts`,
+    art: () => _gmSvg('<rect width="120" height="90" fill="#1b1e3a"/><polygon points="14,70 106,70 96,38 24,38" fill="#16327a" stroke="#fff" stroke-width="2"/><path d="M24 38 L96 38 M20 50 L100 50 M17 60 L103 60" stroke="#e11d48" stroke-width="2"/><circle cx="38" cy="46" r="13" fill="#e11d48" stroke="#fff" stroke-width="2.5"/><circle cx="82" cy="46" r="13" fill="#2563eb" stroke="#fff" stroke-width="2.5"/><rect x="30" y="56" width="16" height="8" rx="3" fill="#fde047"/><rect x="74" y="56" width="16" height="8" rx="3" fill="#fde047"/>'),
+    mount: (root, ctx) => mountBoxing(root, ctx),
+  },
+  {
+    id: "g2048", tips: ["Swipe to slide every tile", "Equal numbers merge into one", "Reach 2048 (and beyond!)"], name: "2048", tagline: "Slide and merge tiles. Chase the big one.", fmt: (s) => Number(s).toLocaleString(),
+    art: () => _gmSvg([[14, 12, "#eee4da", "2"], [48, 12, "#f2b179", "8"], [82, 12, "#f67c5f", "16"], [14, 46, "#edc850", "32"], [48, 46, "#edc22e", "64"], [82, 46, "#3c3a32", "2048"]]
+      .map(([x, y, c, t]) => `<rect x="${x}" y="${y}" width="26" height="26" rx="6" fill="${c}"/><text x="${x + 13}" y="${y + 18}" text-anchor="middle" font-size="${t.length > 3 ? 9 : 12}" font-weight="800" fill="${c === "#eee4da" ? "#776e65" : "#fff"}">${t}</text>`).join("")),
+    mount: (root, ctx) => mountG2048(root, ctx),
+  },
+  {
+    id: "snake", tips: ["Swipe or use the pad to steer", "Eat food to grow and score", "Avoid walls and your own tail"], name: "Snake", tagline: "Eat, grow, and don't bite your tail.", fmt: (s) => String(s),
+    art: () => _gmSvg('<path d="M20 64 H70 V30 H100" fill="none" stroke="#22c55e" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/><circle cx="100" cy="30" r="9" fill="#86efac"/><circle cx="103" cy="27" r="2.4" fill="#0f172a"/><circle cx="20" cy="26" r="7" fill="#ef4444"/>'),
+    mount: (root, ctx) => mountSnake(root, ctx),
+  },
+  {
+    id: "memory", tips: ["Flip two cards at a time", "Find all 8 pairs", "Fewer moves and less time = more points"], name: "Memory Match", tagline: "Find all the pairs in the fewest moves.", fmt: (s) => `${s} pts`,
+    art: () => _gmSvg([[12, 10], [44, 10], [76, 10], [12, 48], [44, 48], [76, 48]].map(([x, y], i) => `<rect x="${x}" y="${y}" width="30" height="32" rx="7" fill="${i === 1 || i === 4 ? "#fde047" : "#6d4aff"}" stroke="#1e1b4b" stroke-width="2.4"/><text x="${x + 15}" y="${y + 22}" text-anchor="middle" font-size="16" font-weight="800" fill="${i === 1 || i === 4 ? "#1e1b4b" : "#fff"}">${i === 1 || i === 4 ? "★" : "?"}</text>`).join("")),
+    mount: (root, ctx) => mountMemory(root, ctx),
+  },
+  {
+    id: "word", tips: ["Guess the 5-letter word in 6 tries", "Green = right spot, yellow = wrong spot, grey = not in word", "A new daily word every day"], name: "Word Guess", tagline: "A new 5-letter word every day.", fmt: (s) => `${7 - Math.round(s / 100)} ${7 - Math.round(s / 100) === 1 ? "guess" : "guesses"}`,
+    art: () => _gmSvg(["G:#538d4e", "E:#b59f3b", "T:#3a3a3c", "B:#538d4e", "E:#538d4e"].map((s, i) => { const [l, c] = s.split(":"); return `<rect x="${6 + i * 22}" y="30" width="20" height="24" rx="4" fill="${c}"/><text x="${16 + i * 22}" y="48" text-anchor="middle" font-size="15" font-weight="800" fill="#fff">${l}</text>`; }).join("")),
+    mount: (root, ctx) => mountWord(root, ctx),
+  },
+  {
+    id: "reaction", tips: ["Wait for the screen to turn green", "Tap as fast as you can, 5 rounds", "Tapping too early restarts the round"], name: "Reaction Test", tagline: "How fast are your thumbs?", fmt: (s) => `${1000 - s} ms`,
+    art: () => _gmSvg('<circle cx="60" cy="45" r="30" fill="#22c55e" stroke="#1e1b4b" stroke-width="3"/><path d="M64 22 L48 48 H60 L56 68 L74 40 H62 Z" fill="#fde047" stroke="#1e1b4b" stroke-width="2" stroke-linejoin="round"/>'),
+    mount: (root, ctx) => mountReaction(root, ctx),
+  },
+];
+
+function gamesProgress(id) {
+  const key = `gb_game_${id}_${state.uid || "guest"}`;
+  const read = () => { try { return JSON.parse(localStorage.getItem(key)) || {}; } catch { return {}; } };
+  return { read, write: (p) => { try { localStorage.setItem(key, JSON.stringify(p)); } catch {} } };
+}
+
+function renderGames(root, gameId) {
+  const game = GAMES.find((g) => g.id === gameId);
+  if (game) return game.mount(root, { exit: () => { location.hash = "#games"; } });
+  let dead = false;
+  const cards = GAMES.map((g) => {
+    const p = gamesProgress(g.id).read();
+    const best = g.id === "bubble" ? `${Object.values(p.stars || {}).reduce((a, b) => a + b, 0)} ★ · Level ${p.unlocked || 1}` : p.top ? `Best ${g.fmt(p.top)}` : "Not played yet";
+    const c = el("button", { class: "gm-card", type: "button", onclick: () => { location.hash = `#games/${g.id}`; } });
+    c.innerHTML = `<span class="gm-card-art">${g.art()}</span><span class="gm-card-b"><strong>${g.name}</strong><small>${g.tagline}</small><em>${best}</em></span>`;
+    return c;
+  });
+  cards.push(el("div", { class: "gm-card soon" }, el("i", { class: "ri-gamepad-line" }), el("strong", {}, "More games coming soon")));
+  const strip = el("div", {});
+  root.appendChild(el("div", { class: "gm-hub" },
+    el("div", { class: "gm-hub-h" }, el("h2", {}, "Games"), el("p", {}, "Take a break, play, and challenge your friends.")),
+    strip, el("div", { class: "gm-grid" }, ...cards)));
+  gb().buildGameStrip({ onlyFriends: true }).then((n) => { if (n && !dead) strip.appendChild(n); }).catch(() => {});
+  return () => { dead = true; };
+}
+
+// ---------------------------------------------------------------------------
+// HOW-TO-PLAY ANIMATIONS — tiny scripted scenes (crisp, themed, work offline)
+// ---------------------------------------------------------------------------
+const gmAvatar = (u, size = 36) => {
+  const name = (u?.name || u?.username || "?").trim();
+  const wrap = el("span", { class: "gm-av", style: `width:${size}px;height:${size}px;font-size:${Math.round(size * .42)}px` }, name[0]?.toUpperCase() || "?");
+  const img = el("img", { src: avatarFor(u), alt: "", loading: "lazy" });
+  img.onerror = () => img.remove();
+  wrap.appendChild(img);
+  return wrap;
+};
+
+function gmDemoPlay(host, spec) {
+  host.innerHTML = "";
+  const stage = el("div", { class: "gm-demo", style: `width:${spec.w}px;height:${spec.h}px` });
+  if (spec.bg) stage.innerHTML = spec.bg;
+  const cap = el("div", { class: "gm-demo-cap" }), nodes = {};
+  for (const [id, it] of Object.entries(spec.items)) {
+    const n = el("div", { class: `gmd ${it.cls || ""}`, style: `width:${it.w || 0}px;height:${it.h || 0}px`, html: it.html || "" });
+    n._x = 0; n._y = 0; n._s = 1; n._r = 0; stage.appendChild(n); nodes[id] = n;
+  }
+  host.append(stage, cap);
+  let timer = 0, k = 0, dead = false;
+  const apply = (st, instant) => {
+    for (const [id, v] of Object.entries(st)) {
+      const n = nodes[id]; if (!n) continue;
+      const o = Array.isArray(v) ? { x: v[0], y: v[1], s: v[2], o: v[3], r: v[4] } : v;
+      if (instant) n.style.transition = "none";
+      n._x = o.x ?? n._x; n._y = o.y ?? n._y; n._s = o.s ?? n._s; n._r = o.r ?? n._r;
+      n.style.transform = `translate(${n._x}px,${n._y}px) scale(${n._s}) rotate(${n._r}deg)`;
+      if (o.o != null) n.style.opacity = o.o;
+      if (o.t != null) n.textContent = o.t;
+      if (o.c != null) n.className = `gmd ${spec.items[id].cls || ""} ${o.c}`;
+      if (instant) { void n.offsetWidth; n.style.transition = ""; }
+    }
+  };
+  const run = () => {
+    if (dead) return;
+    const sc = spec.scenes[k % spec.scenes.length];
+    apply(sc.st || {}, k % spec.scenes.length === 0);
+    if (sc.cap) { cap.textContent = sc.cap; cap.classList.remove("in"); void cap.offsetWidth; cap.classList.add("in"); }
+    k++; timer = setTimeout(run, sc.ms || 900);
+  };
+  run();
+  return () => { dead = true; clearTimeout(timer); };
+}
+
+const _gmHand = { cls: "hand", html: "👆", w: 30, h: 30 };
+const _gmGrid = (cols, rows, cell, pitch, off, bg) => `<div style="position:absolute;inset:0;border-radius:14px;background:${bg}"></div>` +
+  Array.from({ length: cols * rows }, (_, i) => `<i style="position:absolute;left:${off + (i % cols) * pitch}px;top:${off + Math.floor(i / cols) * pitch}px;width:${cell}px;height:${cell}px;border-radius:8px;background:rgba(255,255,255,.18)"></i>`).join("");
+
+const GM_DEMOS = {
+  g2048() {
+    const P = (c, r) => ({ x: 6 + c * 52, y: 6 + r * 52 });
+    return {
+      w: 214, h: 214, bg: _gmGrid(4, 4, 48, 52, 6, "#bbada0"),
+      items: { a: { cls: "tile", w: 48, h: 48 }, b: { cls: "tile", w: 48, h: 48 }, c: { cls: "tile", w: 48, h: 48 }, d: { cls: "tile", w: 48, h: 48 }, hand: _gmHand },
+      scenes: [
+        { ms: 900, cap: "Swipe in any direction", st: { a: { ...P(0, 1), t: 2, c: "", s: 1, o: 1 }, b: { ...P(2, 1), t: 2, c: "", o: 1, s: 1 }, c: { ...P(1, 3), t: 4, c: "v4", o: 1, s: 1 }, d: { ...P(3, 0), t: 2, o: 0, s: .3, c: "" }, hand: { x: 150, y: 120, o: 0, s: 1 } } },
+        { ms: 700, st: { hand: { o: 1, x: 150, y: 100 } } },
+        { ms: 1000, cap: "Every tile slides that way", st: { hand: { x: 50, y: 100 }, b: P(0, 1), c: P(0, 3) } },
+        { ms: 1300, cap: "Equal numbers merge into one!", st: { a: { t: 4, c: "v4", s: 1.15 }, b: { o: 0 }, hand: { o: 0 }, d: { o: 1, s: 1 } } },
+        { ms: 1400, cap: "Keep merging to reach 2048", st: { a: { s: 1 } } },
+      ],
+    };
+  },
+  snake() {
+    const path = [[0, 4], [1, 4], [2, 4], [3, 4], [4, 4], [5, 4], [6, 4], [6, 3], [6, 2], [6, 1]], C = 24, O = 6;
+    const pos = ([c, r]) => ({ x: O + c * C, y: O + r * C });
+    const scenes = [];
+    for (let h = 2; h < path.length; h++) {
+      const st = {}; for (let j = 0; j < 4; j++) { const q = path[h - j]; st["s" + j] = q ? { ...pos(q), o: j === 3 ? (h >= 8 ? 1 : 0) : 1 } : { o: 0 }; }
+      st.food = { o: h >= 8 ? 0 : 1 };
+      if (h === 5) st.hand = { x: 150, y: 150, o: 1 }; if (h === 6) st.hand = { x: 150, y: 90 }; if (h === 7) st.hand = { o: 0 };
+      scenes.push({ ms: h === 2 ? 700 : 480, cap: h === 2 ? "Swipe to steer the snake" : h === 5 ? "Swipe up to turn" : h === 8 ? "Eat the food to grow and score" : null, st });
+    }
+    scenes[0].st.hand = { x: 150, y: 150, o: 0 }; scenes[0].st.food = { ...pos([6, 2]), o: 1 }; scenes.push({ ms: 1200, cap: "Don't hit the walls or yourself!", st: {} });
+    return {
+      w: 214, h: 214, bg: _gmGrid(9, 9, 22, 24, 7, "#0f172a"),
+      items: { s0: { cls: "seg head", w: 22, h: 22 }, s1: { cls: "seg", w: 22, h: 22 }, s2: { cls: "seg", w: 22, h: 22 }, s3: { cls: "seg", w: 22, h: 22 }, food: { cls: "food", w: 20, h: 20 }, hand: _gmHand },
+      scenes,
+    };
+  },
+  memory() {
+    const P = (c, r) => ({ x: 12 + c * 68, y: 8 + r * 80 }), ids = ["c0", "c1", "c2", "c3", "c4", "c5"], pos = [[0, 0], [1, 0], [2, 0], [0, 1], [1, 1], [2, 1]];
+    const reset = {}; ids.forEach((id, i) => { reset[id] = { ...P(...pos[i]), t: "?", c: "", s: 1, o: 1 }; });
+    const H = (i) => ({ x: P(...pos[i]).x + 14, y: P(...pos[i]).y + 30 });
+    return {
+      w: 214, h: 172, bg: "",
+      items: { ...Object.fromEntries(ids.map((id) => [id, { cls: "card", w: 58, h: 70 }])), hand: _gmHand },
+      scenes: [
+        { ms: 800, cap: "Tap a card to flip it", st: { ...reset, hand: { ...H(0), o: 0 } } },
+        { ms: 700, st: { hand: { ...H(0), o: 1 } } },
+        { ms: 900, st: { c0: { t: "🐶", c: "up" } } },
+        { ms: 700, cap: "Flip a second card", st: { hand: H(2) } },
+        { ms: 1100, st: { c2: { t: "🐱", c: "up" } } },
+        { ms: 800, cap: "No match? They flip back", st: { c0: { t: "?", c: "" }, c2: { t: "?", c: "" }, hand: H(0) } },
+        { ms: 700, st: { c0: { t: "🐶", c: "up" } } },
+        { ms: 700, st: { hand: H(4) } },
+        { ms: 900, cap: "Match all the pairs fast!", st: { c4: { t: "🐶", c: "up" } } },
+        { ms: 1200, st: { c0: { c: "up ok" }, c4: { c: "up ok" }, hand: { o: 0 } } },
+      ],
+    };
+  },
+  word() {
+    const X = (i) => 10 + i * 48, L = "CRANE".split(""), col = ["x", "y", "g", "x", "g"];
+    const scenes = [{ ms: 600, cap: "Type a 5-letter word", st: { ...Object.fromEntries(L.map((_, i) => ["t" + i, { x: X(i), y: 18, t: "", c: "", s: 1 }])) } }];
+    L.forEach((l, i) => scenes.push({ ms: 300, st: { ["t" + i]: { t: l, c: "f", s: 1 } } }));
+    scenes.push({ ms: 700, cap: "Press Enter to check it", st: {} });
+    L.forEach((l, i) => scenes.push({ ms: 350, cap: i === 0 ? "Green: right letter, right spot" : i === 1 ? "Yellow: in the word, wrong spot" : i === 3 ? "Grey: not in the word" : null, st: { ["t" + i]: { c: col[i], s: 1.12 } } }));
+    scenes.push({ ms: 1500, cap: "6 tries. Fewer guesses = higher score", st: Object.fromEntries(L.map((_, i) => ["t" + i, { s: 1 }])) });
+    return { w: 254, h: 84, bg: "", items: Object.fromEntries(L.map((_, i) => ["t" + i, { cls: "wtile", w: 44, h: 44 }])), scenes };
+  },
+  reaction() {
+    return {
+      w: 214, h: 172, bg: "",
+      items: { pad: { cls: "rpad", w: 150, h: 150 }, hand: _gmHand },
+      scenes: [
+        { ms: 1500, cap: "Wait for the red screen to turn green", st: { pad: { x: 32, y: 10, t: "Wait…", c: "red", s: 1 }, hand: { x: 100, y: 90, o: 0, s: 1 } } },
+        { ms: 900, cap: "Tap as fast as you can!", st: { pad: { t: "TAP!", c: "green" }, hand: { o: 1, y: 100 } } },
+        { ms: 300, st: { hand: { s: .8, y: 92 } } },
+        { ms: 1600, cap: "Your time is your score", st: { pad: { t: "243 ms", c: "blue" }, hand: { s: 1, o: 0 } } },
+      ],
+    };
+  },
+  bubble() {
+    const B = (x, y, c) => ({ cls: `ball ${c}`, w: 28, h: 28, x, y });
+    const items = { b0: B(8, 8, "r"), b1: B(38, 8, "r"), b2: B(68, 8, "b"), b3: B(98, 8, "y"), b4: B(128, 8, "y"), b5: B(158, 8, "g"), b6: B(53, 38, "b"), b7: B(83, 38, "g"), cannon: { cls: "cannon", w: 40, h: 40 }, aim: { cls: "aim", w: 4, h: 150 }, shot: { cls: "ball r", w: 28, h: 28 }, hand: _gmHand };
+    const base = {}; ["b0", "b1", "b2", "b3", "b4", "b5", "b6", "b7"].forEach((k) => { base[k] = { x: items[k].x, y: items[k].y, s: 1, o: 1 }; });
+    return {
+      w: 196, h: 236, bg: '<div style="position:absolute;inset:0;border-radius:14px;background:linear-gradient(180deg,#25205a,#1d3fbf)"></div>', items,
+      scenes: [
+        { ms: 700, cap: "Aim the cannon", st: { ...base, cannon: { x: 78, y: 188, o: 1, s: 1 }, shot: { x: 84, y: 194, s: 1, o: 1 }, aim: { x: 96, y: 40, r: 0, o: 0 }, hand: { x: 104, y: 205, o: 0, s: 1 } } },
+        { ms: 700, st: { hand: { o: 1 } } },
+        { ms: 1100, cap: "Drag to aim, release to shoot", st: { aim: { o: .7, r: -27 }, hand: { x: 70, y: 188 } } },
+        { ms: 800, cap: "Release to fire!", st: { shot: { x: 23, y: 38 }, aim: { o: 0 }, hand: { o: 0 } } },
+        { ms: 1500, cap: "Match 3 or more of a colour to pop them", st: { b0: { s: 0, o: 0 }, b1: { s: 0, o: 0 }, shot: { s: 0, o: 0 } } },
+      ],
+    };
+  },
+};
+
+function gmHowTo(game, onClose) {
+  const spec = GM_DEMOS[game.id]?.(); if (!spec) { onClose?.(); return; }
+  const host = el("div", { class: "gm-demo-host" });
+  const stop = { f: null };
+  const modal = el("div", { class: "gm-modal fixed" });
+  const close = () => { stop.f?.(); modal.remove(); try { localStorage.setItem(`gb_howto_${game.id}`, "1"); } catch {} onClose?.(); };
+  modal.appendChild(el("div", { class: "gm-modal-c gm-how" },
+    el("h3", {}, `How to play ${game.name}`), host,
+    el("ul", { class: "gm-tips" }, ...(game.tips || []).map((t) => el("li", {}, t))),
+    el("button", { class: "gbu-btn primary", type: "button", onclick: close }, "Got it, let's play")));
+  document.body.appendChild(modal);
+  stop.f = gmDemoPlay(host, spec);
+}
+const gmHowToFirst = (game) => { let seen = false; try { seen = !!localStorage.getItem(`gb_howto_${game.id}`); } catch {} if (!seen) setTimeout(() => gmHowTo(game), 250); };
+
+// ---------------------------------------------------------------------------
+// SHARED GAME HELPERS — scores, leaderboard, friend challenges, game frame
+// Firestore: gameScores/{gameId}_{uid} = { gameId, uid, score, at }
+// ---------------------------------------------------------------------------
+const gmDef = (id) => GAMES.find((g) => g.id === id);
+const gmFmt = (id, s) => (gmDef(id)?.fmt || String)(s);
+let _gmCache = null;
+
+async function gmSubmit(id, score) {
+  const p = gamesProgress(id), P = p.read();
+  const isBest = score > (P.top || 0);
+  if (isBest) {
+    P.top = score; p.write(P);
+    if (state.uid) setDoc(doc(db, "gameScores", `${id}_${state.uid}`), { gameId: id, uid: state.uid, score, at: serverTimestamp() }).catch(() => {});
+    _gmCache = null;
+  }
+  return { isBest, top: P.top || 0 };
+}
+
+async function gmFriendScores(force) {
+  if (!force && _gmCache && Date.now() - _gmCache.t < 90000) return _gmCache.v;
+  const ids = [...new Set((state.me?.following || []).filter((u) => u && u !== state.uid))].slice(0, 90);
+  const out = [];
+  for (let i = 0; i < ids.length; i += 30) {
+    try {
+      const s = await getDocs(query(collection(db, "gameScores"), where("uid", "in", ids.slice(i, i + 30))));
+      s.forEach((d) => out.push(d.data()));
+    } catch { /* offline or rules */ }
+  }
+  out.sort((a, b) => (b.at?.toMillis?.() || 0) - (a.at?.toMillis?.() || 0));
+  _gmCache = { t: Date.now(), v: out };
+  return out;
+}
+
+const gmChallenge = (e) => {
+  try { sessionStorage.setItem("gb_beat", JSON.stringify({ gameId: e.gameId, uid: e.uid, score: e.score })); } catch {}
+  location.hash = `#games/${e.gameId}`;
+};
+
+async function gmLeaderboard(gameId) {
+  const def = gmDef(gameId);
+  const modal = el("div", { class: "gm-modal fixed" });
+  const body = el("div", { class: "gm-lb-body" }, gbLoader("", true));
+  let tab = "friends", rows = null;
+  const t1 = el("button", { type: "button", class: "on" }, "Friends"), t2 = el("button", { type: "button" }, "Everyone");
+  const close = () => modal.remove();
+  modal.addEventListener("click", (e) => { if (e.target === modal) close(); });
+  modal.appendChild(el("div", { class: "gm-modal-c gm-lb" },
+    el("div", { class: "gm-lb-h" }, el("strong", {}, `${def?.name || "Game"} leaderboard`), el("button", { type: "button", class: "gb-icon-btn", onclick: close }, el("i", { class: "ri-close-line" }))),
+    el("div", { class: "gm-lb-tabs" }, t1, t2), body));
+  document.body.appendChild(modal);
+  const draw = async () => {
+    if (!rows) return;
+    const fol = new Set([...(state.me?.following || []), state.uid]);
+    const list = (tab === "friends" ? rows.filter((r) => fol.has(r.uid)) : rows).slice(0, 25);
+    body.innerHTML = "";
+    if (!list.length) { body.appendChild(el("p", { class: "gm-lb-empty" }, tab === "friends" ? "None of your friends have played yet. Be the first!" : "No scores yet. Be the first!")); return; }
+    const users = await Promise.all(list.map((r) => fetchUser(r.uid).catch(() => null)));
+    list.forEach((r, i) => {
+      const u = users[i]; if (!u) return;
+      body.appendChild(el("div", { class: `gm-lb-row${r.uid === state.uid ? " me" : ""}` },
+        el("span", { class: "gm-lb-rk" }, i < 3 ? ["🥇", "🥈", "🥉"][i] : String(i + 1)),
+        el("img", { src: avatarFor(u), alt: "" }), el("span", { class: "gm-lb-n" }, r.uid === state.uid ? "You" : (u.name || u.username || "Player")),
+        el("b", {}, gmFmt(gameId, r.score))));
+    });
+  };
+  t1.onclick = () => { tab = "friends"; t1.className = "on"; t2.className = ""; draw(); };
+  t2.onclick = () => { tab = "all"; t2.className = "on"; t1.className = ""; draw(); };
+  try {
+    const s = await getDocs(query(collection(db, "gameScores"), where("gameId", "==", gameId), limit(150)));
+    rows = s.docs.map((d) => d.data()).sort((a, b) => b.score - a.score);
+  } catch { rows = []; }
+  draw();
+}
+
+// Page frame every simple game sits in: top bar, best score, challenge banner, result popup.
+function gmFrame(root, game, exit) {
+  const wrap = el("div", { class: "gm-wrap" });
+  const stage = el("div", { class: "gm-play" });
+  const bestEl = el("span", { class: "gm-pill" });
+  const showBest = () => { const t = gamesProgress(game.id).read().top; bestEl.innerHTML = `<i class="ri-trophy-fill"></i> ${t ? gmFmt(game.id, t) : "–"}`; };
+  const back = () => { try { sessionStorage.removeItem("gb_beat"); } catch {} exit(); };
+  wrap.append(
+    el("div", { class: "gm-top" },
+      el("button", { class: "gb-icon-btn", type: "button", title: "Games", onclick: back }, el("i", { class: "ri-arrow-left-line" })),
+      el("strong", {}, game.name), bestEl,
+      el("button", { class: "gb-icon-btn", type: "button", title: "How to play", onclick: () => gmHowTo(game) }, el("i", { class: "ri-question-line" })),
+      el("button", { class: "gb-icon-btn", type: "button", title: "Leaderboard", onclick: () => gmLeaderboard(game.id) }, el("i", { class: "ri-bar-chart-horizontal-fill" }))));
+  let target = null;
+  try { const t = JSON.parse(sessionStorage.getItem("gb_beat") || "null"); if (t && t.gameId === game.id) target = t; } catch {}
+  if (target) {
+    const bar = el("div", { class: "gm-beat" }, el("i", { class: "ri-sword-line" }), el("span", {}, "Beat the score: ", el("b", {}, gmFmt(game.id, target.score))));
+    wrap.appendChild(bar);
+    fetchUser(target.uid).then((u) => { if (u) { bar.innerHTML = ""; bar.append(el("img", { src: avatarFor(u), alt: "" }), el("span", {}, `Beat ${(u.name || "their").split(" ")[0]}'s score: `, el("b", {}, gmFmt(game.id, target.score)))); } }).catch(() => {});
+  }
+  wrap.appendChild(stage); root.appendChild(wrap); showBest(); gmHowToFirst(game);
+
+  const finish = async (score, again, note) => {
+    const r = score > 0 ? await gmSubmit(game.id, score) : { isBest: false, top: gamesProgress(game.id).read().top || 0 };
+    showBest();
+    const beat = target && score > target.score;
+    let who = "them"; const tu = target ? await fetchUser(target.uid).catch(() => null) : null; if (tu) who = (tu.name || "them").split(" ")[0];
+    if (beat) { try { sessionStorage.removeItem("gb_beat"); } catch {} }
+    const m = el("div", { class: "gm-modal" }, el("div", { class: "gm-modal-c" },
+      el("h3", {}, beat ? `You beat ${who}! 🎉` : r.isBest ? "New best! 🏆" : "Nice run"),
+      el("div", { class: "gm-big" }, gmFmt(game.id, score)),
+      note ? el("p", {}, note) : null,
+      target && !beat ? el("p", {}, `${who}'s score: ${gmFmt(game.id, target.score)}. Go again!`) : el("p", {}, `Your best: ${gmFmt(game.id, r.top)}`),
+      el("div", { class: "gm-modal-b" },
+        el("button", { class: "gbu-btn primary", type: "button", onclick: () => { m.remove(); again(); } }, "Play again"),
+        beat && tu ? el("button", { class: "gbu-btn", type: "button", onclick: () => { location.hash = `#chats/${target.uid}`; } }, "Brag in chat") : null,
+        el("button", { class: "gbu-btn", type: "button", onclick: () => gmLeaderboard(game.id) }, "Leaderboard"),
+        el("button", { class: "gbu-btn", type: "button", onclick: back }, "Games"))));
+    setTimeout(() => wrap.appendChild(m), 450);
+  };
+  return { wrap, stage, finish, dispose: () => wrap.remove() };
+}
+
+// ---------------------------------------------------------------------------
+// 2048
+// ---------------------------------------------------------------------------
+function mountG2048(root, { exit }) {
+  const F = gmFrame(root, gmDef("g2048"), exit), N = 4;
+  let tiles, score, over, won;
+  const scoreEl = el("b", {}, "0");
+  const layer = el("div", { class: "g48-l" });
+  const board = el("div", { class: "g48" }, el("div", { class: "g48-bg" }, ...Array.from({ length: 16 }, () => el("i"))), layer);
+  F.stage.append(el("div", { class: "g48-wrap" },
+    el("div", { class: "g48-h" }, el("span", {}, "Score ", scoreEl), el("button", { class: "gbu-btn g-mini", type: "button", onclick: () => start() }, "New game")), board,
+    el("p", { class: "gm-hint" }, "Swipe or use arrow keys. Merge equal tiles to reach 2048.")));
+  const place = (t) => { t.el.style.transform = `translate(${t.c * 100}%,${t.r * 100}%)`; };
+  const paint = (t, pop) => { t.el.dataset.v = Math.min(t.v, 4096); t.i.textContent = t.v; if (pop) { t.i.classList.remove("pop"); void t.i.offsetWidth; t.i.classList.add("pop"); } };
+  const spawn = () => {
+    const free = []; for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) if (!tiles.some((t) => t.r === r && t.c === c)) free.push([r, c]);
+    if (!free.length) return;
+    const [r, c] = free[Math.floor(Math.random() * free.length)];
+    const t = { v: Math.random() < .9 ? 2 : 4, r, c }; t.i = el("div", { class: "g48-i" }); t.el = el("div", { class: "g48-t" }, t.i);
+    layer.appendChild(t.el); place(t); paint(t, true); tiles.push(t);
+  };
+  const canMove = () => tiles.length < 16 || tiles.some((t) => tiles.some((o) => o.v === t.v && Math.abs(o.r - t.r) + Math.abs(o.c - t.c) === 1));
+  function start() { layer.innerHTML = ""; tiles = []; score = 0; over = false; won = false; scoreEl.textContent = 0; spawn(); spawn(); }
+  const move = (dir) => {
+    if (over) return;
+    const [dr, dc] = { left: [0, -1], right: [0, 1], up: [-1, 0], down: [1, 0] }[dir];
+    const g = Array.from({ length: N }, () => Array(N).fill(null)); tiles.forEach((t) => { g[t.r][t.c] = t; });
+    const ord = [0, 1, 2, 3], rs = dr === 1 ? [...ord].reverse() : ord, cs = dc === 1 ? [...ord].reverse() : ord;
+    const merged = new Set(); let moved = false, gain = 0;
+    for (const r of rs) for (const c of cs) {
+      const t = g[r][c]; if (!t) continue;
+      let nr = r, nc = c, hit = null;
+      for (;;) {
+        const pr = nr + dr, pc = nc + dc;
+        if (pr < 0 || pr > 3 || pc < 0 || pc > 3) break;
+        const o = g[pr][pc];
+        if (!o) { nr = pr; nc = pc; continue; }
+        if (o.v === t.v && !merged.has(o)) hit = o;
+        break;
+      }
+      if (hit) {
+        g[r][c] = null; t.r = hit.r; t.c = hit.c; place(t); t.dead = true; hit.v *= 2; merged.add(hit); gain += hit.v; paint(hit, true); moved = true;
+        setTimeout(() => t.el.remove(), 130);
+      } else if (nr !== r || nc !== c) { g[r][c] = null; g[nr][nc] = t; t.r = nr; t.c = nc; place(t); moved = true; }
+    }
+    if (!moved) return;
+    tiles = tiles.filter((t) => !t.dead); score += gain; scoreEl.textContent = score;
+    setTimeout(() => {
+      spawn();
+      if (!won && tiles.some((t) => t.v >= 2048)) { won = true; toast("2048! Keep going for a higher score"); }
+      if (!canMove()) { over = true; F.finish(score, start); }
+    }, 120);
+  };
+  const keys = (e) => { const d = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" }[e.key]; if (d) { e.preventDefault(); move(d); } };
+  window.addEventListener("keydown", keys);
+  let sx = 0, sy = 0;
+  board.addEventListener("pointerdown", (e) => { sx = e.clientX; sy = e.clientY; });
+  board.addEventListener("pointerup", (e) => {
+    const dx = e.clientX - sx, dy = e.clientY - sy; if (Math.max(Math.abs(dx), Math.abs(dy)) < 22) return;
+    move(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "right" : "left") : (dy > 0 ? "down" : "up"));
+  });
+  start();
+  return () => { window.removeEventListener("keydown", keys); F.dispose(); };
+}
+
+// ---------------------------------------------------------------------------
+// SNAKE
+// ---------------------------------------------------------------------------
+function mountSnake(root, { exit }) {
+  const F = gmFrame(root, gmDef("snake"), exit), G = 20, S = 400;
+  const canvas = el("canvas", { class: "gm-canvas sn", width: S, height: S }), ctx = canvas.getContext("2d");
+  const scoreEl = el("b", {}, "0");
+  const pad = el("div", { class: "sn-pad" }, ...[["up", "ri-arrow-up-s-line"], ["left", "ri-arrow-left-s-line"], ["down", "ri-arrow-down-s-line"], ["right", "ri-arrow-right-s-line"]]
+    .map(([d, ic]) => el("button", { type: "button", class: `sn-${d}`, onpointerdown: (e) => { e.preventDefault(); turn(d); } }, el("i", { class: ic }))));
+  F.stage.append(el("div", { class: "g48-wrap" }, el("div", { class: "g48-h" }, el("span", {}, "Score ", scoreEl)), canvas, el("p", { class: "gm-hint" }, "Swipe, use arrow keys or the pad to start."), pad));
+  let snake, dir, queue, food, score, alive, started, last = 0, raf = 0, dead = false;
+  const V = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+  const rndFood = () => { for (;;) { const f = [Math.floor(Math.random() * G), Math.floor(Math.random() * G)]; if (!snake.some((s) => s[0] === f[0] && s[1] === f[1])) return f; } };
+  function start() { snake = [[10, 10], [9, 10], [8, 10]]; dir = "right"; queue = []; score = 0; alive = true; started = false; scoreEl.textContent = 0; food = rndFood(); draw(); }
+  const turn = (d) => {
+    const cur = queue.length ? queue[queue.length - 1] : dir;
+    if (V[d][0] + V[cur][0] === 0 && V[d][1] + V[cur][1] === 0) return;
+    if (d === cur) { started = true; return; }
+    if (queue.length < 3) queue.push(d);
+    started = true;
+  };
+  const step = () => {
+    if (queue.length) dir = queue.shift();
+    const h = [snake[0][0] + V[dir][0], snake[0][1] + V[dir][1]];
+    const eat = h[0] === food[0] && h[1] === food[1];
+    const body = eat ? snake : snake.slice(0, -1);
+    if (h[0] < 0 || h[1] < 0 || h[0] >= G || h[1] >= G || body.some((s) => s[0] === h[0] && s[1] === h[1])) { alive = false; F.finish(score, start); return; }
+    snake.unshift(h);
+    if (!eat) snake.pop(); else { score += 10; scoreEl.textContent = score; food = rndFood(); }
+  };
+  const draw = () => {
+    const c = S / G; ctx.fillStyle = "#0f172a"; ctx.fillRect(0, 0, S, S);
+    ctx.fillStyle = "rgba(255,255,255,.035)"; for (let x = 0; x < G; x++) for (let y = 0; y < G; y++) if ((x + y) % 2) ctx.fillRect(x * c, y * c, c, c);
+    ctx.fillStyle = "#ef4444"; ctx.beginPath(); ctx.arc(food[0] * c + c / 2, food[1] * c + c / 2, c * .38, 0, 7); ctx.fill();
+    snake.forEach((s, i) => { ctx.fillStyle = i ? "#22c55e" : "#86efac"; ctx.beginPath(); (ctx.roundRect ? ctx.roundRect(s[0] * c + 1, s[1] * c + 1, c - 2, c - 2, i ? 5 : 8) : ctx.rect(s[0] * c + 1, s[1] * c + 1, c - 2, c - 2)); ctx.fill(); });
+    if (!started && alive) { ctx.fillStyle = "rgba(255,255,255,.85)"; ctx.font = "700 22px system-ui"; ctx.textAlign = "center"; ctx.fillText("Swipe to start", S / 2, S / 2 + 60); }
+  };
+  const loop = (t) => {
+    if (dead) return; raf = requestAnimationFrame(loop);
+    const gap = Math.max(70, 140 - score * .5);
+    if (alive && started && t - last > gap) { last = t; step(); }
+    if (alive) draw();
+  };
+  const keys = (e) => { const d = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" }[e.key]; if (d) { e.preventDefault(); turn(d); } };
+  window.addEventListener("keydown", keys);
+  let sx = 0, sy = 0;
+  canvas.addEventListener("pointerdown", (e) => { sx = e.clientX; sy = e.clientY; });
+  canvas.addEventListener("pointerup", (e) => { const dx = e.clientX - sx, dy = e.clientY - sy; if (Math.max(Math.abs(dx), Math.abs(dy)) < 18) return; turn(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "right" : "left") : (dy > 0 ? "down" : "up")); });
+  start(); raf = requestAnimationFrame(loop);
+  return () => { dead = true; cancelAnimationFrame(raf); window.removeEventListener("keydown", keys); F.dispose(); };
+}
+
+// ---------------------------------------------------------------------------
+// MEMORY MATCH
+// ---------------------------------------------------------------------------
+function mountMemory(root, { exit }) {
+  const F = gmFrame(root, gmDef("memory"), exit);
+  const EMO = ["🐶", "🐱", "🦊", "🐼", "🐸", "🦁", "🐙", "🦄"];
+  const movesEl = el("b", {}, "0"), timeEl = el("b", {}, "0s"), grid = el("div", { class: "mm-grid" });
+  F.stage.append(el("div", { class: "g48-wrap" }, el("div", { class: "g48-h" }, el("span", {}, "Moves ", movesEl), el("span", {}, "Time ", timeEl)), grid, el("p", { class: "gm-hint" }, "Flip two cards at a time and find all the pairs.")));
+  let first = null, lock = false, moves = 0, matched = 0, t0 = 0, timer = 0;
+  function start() {
+    clearInterval(timer); first = null; lock = false; moves = 0; matched = 0; t0 = 0; movesEl.textContent = 0; timeEl.textContent = "0s"; grid.innerHTML = "";
+    const deck = [...EMO, ...EMO].map((e) => ({ e, r: Math.random() })).sort((a, b) => a.r - b.r);
+    deck.forEach((d) => {
+      const c = el("button", { type: "button", class: "mm-c" }, el("span", { class: "mm-f" }, "?"), el("span", { class: "mm-b" }, d.e));
+      c.dataset.e = d.e;
+      c.onclick = () => {
+        if (lock || c.classList.contains("up") || c.classList.contains("ok")) return;
+        if (!t0) { t0 = Date.now(); timer = setInterval(() => { timeEl.textContent = Math.floor((Date.now() - t0) / 1000) + "s"; }, 500); }
+        c.classList.add("up");
+        if (!first) { first = c; return; }
+        moves++; movesEl.textContent = moves; const a = first; first = null;
+        if (a.dataset.e === c.dataset.e) {
+          a.classList.add("ok"); c.classList.add("ok"); matched++;
+          if (matched === 8) { clearInterval(timer); const secs = Math.floor((Date.now() - t0) / 1000); F.finish(Math.max(50, 1000 - moves * 20 - secs * 5), start, `${moves} moves in ${secs}s`); }
+        } else { lock = true; setTimeout(() => { a.classList.remove("up"); c.classList.remove("up"); lock = false; }, 750); }
+      };
+      grid.appendChild(c);
+    });
+  }
+  start();
+  return () => { clearInterval(timer); F.dispose(); };
+}
+
+// ---------------------------------------------------------------------------
+// WORD GUESS (daily word first, then random words)
+// ---------------------------------------------------------------------------
+const GM_WORDS = "about above actor adult after again agree alarm album alert alive allow alone along angry apple arena argue arise armor aside asset audio avoid awake aware badly baker basic beach begin being below bench black blame blind block blood board boost brain brand bread break brick brief bring broad brown build bunch cabin cable candy carry catch cause chair chalk charm chart chase cheap check chest chief child chill claim class clean clear clerk click climb clock close cloud coach coast color count court cover craft crash cream crowd crown curve daily dance dealt dirty dozen draft drama dream dress drink drive early earth eight elite empty enemy enjoy enter equal error event every exact extra faith false fault fever field fifth fight final first flame flash fleet floor focus force frame fresh front fruit funny ghost giant given glass globe glory grace grade grain grand grant grape grass great green group guess guest guide happy heart heavy honey horse hotel house human humor ideal image index inner issue ivory jelly joint judge juice knife known label large laser later laugh layer learn least leave legal lemon level light limit local logic loose lucky lunch magic major maker march match maybe mayor media metal might minor model money month moral motor mount mouse mouth movie music naked nerve never newly night noble noise north novel nurse ocean offer often olive onion opera orange order other outer owner paint panel paper party peace pearl phase phone photo piano pilot pitch place plain plane plant plate point power press price pride prime print prize proof proud pulse queen quick quiet radio raise range rapid ratio reach ready realm refer relax reply rider right river robot rough round route royal rural salad scale scene scope score sense serve seven shade shake shape share sharp sheep shelf shine shirt shock shoot short shown sight silly since skill sleep slide small smart smile smoke snake solid solve sound south space spare speak speed spend spice split sport staff stage stair stamp stand start state steam steel stick still stone store storm story sugar suite sunny super sweet swing table taste teach thank their theme there thick thing think third three throw tiger tight title today tooth topic total touch tough tower trace track trade trail train treat trend trial tribe truck truly trust truth twice uncle under union unite unity until upper upset urban usual valid value video virus visit vital voice waste watch water wheel where which while white whole whose woman world worry worth would write wrong young youth zebra".split(" ");
+function mountWord(root, { exit }) {
+  const F = gmFrame(root, gmDef("word"), exit);
+  const board = el("div", { class: "wd-board" }), kb = el("div", { class: "wd-kb" }), msg = el("p", { class: "gm-hint" }, "Guess the 5-letter word in 6 tries.");
+  F.stage.append(el("div", { class: "g48-wrap" }, board, msg, kb));
+  const day = Math.floor((Date.now() - new Date().getTimezoneOffset() * 60000) / 864e5), dayKey = "gb_word_day";
+  let word, row, cur, done, rows, keyEls = {};
+  const lastDay = () => { try { return +localStorage.getItem(dayKey) || 0; } catch { return 0; } };
+  function start() {
+    let daily = false;
+    if (lastDay() !== day) { daily = true; try { localStorage.setItem(dayKey, day); } catch {} }
+    word = daily ? GM_WORDS[(day * 7919) % GM_WORDS.length] : GM_WORDS[Math.floor(Math.random() * GM_WORDS.length)];
+    row = 0; cur = ""; done = false; msg.textContent = daily ? "Today's word. Everyone gets the same one." : "A fresh random word. Good luck!";
+    board.innerHTML = ""; rows = Array.from({ length: 6 }, () => { const r = el("div", { class: "wd-r" }, ...Array.from({ length: 5 }, () => el("i"))); board.appendChild(r); return r; });
+    kb.innerHTML = ""; keyEls = {};
+    ["qwertyuiop", "asdfghjkl", "↵zxcvbnm⌫"].forEach((line) => {
+      const k = el("div", { class: "wd-kr" });
+      [...line].forEach((ch) => {
+        const special = ch === "↵" || ch === "⌫";
+        const b = el("button", { type: "button", class: special ? "wide" : "" }, ch === "↵" ? "Enter" : ch);
+        b.onclick = () => key(ch === "↵" ? "Enter" : ch === "⌫" ? "Backspace" : ch);
+        keyEls[ch] = b; k.appendChild(b);
+      });
+      kb.appendChild(k);
+    });
+  }
+  const showRow = () => { [...rows[row].children].forEach((c, i) => { c.textContent = cur[i] || ""; c.classList.toggle("f", !!cur[i]); }); };
+  const rate = (g) => {
+    const res = Array(5).fill("x"), left = {};
+    for (let i = 0; i < 5; i++) { if (g[i] === word[i]) res[i] = "g"; else left[word[i]] = (left[word[i]] || 0) + 1; }
+    for (let i = 0; i < 5; i++) if (res[i] === "x" && left[g[i]]) { res[i] = "y"; left[g[i]]--; }
+    return res;
+  };
+  function key(k) {
+    if (done) return;
+    if (k === "Backspace") { cur = cur.slice(0, -1); showRow(); return; }
+    if (k === "Enter") {
+      if (cur.length < 5) { const rr = rows[row]; rr.classList.add("shake"); setTimeout(() => rr.classList.remove("shake"), 400); return; }
+      const res = rate(cur), r = row;
+      [...rows[r].children].forEach((c, i) => { setTimeout(() => c.classList.add(res[i]), i * 120); });
+      const rank = { x: 1, y: 2, g: 3 };
+      [...cur].forEach((ch, i) => { const b = keyEls[ch]; if (!b) return; if (rank[res[i]] > (+b.dataset.r || 0)) { b.dataset.r = rank[res[i]]; b.className = "k" + res[i]; } });
+      const guess = cur; row++; cur = "";
+      if (guess === word) { done = true; setTimeout(() => F.finish((7 - row) * 100, start, `Solved in ${row} ${row === 1 ? "try" : "tries"}`), 900); }
+      else if (row === 6) { done = true; setTimeout(() => F.finish(0, start, `The word was ${word.toUpperCase()}`), 900); }
+      return;
+    }
+    if (/^[a-z]$/i.test(k) && cur.length < 5) { cur += k.toLowerCase(); showRow(); }
+  }
+  const keys = (e) => { if (e.ctrlKey || e.metaKey || e.altKey) return; if (e.key === "Enter" || e.key === "Backspace" || /^[a-z]$/i.test(e.key)) { e.preventDefault(); key(e.key); } };
+  window.addEventListener("keydown", keys);
+  start();
+  return () => { window.removeEventListener("keydown", keys); F.dispose(); };
+}
+
+// ---------------------------------------------------------------------------
+// REACTION TEST
+// ---------------------------------------------------------------------------
+function mountReaction(root, { exit }) {
+  const F = gmFrame(root, gmDef("reaction"), exit), ROUNDS = 5;
+  const pad = el("button", { type: "button", class: "rx-pad" }), dots = el("div", { class: "rx-dots" });
+  F.stage.append(el("div", { class: "g48-wrap" }, el("div", { class: "g48-h" }, el("span", {}, "5 rounds. Tap when it turns green.")), pad, dots));
+  let times, st, t0, to = 0;
+  const say = (cls, big, small) => { pad.className = "rx-pad " + cls; pad.innerHTML = `<strong>${big}</strong><span>${small || ""}</span>`; };
+  const dotsDraw = () => { dots.innerHTML = ""; for (let i = 0; i < ROUNDS; i++) dots.appendChild(el("span", { class: times[i] ? "on" : "" }, times[i] ? times[i] + "ms" : "–")); };
+  function idle() { st = "idle"; say("blue", "Tap to begin", `Round ${times.length + 1} of ${ROUNDS}`); }
+  function start() { times = []; dotsDraw(); idle(); }
+  function wait() { st = "wait"; say("red", "Wait for green…", ""); to = setTimeout(() => { st = "go"; t0 = performance.now(); say("green", "TAP NOW!", ""); }, 1200 + Math.random() * 2800); }
+  pad.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    if (st === "idle") return wait();
+    if (st === "wait") { clearTimeout(to); st = "early"; return say("blue", "Too soon!", "Tap to try this round again"); }
+    if (st === "early") return wait();
+    if (st === "go") {
+      const ms = Math.round(performance.now() - t0); times.push(ms); dotsDraw();
+      if (times.length >= ROUNDS) { st = "end"; const avg = Math.round(times.reduce((a, b) => a + b, 0) / ROUNDS); say("blue", `${avg} ms`, "average"); F.finish(Math.max(1, 1000 - avg), start, `Average ${avg} ms`); }
+      else { st = "idle"; say("blue", `${ms} ms`, "Tap for the next round"); }
+    }
+  });
+  start();
+  return () => { clearTimeout(to); F.dispose(); };
+}
+
+// ---------------------------------------------------------------------------
+// COMPOUND CLASH — 3D shooter. Lives in gamers.html (+ gamers.js, Soldier.glb, Rifle.glb)
+// and is shown in an iframe. It posts the final score back; we save it like any game.
+// ---------------------------------------------------------------------------
+function mountCompound(root, { exit }) {
+  const F = gmFrame(root, gmDef("compound"), exit);
+  F.stage.classList.add("gm-3d");
+  const name = encodeURIComponent((state.me?.name || state.me?.username || "You").split(" ")[0]);
+  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=40&name=${name}`, allow: "fullscreen; autoplay", title: "Compound Clash" });
+  F.stage.appendChild(frame);
+  const onMsg = async (e) => {
+    if (e.source !== frame.contentWindow) return;
+    const d = e.data || {};
+    if (d.type === "gb-game-exit") exit();
+    else if (d.type === "gb-game-score" && d.score > 0) { const r = await gmSubmit("compound", d.score); if (r.isBest) toast("New best in Compound Clash! 🏆"); }
+  };
+  window.addEventListener("message", onMsg);
+  return () => { window.removeEventListener("message", onMsg); F.dispose(); };
+}
+
+function mountBoxing(root, { exit }) {
+  const F = gmFrame(root, gmDef("boxing"), exit);
+  F.stage.classList.add("gm-3d");
+  const name = encodeURIComponent((state.me?.name || state.me?.username || "You").split(" ")[0]);
+  const frame = el("iframe", { class: "gm-3d-frame", src: `/gamers.html?v=40&mode=box&name=${name}`, allow: "fullscreen; autoplay", title: "Boxing Arena" });
+  F.stage.appendChild(frame);
+  const onMsg = async (e) => {
+    if (e.source !== frame.contentWindow) return;
+    const d = e.data || {};
+    if (d.type === "gb-game-exit") exit();
+    else if (d.type === "gb-game-score" && d.score > 0) { const r = await gmSubmit("boxing", d.score); if (r.isBest) toast("New best in Boxing Arena! 🏆"); }
+  };
+  window.addEventListener("message", onMsg);
+  return () => { window.removeEventListener("message", onMsg); F.dispose(); };
+}
+
+// ---------------------------------------------------------------------------
+// BUBBLE POP — hex-grid bubble shooter
+// ---------------------------------------------------------------------------
+const BP_LEVELS = [
+  { rows: 4, colors: 3, shape: "full" }, { rows: 5, colors: 3, shape: "full" }, { rows: 5, colors: 3, shape: "stripes" },
+  { rows: 6, colors: 4, shape: "full" }, { rows: 6, colors: 4, shape: "triangle" }, { rows: 6, colors: 4, shape: "diamond" },
+  { rows: 7, colors: 4, shape: "checker" }, { rows: 7, colors: 4, shape: "zigzag", stone: .05 }, { rows: 7, colors: 5, shape: "full", stone: .06 },
+  { rows: 8, colors: 5, shape: "heart" }, { rows: 8, colors: 5, shape: "pillars", stone: .08 }, { rows: 8, colors: 5, shape: "triangle", bombs: 2 },
+  { rows: 8, colors: 5, shape: "diamond", stone: .08, bombs: 2 }, { rows: 9, colors: 5, shape: "stripes", stone: .1, bombs: 2 }, { rows: 9, colors: 6, shape: "full", bombs: 3 },
+  { rows: 9, colors: 6, shape: "heart", stone: .1, bombs: 3 }, { rows: 9, colors: 6, shape: "checker", stone: .12, bombs: 3 }, { rows: 10, colors: 6, shape: "zigzag", stone: .12, bombs: 4 },
+  { rows: 10, colors: 6, shape: "pillars", stone: .14, bombs: 4 }, { rows: 10, colors: 6, shape: "diamond", stone: .14, bombs: 4 }, { rows: 10, colors: 6, shape: "full", stone: .16, bombs: 5 },
+  { rows: 10, colors: 6, shape: "heart", stone: .16, bombs: 5 }, { rows: 10, colors: 6, shape: "triangle", stone: .18, bombs: 5 }, { rows: 11, colors: 6, shape: "stripes", stone: .18, bombs: 6 },
+];
+const BP_COLORS = ["#ef4444", "#facc15", "#22c55e", "#3b82f6", "#a855f7", "#fb923c"];
+const BP = { W: 360, H: 600, R: 18, COLS: 10, TOP: 6 };
+BP.ROWH = BP.R * Math.sqrt(3);
+BP.CX = BP.W / 2; BP.CY = BP.H - 48; BP.DEAD = BP.H - 112;
+BP.MAXROW = Math.floor((BP.DEAD - BP.TOP - BP.R) / BP.ROWH);
+
+function bpRng(seed) { let a = seed >>> 0; return () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+const bpCols = (r) => (r % 2 ? BP.COLS - 1 : BP.COLS);
+const bpPos = (r, c) => ({ x: BP.R + c * 2 * BP.R + (r % 2 ? BP.R : 0), y: BP.TOP + BP.R + r * BP.ROWH });
+const bpNeighbors = (r, c) => {
+  const out = [[r, c - 1], [r, c + 1]];
+  const cs = r % 2 ? [c, c + 1] : [c - 1, c];
+  [r - 1, r + 1].forEach((rr) => cs.forEach((cc) => out.push([rr, cc])));
+  return out.filter(([rr, cc]) => rr >= 0 && rr < BP.MAXROW + 2 && cc >= 0 && cc < bpCols(rr));
+};
+function bpShape(shape, r, c, rows) {
+  const mid = (BP.COLS - 1) / 2, x = c + (r % 2 ? .5 : 0);
+  switch (shape) {
+    case "triangle": return Math.abs(x - mid) <= (rows - 1 - r) * 0.55 + 1.2;
+    case "diamond": { const h = (rows - 1) / 2; return Math.abs(x - mid) <= (h - Math.abs(r - h)) * 0.9 + 1.4; }
+    case "stripes": return r % 3 !== 2;
+    case "checker": return (r + c) % 2 === 0 || r < 2;
+    case "zigzag": return ((c + (r % 4 < 2 ? 0 : 2)) % 5) !== 4;
+    case "pillars": return c % 3 !== 1 || r < 2;
+    case "heart": { const dx = (x - mid) / 4.6, dy = (r - rows * 0.45) / (rows * 0.55); return Math.pow(dx * dx + dy * dy - 0.55, 3) - dx * dx * Math.pow(dy, 3) * 1.6 <= 0.02; }
+    default: return true;
+  }
+}
+function bpBuildLevel(n) {
+  const L = BP_LEVELS[n], rnd = bpRng(7919 * (n + 3));
+  const grid = Array.from({ length: BP.MAXROW + 3 }, (_, r) => Array(bpCols(r)).fill(null));
+  const seeds = Array.from({ length: L.colors + 2 }, (_, i) => ({ r: rnd() * L.rows, c: rnd() * BP.COLS, k: i % L.colors }));
+  const cells = [];
+  for (let r = 0; r < L.rows; r++) for (let c = 0; c < bpCols(r); c++) {
+    if (!bpShape(L.shape, r, c, L.rows)) continue;
+    const x = c + (r % 2 ? .5 : 0);
+    let best = 1e9, k = 0;
+    seeds.forEach((s) => { const d = Math.hypot((s.r - r) * 1.4, s.c - x); if (d < best) { best = d; k = s.k; } });
+    if (rnd() < 0.12) k = Math.floor(rnd() * L.colors);
+    grid[r][c] = { t: "c", k }; cells.push([r, c]);
+  }
+  // keep row 0 anchored so the shape hangs from the ceiling
+  for (let c = 0; c < BP.COLS; c++) if (!grid[0][c] && cells.length) grid[0][c] = { t: "c", k: Math.floor(rnd() * L.colors) };
+  const pickable = () => cells.filter(([r, c]) => r > 0 && grid[r][c] && grid[r][c].t === "c");
+  if (L.stone) pickable().forEach(([r, c]) => { if (rnd() < L.stone) grid[r][c] = { t: "stone" }; });
+  for (let i = 0; i < (L.bombs || 0); i++) { const p = pickable(); if (!p.length) break; const [r, c] = p[Math.floor(rnd() * p.length)]; grid[r][c] = { t: "bomb" }; }
+  let count = 0; grid.forEach((row) => row.forEach((b) => { if (b && b.t !== "stone") count++; }));
+  const shots = Math.ceil(count * (0.64 - n * 0.0045)) + 6;
+  return { grid, shots, colors: L.colors };
+}
+
+function mountBubblePop(root, { exit }) {
+  const prog = gamesProgress("bubble");
+  let P = prog.read(); P.unlocked = P.unlocked || 1; P.stars = P.stars || {}; P.best = P.best || {};
+  const wrap = el("div", { class: "gm-wrap" });
+  root.appendChild(wrap);
+  let stopLoop = null;
+  const dispose = () => { stopLoop?.(); wrap.remove(); };
+
+  // ------------ audio (tiny synth, created on first tap)
+  let ac = null;
+  const beep = (f, d = .08, type = "sine", g = .06, slide = 0) => {
+    try {
+      ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+      const o = ac.createOscillator(), v = ac.createGain();
+      o.type = type; o.frequency.value = f; if (slide) o.frequency.linearRampToValueAtTime(f + slide, ac.currentTime + d);
+      v.gain.value = g; v.gain.exponentialRampToValueAtTime(.0001, ac.currentTime + d);
+      o.connect(v).connect(ac.destination); o.start(); o.stop(ac.currentTime + d);
+    } catch {}
+  };
+
+  // ------------ level select
+  gmHowToFirst(gmDef("bubble"));
+  const showLevels = () => {
+    stopLoop?.(); stopLoop = null; wrap.innerHTML = "";
+    const total = Object.values(P.stars).reduce((a, b) => a + b, 0);
+    const grid = el("div", { class: "gm-levels" });
+    BP_LEVELS.forEach((_, i) => {
+      const n = i + 1, open = n <= P.unlocked, st = P.stars[n] || 0;
+      const b = el("button", { class: `gm-lv${open ? "" : " locked"}${st ? " done" : ""}`, type: "button", onclick: () => { if (open) play(i); else toast("Finish the previous level first"); } });
+      b.innerHTML = open ? `<b>${n}</b><span>${[1, 2, 3].map((k) => `<i class="ri-star-${k <= st ? "fill" : "line"}"></i>`).join("")}</span>` : '<i class="ri-lock-2-fill"></i>';
+      grid.appendChild(b);
+    });
+    wrap.append(
+      el("div", { class: "gm-top" },
+        el("button", { class: "gb-icon-btn", type: "button", onclick: exit }, el("i", { class: "ri-arrow-left-line" })),
+        el("strong", {}, "Bubble Pop"), el("span", { class: "gm-stars" }, el("i", { class: "ri-star-fill" }), ` ${total}`),
+        el("button", { class: "gb-icon-btn", type: "button", title: "How to play", onclick: () => gmHowTo(gmDef("bubble")) }, el("i", { class: "ri-question-line" }))),
+      el("div", { class: "gm-lv-wrap" }, el("p", { class: "gm-sub" }, `Choose a level · ${BP_LEVELS.length} levels`), grid));
+  };
+
+  // ------------ play
+  const play = (idx) => {
+    stopLoop?.(); wrap.innerHTML = "";
+    const L = bpBuildLevel(idx);
+    let grid = L.grid, shots = L.shots, score = 0, state_ = "aim";
+    const startShots = L.shots;
+    const canvas = el("canvas", { class: "gm-canvas" });
+    const ctx = canvas.getContext("2d");
+    const scoreEl = el("span", { class: "gm-score" }, "0"), shotsEl = el("span", { class: "gm-shots" }, String(shots));
+    const top = el("div", { class: "gm-top" },
+      el("button", { class: "gb-icon-btn", type: "button", title: "Levels", onclick: showLevels }, el("i", { class: "ri-arrow-left-line" })),
+      el("strong", {}, `Level ${idx + 1}`), scoreEl,
+      el("span", { class: "gm-pill", title: "Shots left" }, el("i", { class: "ri-record-circle-fill" }), shotsEl),
+      el("button", { class: "gb-icon-btn", type: "button", title: "Restart", onclick: () => play(idx) }, el("i", { class: "ri-restart-line" })));
+    const stage = el("div", { class: "gm-stage" }, canvas);
+    wrap.append(top, stage);
+
+    // sizing
+    let scale = 1, dpr = Math.min(2, window.devicePixelRatio || 1);
+    const fit = () => {
+      const aw = stage.clientWidth || 360, ah = stage.clientHeight || 560;
+      const cssW = Math.max(240, Math.min(aw, ah * BP.W / BP.H));
+      canvas.style.width = cssW + "px"; canvas.style.height = cssW * BP.H / BP.W + "px";
+      canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssW * BP.H / BP.W * dpr);
+      scale = canvas.width / BP.W; sprites.clear();
+    };
+
+    // sprites (cached per type/colour)
+    const sprites = new Map();
+    const sprite = (key, draw) => {
+      if (sprites.has(key)) return sprites.get(key);
+      const s = Math.ceil(BP.R * 2 * scale) + 4, c = document.createElement("canvas"); c.width = c.height = s;
+      const g = c.getContext("2d"); g.translate(s / 2, s / 2); g.scale(scale, scale); draw(g); sprites.set(key, c); return c;
+    };
+    const R = BP.R;
+    const drawBall = (g, col) => {
+      const gr = g.createRadialGradient(-R * .35, -R * .4, R * .1, 0, 0, R);
+      gr.addColorStop(0, "#ffffff"); gr.addColorStop(.18, col); gr.addColorStop(1, shade(col, -.35));
+      g.beginPath(); g.arc(0, 0, R - 1, 0, 7); g.fillStyle = gr; g.fill(); g.lineWidth = 2; g.strokeStyle = "#1e1b4b"; g.stroke();
+      g.beginPath(); g.ellipse(-R * .35, -R * .42, R * .28, R * .16, -.6, 0, 7); g.fillStyle = "rgba(255,255,255,.65)"; g.fill();
+    };
+    function shade(hex, amt) { const n = parseInt(hex.slice(1), 16); const f = (v) => Math.max(0, Math.min(255, Math.round(v * (1 + amt)))); return `rgb(${f(n >> 16)},${f((n >> 8) & 255)},${f(n & 255)})`; }
+    const ballSprite = (b) => b.t === "c" ? sprite("c" + b.k, (g) => drawBall(g, BP_COLORS[b.k]))
+      : b.t === "stone" ? sprite("stone", (g) => { drawBall(g, "#94a3b8"); g.strokeStyle = "#475569"; g.lineWidth = 2; g.beginPath(); g.moveTo(-6, -8); g.lineTo(0, -1); g.lineTo(-3, 7); g.moveTo(0, -1); g.lineTo(8, 3); g.stroke(); })
+      : sprite("bomb", (g) => { drawBall(g, "#334155"); g.fillStyle = "#ef4444"; g.beginPath(); g.arc(0, 1, 6, 0, 7); g.fill(); g.strokeStyle = "#fde047"; g.lineWidth = 2.4; g.beginPath(); g.moveTo(4, -9); g.quadraticCurveTo(10, -14, 12, -9); g.stroke(); g.fillStyle = "#fde047"; g.beginPath(); g.arc(12, -9, 2.6, 0, 7); g.fill(); });
+
+    // character at the cannon
+    const me = { ...defaultCharacter(state.uid), ...(state.me?.character || {}) };
+    const face = new Image(); face.src = characterDataUri(me);
+
+    // state
+    let cur = null, next = null, shot = null, angle = Math.PI / 2, aiming = false;
+    const parts = [], falls = [], floats = [];
+    const present = () => { const s = new Set(); grid.forEach((row) => row.forEach((b) => { if (b && b.t === "c") s.add(b.k); })); return [...s]; };
+    const randColor = () => { const p = present(); return { t: "c", k: p.length ? p[Math.floor(Math.random() * p.length)] : 0 }; };
+    cur = randColor(); next = randColor();
+    const countLeft = () => { let n = 0; grid.forEach((row) => row.forEach((b) => { if (b && b.t !== "stone") n++; })); return n; };
+
+    // aiming guide (bounces off walls)
+    const guide = () => {
+      const pts = []; let x = BP.CX, y = BP.CY - 30, vx = Math.cos(angle), vy = -Math.sin(angle), len = 0;
+      while (len < 560 && y > BP.TOP + R) {
+        x += vx * 8; y += vy * 8; len += 8;
+        if (x < R) { x = R; vx = -vx; } else if (x > BP.W - R) { x = BP.W - R; vx = -vx; }
+        if (hits(x, y)) break;
+        if (len % 24 === 0) pts.push([x, y]);
+      }
+      return pts;
+    };
+    const hits = (x, y) => {
+      if (y <= BP.TOP + R) return true;
+      const r0 = Math.max(0, Math.floor((y - BP.TOP - R) / BP.ROWH) - 1), r1 = Math.min(grid.length - 1, r0 + 3);
+      for (let r = r0; r <= r1; r++) for (let c = 0; c < grid[r].length; c++) {
+        if (!grid[r][c]) continue; const p = bpPos(r, c);
+        if ((p.x - x) ** 2 + (p.y - y) ** 2 < (R * 1.82) ** 2) return true;
+      }
+      return false;
+    };
+    const snap = (x, y) => {
+      let best = null, bd = 1e9;
+      const r0 = Math.max(0, Math.round((y - BP.TOP - R) / BP.ROWH) - 2), r1 = Math.min(BP.MAXROW + 1, r0 + 4);
+      for (let r = r0; r <= r1; r++) for (let c = 0; c < bpCols(r); c++) {
+        if (grid[r][c]) continue;
+        const anchored = r === 0 || bpNeighbors(r, c).some(([rr, cc]) => grid[rr]?.[cc]);
+        if (!anchored) continue;
+        const p = bpPos(r, c), d = (p.x - x) ** 2 + (p.y - y) ** 2;
+        if (d < bd) { bd = d; best = [r, c]; }
+      }
+      return best;
+    };
+
+    // effects
+    const burst = (x, y, col, n = 7) => { for (let i = 0; i < n; i++) { const a = Math.random() * 6.28, s = 60 + Math.random() * 140; parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 40, life: .5 + Math.random() * .3, col, r: 2 + Math.random() * 3 }); } };
+    const floatText = (x, y, t) => floats.push({ x, y, t, life: 1 });
+
+    // resolve a landed bubble
+    const land = (r, c, ball) => {
+      grid[r][c] = ball;
+      let pop = new Set(), blast = new Set();
+      const key = (a, b) => a * 100 + b;
+      const bombsAround = (cells) => { const out = []; cells.forEach(([rr, cc]) => bpNeighbors(rr, cc).forEach(([a, b]) => { if (grid[a]?.[b]?.t === "bomb") out.push([a, b]); })); return out; };
+      const explode = (br, bc) => {
+        const bp = bpPos(br, bc);
+        grid.forEach((row, rr) => row.forEach((b, cc) => { if (b && b.t !== "stone") { const p = bpPos(rr, cc); if ((p.x - bp.x) ** 2 + (p.y - bp.y) ** 2 <= (R * 3.6) ** 2) blast.add(key(rr, cc)); } }));
+        beep(120, .35, "sawtooth", .08, -60);
+      };
+      // matching group
+      const group = []; const seen = new Set([key(r, c)]); const q = [[r, c]];
+      while (q.length) { const [a, b] = q.pop(); group.push([a, b]); bpNeighbors(a, b).forEach(([x, y]) => { const n = grid[x]?.[y]; if (n && n.t === "c" && n.k === ball.k && !seen.has(key(x, y))) { seen.add(key(x, y)); q.push([x, y]); } }); }
+      const touching = bombsAround([[r, c]]);
+      if (group.length >= 3 || touching.length) {
+        if (group.length >= 3) group.forEach(([a, b]) => pop.add(key(a, b)));
+        const bombs = bombsAround(group.length >= 3 ? group : [[r, c]]);
+        bombs.forEach(([a, b]) => { explode(a, b); blast.add(key(a, b)); });
+        if (touching.length && group.length < 3) blast.add(key(r, c));
+      }
+      const gone = new Set([...pop, ...blast]);
+      let popped = 0;
+      gone.forEach((k) => { const a = Math.floor(k / 100), b = k % 100, n = grid[a]?.[b]; if (!n) return; const p = bpPos(a, b); burst(p.x, p.y, n.t === "c" ? BP_COLORS[n.k] : n.t === "bomb" ? "#fb923c" : "#94a3b8", n.t === "bomb" ? 14 : 7); grid[a][b] = null; popped++; });
+      // floating bubbles fall
+      const hang = new Set(); const q2 = [];
+      for (let cc = 0; cc < bpCols(0); cc++) if (grid[0][cc]) { hang.add(key(0, cc)); q2.push([0, cc]); }
+      while (q2.length) { const [a, b] = q2.pop(); bpNeighbors(a, b).forEach(([x, y]) => { if (grid[x]?.[y] && !hang.has(key(x, y))) { hang.add(key(x, y)); q2.push([x, y]); } }); }
+      let fell = 0;
+      grid.forEach((row, rr) => row.forEach((n, cc) => { if (n && !hang.has(key(rr, cc))) { const p = bpPos(rr, cc); falls.push({ x: p.x, y: p.y, vy: -60 - Math.random() * 60, vx: (Math.random() - .5) * 60, n, a: 1 }); grid[rr][cc] = null; fell++; } }));
+      if (popped) { beep(520 + Math.min(popped, 10) * 40, .12, "triangle", .07, 200); }
+      else beep(220, .06, "sine", .05);
+      const gain = popped * 10 + fell * 25 * (fell > 3 ? 2 : 1);
+      if (gain) { score += gain; scoreEl.textContent = score; const p = bpPos(r, c); floatText(p.x, p.y, "+" + gain); }
+      return popped + fell;
+    };
+
+    const finish = (won) => {
+      state_ = won ? "won" : "lost";
+      const ratio = shots / startShots, st = won ? (ratio >= .35 ? 3 : ratio >= .15 ? 2 : 1) : 0;
+      if (won) {
+        score += shots * 20; scoreEl.textContent = score;
+        P.stars[idx + 1] = Math.max(P.stars[idx + 1] || 0, st);
+        P.best[idx + 1] = Math.max(P.best[idx + 1] || 0, score);
+        P.unlocked = Math.max(P.unlocked, Math.min(BP_LEVELS.length, idx + 2));
+        prog.write(P); gmSubmit("bubble", Object.values(P.stars).reduce((a, b) => a + b, 0)); beep(660, .5, "triangle", .08, 400);
+      } else beep(160, .5, "sawtooth", .07, -90);
+      const m = el("div", { class: "gm-modal" }, el("div", { class: "gm-modal-c" },
+        el("h3", {}, won ? "Level complete!" : "Out of shots"),
+        won ? el("div", { class: "gm-modal-stars" }, ...[1, 2, 3].map((k) => el("i", { class: `ri-star-${k <= st ? "fill" : "line"}`, style: `animation-delay:${k * .18}s` }))) : el("p", {}, "So close. Try a different angle!"),
+        el("p", { class: "gm-modal-s" }, `Score ${score}`),
+        el("div", { class: "gm-modal-b" },
+          won && idx + 1 < BP_LEVELS.length ? el("button", { class: "gbu-btn primary", type: "button", onclick: () => play(idx + 1) }, "Next level") : null,
+          el("button", { class: "gbu-btn", type: "button", onclick: () => play(idx) }, won ? "Replay" : "Try again"),
+          el("button", { class: "gbu-btn", type: "button", onclick: showLevels }, "Levels"))));
+      setTimeout(() => stage.appendChild(m), won ? 700 : 400);
+    };
+
+    const shoot = () => {
+      if (state_ !== "aim" || shots <= 0) return;
+      const s = 640;
+      shot = { x: BP.CX, y: BP.CY - 30, vx: Math.cos(angle) * s, vy: -Math.sin(angle) * s, b: cur };
+      shots--; shotsEl.textContent = shots; state_ = "fly"; beep(300, .07, "square", .04, 120);
+    };
+    const swap = () => { const t = cur; cur = next; next = t; beep(420, .05); };
+
+    // input
+    const toLocal = (e) => { const r = canvas.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * BP.W, y: (e.clientY - r.top) / r.height * BP.H }; };
+    const aimAt = (p) => { const dx = p.x - BP.CX, dy = BP.CY - p.y; if (dy < 10) return false; angle = Math.max(.14, Math.min(Math.PI - .14, Math.atan2(dy, dx))); return true; };
+    let downOnNext = false, valid = false;
+    canvas.addEventListener("pointerdown", (e) => {
+      canvas.setPointerCapture?.(e.pointerId); const p = toLocal(e);
+      downOnNext = Math.hypot(p.x - (BP.CX - 74), p.y - (BP.CY + 12)) < 26;
+      if (downOnNext) { swap(); return; }
+      aiming = true; valid = aimAt(p);
+    });
+    canvas.addEventListener("pointermove", (e) => { if (aiming) valid = aimAt(toLocal(e)); else if (e.pointerType === "mouse") aimAt(toLocal(e)); });
+    const release = () => { if (aiming && valid) shoot(); aiming = false; downOnNext = false; };
+    canvas.addEventListener("pointerup", release);
+    canvas.addEventListener("pointercancel", () => { aiming = false; });
+
+    // loop
+    let last = performance.now(), raf = 0, settle = 0;
+    const step = (now) => {
+      const dt = Math.min(.033, (now - last) / 1000); last = now;
+      if (state_ === "fly" && shot) {
+        const dist = Math.hypot(shot.vx, shot.vy) * dt, n = Math.max(1, Math.ceil(dist / 6));
+        for (let i = 0; i < n && shot; i++) {
+          shot.x += shot.vx * dt / n; shot.y += shot.vy * dt / n;
+          if (shot.x < R) { shot.x = R; shot.vx = -shot.vx; beep(260, .03, "sine", .03); } else if (shot.x > BP.W - R) { shot.x = BP.W - R; shot.vx = -shot.vx; beep(260, .03, "sine", .03); }
+          if (hits(shot.x, shot.y)) {
+            const cell = snap(shot.x, shot.y), b = shot.b; shot = null;
+            if (!cell || cell[0] > BP.MAXROW) { finish(false); break; }
+            land(cell[0], cell[1], b);
+            state_ = "settle"; settle = .45;
+          }
+        }
+      } else if (state_ === "settle") {
+        settle -= dt;
+        if (settle <= 0 && !falls.length) {
+          if (countLeft() === 0) finish(true);
+          else if (shots <= 0) finish(false);
+          else {
+            let low = 0; grid.forEach((row, r) => row.forEach((b) => { if (b) low = Math.max(low, r); }));
+            if (low > BP.MAXROW) finish(false);
+            else { cur = next; if (!present().includes(cur.k) && cur.t === "c") cur = randColor(); next = randColor(); state_ = "aim"; }
+          }
+        }
+      }
+      parts.forEach((p) => { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 420 * dt; p.life -= dt; });
+      for (let i = parts.length - 1; i >= 0; i--) if (parts[i].life <= 0) parts.splice(i, 1);
+      falls.forEach((f) => { f.vy += 900 * dt; f.y += f.vy * dt; f.x += f.vx * dt; f.a = Math.max(0, f.a - dt * .4); });
+      for (let i = falls.length - 1; i >= 0; i--) if (falls[i].y > BP.H + 40) falls.splice(i, 1);
+      floats.forEach((f) => { f.y -= 28 * dt; f.life -= dt; });
+      for (let i = floats.length - 1; i >= 0; i--) if (floats[i].life <= 0) floats.splice(i, 1);
+      draw(now); raf = requestAnimationFrame(step);
+    };
+    const draw = (now) => {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      const bg = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      bg.addColorStop(0, "#1e1b4b"); bg.addColorStop(.55, "#312e81"); bg.addColorStop(1, "#1d4ed8");
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.setTransform(scale, 0, 0, scale, 0, 0);
+      // danger line
+      ctx.setLineDash([6, 8]); ctx.strokeStyle = "rgba(248,113,113,.55)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, BP.DEAD); ctx.lineTo(BP.W, BP.DEAD); ctx.stroke(); ctx.setLineDash([]);
+      const put = (b, x, y, a = 1) => { const s = ballSprite(b), w = s.width / scale; ctx.globalAlpha = a; ctx.drawImage(s, x - w / 2, y - w / 2, w, w); ctx.globalAlpha = 1; };
+      grid.forEach((row, r) => row.forEach((b, c) => { if (b) { const p = bpPos(r, c); put(b, p.x, p.y); } }));
+      falls.forEach((f) => put(f.n, f.x, f.y, f.a));
+      // guide
+      if ((state_ === "aim") && (aiming || true)) { guide().forEach(([x, y], i) => { ctx.fillStyle = `rgba(255,255,255,${Math.max(.15, .8 - i * .03)})`; ctx.beginPath(); ctx.arc(x, y, 2.6, 0, 7); ctx.fill(); }); }
+      // cannon
+      ctx.save(); ctx.translate(BP.CX, BP.CY); ctx.rotate(Math.PI / 2 - angle);
+      const bar = ctx.createLinearGradient(-12, 0, 12, 0); bar.addColorStop(0, "#6d28d9"); bar.addColorStop(.5, "#a78bfa"); bar.addColorStop(1, "#6d28d9");
+      ctx.fillStyle = bar; ctx.strokeStyle = "#1e1b4b"; ctx.lineWidth = 3; ctx.beginPath(); ctx.roundRect(-12, -52, 24, 52, 8); ctx.fill(); ctx.stroke();
+      ctx.restore();
+      ctx.fillStyle = "#4c1d95"; ctx.strokeStyle = "#1e1b4b"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(BP.CX, BP.CY, 28, 0, 7); ctx.fill(); ctx.stroke();
+      if (face.complete && face.naturalWidth) { ctx.save(); ctx.beginPath(); ctx.arc(BP.CX, BP.CY, 24, 0, 7); ctx.clip(); ctx.drawImage(face, BP.CX - 24, BP.CY - 24, 48, 48); ctx.restore(); }
+      if (cur && state_ === "aim") put(cur, BP.CX + Math.cos(angle) * 34, BP.CY - Math.sin(angle) * 34);
+      if (shot) put(shot.b, shot.x, shot.y);
+      // next bubble
+      ctx.fillStyle = "rgba(255,255,255,.75)"; ctx.font = "bold 10px system-ui"; ctx.textAlign = "center"; ctx.fillText("NEXT · tap", BP.CX - 74, BP.CY - 14);
+      if (next) { ctx.save(); ctx.translate(BP.CX - 74, BP.CY + 12); ctx.scale(.8, .8); put(next, 0, 0); ctx.restore(); }
+      // particles + text
+      parts.forEach((p) => { ctx.globalAlpha = Math.max(0, p.life * 2); ctx.fillStyle = p.col; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill(); }); ctx.globalAlpha = 1;
+      ctx.font = "bold 16px system-ui"; floats.forEach((f) => { ctx.globalAlpha = Math.min(1, f.life * 1.5); ctx.fillStyle = "#fde047"; ctx.strokeStyle = "#1e1b4b"; ctx.lineWidth = 3; ctx.strokeText(f.t, f.x, f.y); ctx.fillText(f.t, f.x, f.y); }); ctx.globalAlpha = 1;
+    };
+    const ro = window.ResizeObserver ? new ResizeObserver(fit) : null; ro?.observe(stage);
+    fit(); raf = requestAnimationFrame(step);
+    stopLoop = () => { cancelAnimationFrame(raf); ro?.disconnect(); };
+  };
+
+  showLevels();
+  return dispose;
+}
+
+
+
+// =========================================================================
+// 18. GET BETTER BRO — a virtual account that "posts" 3 animated stories a day
+//     (music + voice + captions). Scripts rotate by date; nothing to host.
+// =========================================================================
+const BRO_AVATAR = "data:image/svg+xml;utf8," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c5cff"/><stop offset="1" stop-color="#ff5cae"/></linearGradient></defs><circle cx="50" cy="50" r="50" fill="url(#g)"/><rect x="17" y="37" width="66" height="21" rx="10" fill="#111827"/><rect x="21" y="40" width="27" height="14" rx="7" fill="#475569"/><rect x="52" y="40" width="27" height="14" rx="7" fill="#475569"/><path d="M31 69 Q50 85 69 69" stroke="#fff" stroke-width="5" fill="none" stroke-linecap="round"/></svg>');
+const BRO_HOURS = [8, 13, 19];
+
+// scene: t=headline, s=sub, say=spoken+caption, art=visual, lines=chat lines, q=prompt
+const BRO_EPS = [
+  { id: "lol", bg: 0, mood: "chill", cap: "Typing “lol” with a straight face 😐", scenes: [
+    { art: "emoji:😐", t: "Typing “lol” with a straight face", say: "Be honest. How many times have you typed lol with a completely straight face?" },
+    { art: "keys", t: "Text has no tone", s: "Everything sounds rude or fake-happy", say: "Text has no tone. Everything comes out either rude, or weirdly cheerful." },
+    { art: "wave", t: "Your voice does the work", s: "The laugh. The pause. The “hmm”.", say: "Your voice carries the laugh, the pause, even the little hmm. Nothing to decode." },
+    { art: "chars", t: "So just say it", say: "That's kind of the whole idea over here. Say it out loud, and let people actually hear you." } ] },
+  { id: "streak", bg: 2, mood: "hype", cap: "Streaks, but without the guilt trip 🔥", scenes: [
+    { art: "emoji:😮‍💨", t: "Streaks can feel like homework", say: "Most streaks make you feel terrible the second you miss a day." },
+    { art: "flame", t: "Here it's just a nudge", s: "Show up. Say one thing.", say: "Here a streak is only a little nudge. Show up, say one thing, get a small reward." },
+    { art: "lock", t: "Seven days unlocks something", say: "Keep it going for seven days and you unlock a special character. No lectures. Just a surprise." },
+    { art: "emoji:🌱", t: "Tiny habits win", say: "Tiny habits beat big plans. Every single time." } ] },
+  { id: "face", bg: 3, mood: "warm", cap: "You don't need a selfie to be someone 🙈", scenes: [
+    { art: "emoji:🙈", t: "Not everyone wants their face out there", say: "Not everyone wants their face on the internet. And that's completely fine." },
+    { art: "chars", t: "Pick a character instead", s: "Colours, eyes, vibe", say: "So pick a character. Change the colours, the eyes, the whole vibe, until it feels like you." },
+    { art: "lock", t: "Earn the rare ones", s: "First comment. First post. 7-day streak.", say: "And you can earn rare ones. Your first comment, your first post, a seven day streak." },
+    { art: "chars", t: "Be someone, not a pose", say: "You get to be fully yourself without posing for it." } ] },
+  { id: "threads", bg: 1, mood: "chill", cap: "Group chats are chaos. Threads help 🧵", scenes: [
+    { art: "emoji:🤯", t: "Reply to a reply to a reply…", say: "You know when a conversation branches off, and suddenly nobody knows who is answering who?" },
+    { art: "chat", lines: [{ n: "Ada", t: "has anyone tried the new place?", d: 0 }, { n: "Tunde", t: "yes! the jollof is wild", d: 1 }, { n: "Bisi", t: "wait, which branch?", d: 2 }], t: "Replies hang off each other", say: "Here, replies hang off each other with little connecting lines. You can see exactly who is talking to who." },
+    { art: "chat", lines: [{ n: "Zee", t: "voice note · 0:14", d: 0 }, { n: "Ada", t: "voice note · 0:09", d: 1 }, { n: "Zee", t: "😂😂", d: 1 }], t: "Follow one thread", say: "Follow the one thread you care about, and ignore the noise." },
+    { art: "emoji:🧵", t: "Small thing. Big relief.", say: "Small thing, big relief." } ] },
+  { id: "offline", bg: 3, mood: "chill", cap: "When your data finishes at the worst time 📉", scenes: [
+    { art: "emoji:📉", t: "Data finished. Right now?", say: "Your data just finished. Right in the middle of something good." },
+    { art: "offline", t: "It still opens", s: "Your feed. Your saved notes.", say: "Here the app still opens. Your feed, your saved voice notes, everything you already looked at is still there." },
+    { art: "offline", t: "A small banner tells you", s: "Tap refresh when you're back", say: "A small banner tells you you're offline. Tap refresh when the network comes back. That's it." },
+    { art: "emoji:🔋", t: "No panic needed", say: "No panic needed." } ] },
+  { id: "beat", bg: 2, mood: "hype", cap: "“Beat my score” hits different 🎮", scenes: [
+    { art: "emoji:🎮", t: "When did you last play with a friend?", say: "Quick question. When was the last time you played a little game against a friend?" },
+    { art: "game", t: "Their score shows up in your feed", say: "When a friend plays, their score shows up in your feed. Tap it, and the challenge is on." },
+    { art: "emoji:🕹️", t: "Two-minute games", s: "2048 · Snake · Word of the day", say: "Short games. Two minutes. Perfect for when you just need a break." },
+    { art: "game2", t: "Win, then go brag", say: "And when you win, you can go tell them. In the chat. Loudly." } ] },
+  { id: "prompt", bg: 4, mood: "warm", cap: "Staring at an empty box? 🫠", scenes: [
+    { art: "emoji:🫠", t: "Staring at an empty box", say: "Staring at an empty box, wondering what to say. We've all been there." },
+    { art: "prompt", q: "What's one thing that made you smile today?", t: "One question a day", say: "So every day there's one question waiting. Something small and easy to answer." },
+    { art: "wave", t: "Answer out loud", s: "Ten seconds is plenty", say: "Answer it out loud. Ten seconds is plenty." },
+    { art: "chars", t: "Then hear everyone else", say: "And then you get to hear everybody else's answer. That's the fun part." } ] },
+  { id: "react", bg: 0, mood: "warm", cap: "A thumbs up can mean anything 👍", scenes: [
+    { art: "emoji:👍", t: "A thumbs up says nothing", say: "A thumbs up can mean anything. Thanks. Whatever. Please stop." },
+    { art: "wave", t: "React with your voice", s: "A laugh. A gasp. A real “wow”.", say: "Here you can react with your voice. A laugh. A gasp. An actual wow." },
+    { art: "emoji:😂", t: "They hear the laugh", say: "And when someone hears your laugh, they know it was real." },
+    { art: "chars", t: "Feels like being there", say: "It feels a lot more like being in the room." } ] },
+  { id: "quiet", bg: 4, mood: "chill", cap: "Quiet on purpose 🍃", scenes: [
+    { art: "emoji:📱", t: "Too many buttons", say: "Some apps feel like standing in a crowded market. Buttons everywhere, all shouting at you." },
+    { art: "calm", t: "We kept removing things", say: "Here we kept removing things. The extra bars, the boxes, the stuff you never touched." },
+    { art: "calm", t: "What's left is the point", s: "Listen. Speak.", say: "What's left is a place to listen, and a place to speak." },
+    { art: "emoji:🍃", t: "Quiet on purpose", say: "Quiet, on purpose." } ] },
+  { id: "video", bg: 1, mood: "hype", cap: "Not a reel. A note. 🎬", scenes: [
+    { art: "emoji:🎬", t: "Not a reel. A note.", say: "Sometimes a voice isn't enough and you want people to actually see it. A short video note." },
+    { art: "emoji:✂️", t: "Fix it before it's out", s: "Trim · Cover · Mute · Reframe", say: "You can trim it, pick a cover, mute it and reframe it, before anyone else sees it." },
+    { art: "emoji:🙌", t: "No pressure to be perfect", say: "It's just a note. Say it, check it, send it." },
+    { art: "chars", t: "Real, not staged", say: "Real beats staged. Every time." } ] },
+  { id: "long", bg: 3, mood: "warm", cap: "Some thoughts don't fit in one line 📝", scenes: [
+    { art: "emoji:📝", t: "Some thoughts are long", say: "Some thoughts are just too long for a tiny box." },
+    { art: "emoji:📖", t: "Write a proper post", s: "Up to 2,500 characters + a cover", say: "So you can write a proper long post here, with a cover image on top, like a little article." },
+    { art: "chat", lines: [{ n: "You", t: "my long thought…", d: 0 }, { n: "Ada", t: "this is so true", d: 1 }], t: "Easy to read, easy to reply", say: "Open the post and the picture and the words sit separately, so nothing gets covered." },
+    { art: "emoji:☕", t: "Grab some tea", say: "Grab some tea. Take your time." } ] },
+  { id: "review", bg: 2, mood: "chill", cap: "Sent it. Regretted it. 😬", scenes: [
+    { art: "emoji:😬", t: "Sent it. Instantly regretted it.", say: "You send a voice note, and immediately wish you hadn't." },
+    { art: "wave", t: "Listen before you post", say: "Here you can play it back first. Hear it. Redo it. Send it only when it feels right." },
+    { art: "emoji:🎧", t: "Your voice, your call", say: "Your voice, your call." },
+    { art: "emoji:✅", t: "Send with confidence", say: "Then send it, with a lot more confidence." } ] },
+  { id: "ritual", bg: 4, mood: "warm", cap: "Three tiny things a day ☀️", scenes: [
+    { art: "emoji:☀️", t: "A tiny daily routine", say: "Here's a tiny routine. It takes about five minutes." },
+    { art: "prompt", q: "Today's question", t: "One question", say: "One question, answered out loud." },
+    { art: "flame", t: "One streak day", say: "One more day on your streak." },
+    { art: "game", t: "One quick game", say: "And one quick game, just for fun. Done." } ] },
+  { id: "groups", bg: 1, mood: "chill", cap: "Your people, one tap away 👥", scenes: [
+    { art: "emoji:👥", t: "Different people, different corners", say: "You have different people for different parts of your life." },
+    { art: "chars", t: "A rail of your groups", say: "On the left there's a little rail with all your groups. One tap and you're in." },
+    { art: "emoji:🏘️", t: "Like your own street", say: "It's like a street where everyone you like lives." },
+    { art: "emoji:🚪", t: "Knock. Walk in.", say: "Knock, walk in, say hi." } ] },
+  { id: "late", bg: 3, mood: "chill", cap: "2 a.m. thoughts 🌙", scenes: [
+    { art: "emoji:🌙", t: "2 a.m. and your brain won't stop", say: "It's two a.m. and your brain will not switch off." },
+    { art: "wave", t: "Whisper it", s: "No need to type it perfectly", say: "You don't have to type it perfectly. Just whisper it into a voice note." },
+    { art: "chars", t: "Someone else is awake too", say: "And chances are someone else is awake, and needs to hear exactly that." },
+    { art: "emoji:😴", t: "Sleep after", say: "Okay now go to sleep." } ] },
+];
+
+const BRO_ART = {
+  emoji: (sc) => `<div class="ba-emoji">${(sc.art.split(":")[1]) || "✨"}</div>`,
+  wave: () => `<div class="ba-wave">${Array.from({ length: 22 }, (_, i) => `<i style="--i:${i}"></i>`).join("")}</div><div class="ba-mic">🎙️</div>`,
+  chars: () => `<div class="ba-chars">${["bro1", "bro2", "bro3"].map((s, i) => `<img src="${characterDataUri(defaultCharacter(s))}" alt="" style="animation-delay:${i * .25}s">`).join("")}</div>`,
+  flame: () => `<div class="ba-flame"><span class="fl">🔥</span><div class="ba-cnt">${[1, 2, 3, 4, 5, 6, 7].map((n) => `<b class="${n === 7 ? "last" : ""}" style="animation-delay:${(n - 1) * .42}s">${n}</b>`).join("")}</div><small>day streak</small></div>`,
+  chat: (sc) => `<div class="ba-chat">${(sc.lines || []).map((l, i) => `<div class="ba-msg d${l.d}" style="animation-delay:${i * .75}s"><b>${l.n}</b><span>${l.t}</span></div>`).join("")}</div>`,
+  offline: () => `<div class="ba-off"><span class="a">📵</span><span class="b">✅</span><small>offline · still here</small></div>`,
+  game: () => `<div class="ba-game"><div class="r1"><span>Ada</span><b>1,240</b></div><div class="r2"><span>You</span><b>1,310</b></div><span class="tp">Tap to beat 👆</span></div>`,
+  game2: () => `<div class="ba-game"><div class="r1"><span>Ada</span><b>1,240</b></div><div class="r2 win"><span>You</span><b>1,310</b></div><span class="tp">🎉 You win! 💬</span></div>`,
+  lock: () => `<div class="ba-lock"><span class="l">🔒</span><span class="u">🔓</span><span class="sp">✨</span><span class="sp2">✨</span></div>`,
+  calm: () => `<div class="ba-calm">${["🔔", "⚙️", "📌", "🛒", "📣", "🔍", "⭐", "📷"].map((e, i) => `<i style="animation-delay:${i * .25}s">${e}</i>`).join("")}<span class="big">🎙️</span></div>`,
+  keys: () => `<div class="ba-keys"><span class="k">⌨️</span><span class="m">🎙️</span></div>`,
+  prompt: (sc) => `<div class="ba-prompt"><small>TODAY'S QUESTION</small><b>${sc.q || ""}</b></div>`,
+};
+
+// ------------------------- sound: music + sfx + voice
+const BroSound = (() => {
+  let ac = null, master = null, timer = 0, step = 0, mood = null;
+  const MOODS = {
+    chill: { bpm: 74, mel: [76,0,79,0,76,74,72,0, 72,0,76,0,74,72,69,0, 69,0,72,0,77,76,72,0, 74,0,79,0,77,74,71,0], chords: [[60, 64, 67, 71], [57, 60, 64, 67], [53, 57, 60, 64], [55, 59, 62, 65]], hat: false },
+    warm: { bpm: 84, mel: [74,0,78,0,81,78,74,0, 71,0,74,0,78,74,71,0, 67,0,71,0,74,71,67,0, 69,0,73,0,76,73,69,0], chords: [[62, 66, 69, 73], [59, 62, 66, 69], [55, 59, 62, 66], [57, 61, 64, 68]], hat: false },
+    hype: { bpm: 108, mel: [81,0,76,79,81,0,79,76, 77,0,72,76,77,0,76,72, 79,0,76,72,79,0,84,79, 74,0,79,71,74,0,79,0], chords: [[57, 60, 64, 67], [53, 57, 60, 64], [60, 64, 67, 71], [55, 59, 62, 65]], hat: true },
+  };
+  const hz = (m) => 440 * Math.pow(2, (m - 69) / 12);
+  const ctx = () => {
+    if (!ac) { ac = new (window.AudioContext || window.webkitAudioContext)(); master = ac.createGain(); master.gain.value = .55; master.connect(ac.destination); }
+    if (ac.state === "suspended") ac.resume();
+    return ac;
+  };
+  const tone = (f, t, d, type, v) => {
+    const o = ac.createOscillator(), g = ac.createGain(); o.type = type; o.frequency.value = f;
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(v, t + .02); g.gain.exponentialRampToValueAtTime(.0001, t + d);
+    o.connect(g).connect(master); o.start(t); o.stop(t + d + .05);
+  };
+  const noise = (t, d, v, hp) => {
+    const n = Math.floor(ac.sampleRate * d), b = ac.createBuffer(1, n, ac.sampleRate), x = b.getChannelData(0);
+    for (let i = 0; i < n; i++) x[i] = Math.random() * 2 - 1;
+    const s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain(); s.buffer = b; f.type = "highpass"; f.frequency.value = hp;
+    g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(.0001, t + d); s.connect(f).connect(g).connect(master); s.start(t);
+  };
+  const tick = () => {
+    if (!mood || !ac) return; const t = ac.currentTime + .05, ch = mood.chords[Math.floor(step / 8) % 4], s8 = step % 8;
+    if (s8 === 0) ch.forEach((m) => tone(hz(m - 12), t, 2.6, "triangle", .028));
+    const note = mood.mel[step % 32];
+    if (note) { tone(hz(note), t, .38, "triangle", .07); tone(hz(note) * 2, t, .2, "sine", .015); }
+    if (s8 === 0 || s8 === 4) tone(hz(ch[0] - 24), t, .5, "sine", .09);
+    if (s8 % 4 === 0) { const o = ac.createOscillator(), g = ac.createGain(); o.frequency.setValueAtTime(130, t); o.frequency.exponentialRampToValueAtTime(42, t + .14); g.gain.setValueAtTime(.16, t); g.gain.exponentialRampToValueAtTime(.0001, t + .18); o.connect(g).connect(master); o.start(t); o.stop(t + .2); }
+    if (mood.hat && s8 % 2 === 1) noise(t, .05, .03, 7000);
+    step++;
+  };
+  const muted = () => { try { return localStorage.getItem("gb_bro_mute") === "1"; } catch { return false; } };
+  return {
+    muted,
+    setMuted(m) { try { localStorage.setItem("gb_bro_mute", m ? "1" : "0"); } catch {} if (master) master.gain.value = m ? 0 : .55; if (m) window.speechSynthesis?.cancel(); },
+    start(name) { ctx(); master.gain.value = muted() ? 0 : .55; mood = MOODS[name] || MOODS.chill; step = 0; clearInterval(timer); tick(); timer = setInterval(tick, 60 / mood.bpm / 2 * 1000); },
+    stop() { clearInterval(timer); mood = null; window.speechSynthesis?.cancel(); },
+    sfx(kind) {
+      if (!ac || muted()) return; const t = ac.currentTime;
+      if (kind === "whoosh") { noise(t, .28, .05, 1800); } else if (kind === "pop") tone(620, t, .12, "sine", .08);
+      else if (kind === "spark") [0, 4, 7, 12].forEach((n, i) => tone(hz(84 + n), t + i * .07, .25, "triangle", .05));
+    },
+    speak(text) {
+      if (muted() || !window.speechSynthesis) return;
+      try {
+        speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text), vs = speechSynthesis.getVoices();
+        const v = vs.find((x) => /^en[-_](US|GB|NG|AU)/i.test(x.lang) && /natural|google|samantha|daniel|aaron/i.test(x.name)) || vs.find((x) => /^en/i.test(x.lang));
+        if (v) u.voice = v; u.rate = 1.03; u.pitch = .92; speechSynthesis.speak(u);
+      } catch {}
+    },
+  };
+})();
+
+let _broCur = null;
+const broStopAll = () => { _broCur?.stop(); _broCur = null; };
+
+function broPlayer(ep) {
+  const root = el("div", { class: `bro-player` });
+  const bars = el("div", { class: "bro-bars" }, ...ep.scenes.map(() => el("i", {}, el("b"))));
+  const art = el("div", { class: "bro-art" }), tt = el("div", { class: "bro-t" }), ss = el("div", { class: "bro-s" }), cap = el("div", { class: "bro-cap" });
+  const stage = el("div", { class: `bro-stage bg${ep.bg || 0} paused` }, bars, art, el("div", { class: "bro-txt" }, tt, ss), cap);
+  const snd = el("button", { class: "bro-snd", type: "button", title: "Sound", onclick: (e) => { e.stopPropagation(); BroSound.setMuted(!BroSound.muted()); paintSnd(); } });
+  const paintSnd = () => { snd.innerHTML = `<i class="${BroSound.muted() ? "ri-volume-mute-fill" : "ri-volume-up-fill"}"></i>`; };
+  const poster = el("button", { class: "bro-poster", type: "button", onclick: () => play() }, el("span", { class: "bro-play" }, el("i", { class: "ri-play-fill" })), el("small", {}, "Tap to play with music"));
+  stage.append(snd, poster); root.appendChild(stage); paintSnd();
+  let i = 0, playing = false, timer = 0, ended = false;
+  const dur = (sc) => sc.ms || Math.min(6800, Math.max(2800, (sc.say || "").length * 62 + 800));
+  const show = (k) => {
+    const sc = ep.scenes[k], key = (sc.art || "emoji").split(":")[0];
+    art.innerHTML = (BRO_ART[key] || BRO_ART.emoji)(sc);
+    tt.textContent = sc.t || ""; ss.textContent = sc.s || "";
+    [tt, ss, art].forEach((n) => { n.classList.remove("in"); void n.offsetWidth; n.classList.add("in"); });
+    const words = (sc.say || "").split(" "), d = dur(sc);
+    cap.innerHTML = ""; words.forEach((w, n) => cap.appendChild(el("span", { class: "w", style: `animation-delay:${Math.round(d * .82 / words.length * n)}ms` }, w + " ")));
+    [...bars.children].forEach((c, n) => { c.className = n < k ? "done" : ""; c.firstChild.style.removeProperty("--d"); });
+    if (playing) { void bars.offsetWidth; bars.children[k].firstChild.style.setProperty("--d", d + "ms"); bars.children[k].className = "run"; }
+  };
+  const next = () => {
+    if (i < ep.scenes.length - 1) { i++; go(); } else finish();
+  };
+  const go = () => {
+    const sc = ep.scenes[i]; show(i); BroSound.sfx("whoosh"); if (/lock/.test(sc.art)) setTimeout(() => BroSound.sfx("spark"), 1100);
+    timer = setTimeout(next, dur(sc));
+  };
+  const finish = () => {
+    playing = false; ended = true; BroSound.stop(); stage.classList.add("paused"); [...bars.children].forEach((c) => { c.className = "done"; });
+    poster.innerHTML = '<span class="bro-play"><i class="ri-replay-10-line"></i></span><small>Watch again</small>'; poster.hidden = false; if (_broCur === api) _broCur = null;
+  };
+  const play = () => {
+    broStopAll(); try { gb().stopAllAudio(); } catch {}
+    playing = true; ended = false; i = 0; poster.hidden = true; stage.classList.remove("paused"); BroSound.start(ep.mood); _broCur = api; go();
+  };
+  const stop = () => {
+    clearTimeout(timer); if (playing) { playing = false; BroSound.stop(); stage.classList.add("paused"); poster.innerHTML = '<span class="bro-play"><i class="ri-play-fill"></i></span><small>Tap to play with music</small>'; poster.hidden = false; }
+  };
+  const api = { el: root, play, stop };
+  show(0);
+  if ("IntersectionObserver" in window) new IntersectionObserver((en) => { if (!en[0].isIntersecting && playing) stop(); }, { threshold: .2 }).observe(root);
+  return api;
+}
+
+const broDay = (d = new Date()) => Math.floor((d.getTime() - d.getTimezoneOffset() * 60000) / 864e5);
+const broHourLabel = (h) => `${h % 12 || 12}:00 ${h < 12 ? "am" : "pm"}`;
+function broItems(days) {
+  const now = new Date(), today = broDay(now), out = [], N = BRO_EPS.length;
+  for (let dd = today; dd > today - days; dd--) for (let k = 0; k < 3; k++) {
+    if (dd === today && now.getHours() < BRO_HOURS[k]) continue;
+    out.push({ ep: BRO_EPS[(((dd * 3 + k) % N) + N) % N], day: dd, k, label: `${dd === today ? "Today" : dd === today - 1 ? "Yesterday" : `${today - dd} days ago`} · ${broHourLabel(BRO_HOURS[k])}` });
+  }
+  return out.sort((a, b) => b.day - a.day || b.k - a.k);
+}
+
+function broCard(it) {
+  const pl = broPlayer(it.ep);
+  const open = () => { location.hash = "#bro"; };
+  return el("article", { class: "gb-bro" },
+    el("div", { class: "gb-bro-h" },
+      el("button", { class: "gb-bro-av", type: "button", onclick: open }, el("img", { src: BRO_AVATAR, alt: "" })),
+      el("div", { class: "gb-bro-n", onclick: open }, el("b", {}, "Get better bro ", el("i", { class: "ri-verified-badge-fill" })), el("small", {}, `@getbetterbro · ${it.label}`))),
+    el("p", { class: "gb-bro-cap" }, it.ep.cap), pl.el);
+}
+
+function renderBro(root) {
+  const items = broItems(7);
+  const page = el("div", { class: "bro-page" },
+    el("div", { class: "bro-hero" },
+      el("img", { src: BRO_AVATAR, alt: "" }),
+      el("h2", {}, "Get better bro ", el("i", { class: "ri-verified-badge-fill" })),
+      el("small", {}, "@getbetterbro"),
+      el("p", {}, "Your friend in the app. Short stories, small tips and the occasional dad joke. Three new ones every day. 😎")));
+  let last = "";
+  items.forEach((it) => { const day = it.label.split(" · ")[0]; if (day !== last) { page.appendChild(el("h4", { class: "bro-day" }, day)); last = day; } page.appendChild(broCard(it)); });
+  root.appendChild(page);
+  return () => { broStopAll(); page.remove(); };
+}
+const broFeedNodes = () => broItems(2).slice(0, 3).map(broCard);
+
+
+// =========================================================================
+// 18. OFFLINE — service worker + network banner (Refresh / dismiss)
+// =========================================================================
+(function offlineSupport() {
+  if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+    window.addEventListener("load", async () => {
+      try {
+        const ready = await navigator.serviceWorker.ready;   // index.html registers /sw.js
+        const urls = performance.getEntriesByType("resource").map((r) => r.name).filter((u) => /^https?:/.test(u));
+        ready.active?.postMessage({ type: "cache-urls", urls });
+      } catch (e) { console.warn("SW", e); }
+    });
+  }
+
+  let bar = null, hideT = null, dismissed = false;
+  const make = () => {
+    bar = document.createElement("div");
+    bar.className = "gb-net"; bar.setAttribute("role", "status"); bar.setAttribute("aria-live", "polite");
+    bar.innerHTML = '<i class="ri-wifi-off-line gb-net-i"></i><span class="gb-net-t"></span>' +
+      '<button type="button" class="gb-net-b" data-a="refresh"><i class="ri-refresh-line"></i> Refresh</button>' +
+      '<button type="button" class="gb-net-x" data-a="close" aria-label="Dismiss"><i class="ri-close-line"></i></button>';
+    bar.addEventListener("click", async (e) => {
+      const a = e.target.closest("[data-a]")?.dataset.a; if (!a) return;
+      if (a === "close") { dismissed = true; hide(); return; }
+      const b = bar.querySelector(".gb-net-b"); b.classList.add("spin");
+      const ok = await ping(); b.classList.remove("spin");
+      if (ok) location.reload();
+      else { bar.classList.add("shake"); setTimeout(() => bar.classList.remove("shake"), 500); bar.querySelector(".gb-net-t").textContent = "Still offline. Saved content is available."; }
+    });
+    document.body.appendChild(bar);
+  };
+  const show = (offline) => {
+    if (!bar) make(); clearTimeout(hideT);
+    bar.classList.toggle("on-line", !offline);
+    bar.querySelector(".gb-net-i").className = (offline ? "ri-wifi-off-line" : "ri-wifi-line") + " gb-net-i";
+    bar.querySelector(".gb-net-t").textContent = offline ? "You're offline. Showing saved content." : "Back online";
+    bar.querySelector(".gb-net-b").hidden = !offline; bar.querySelector(".gb-net-x").hidden = !offline;
+    requestAnimationFrame(() => bar.classList.add("show"));
+    document.body.classList.add("gb-net-on");
+    if (!offline) hideT = setTimeout(hide, 2200);
+  };
+  const hide = () => { bar?.classList.remove("show"); document.body.classList.remove("gb-net-on"); };
+  const ping = async () => {
+    if (!navigator.onLine) return false;
+    try { const c = new AbortController(); const t = setTimeout(() => c.abort(), 4000);
+      const r = await fetch("/manifest.json?_=" + Date.now(), { cache: "no-store", signal: c.signal }); clearTimeout(t); return r.ok; }
+    catch { return false; }
+  };
+  window.addEventListener("offline", () => { dismissed = false; show(true); });
+  window.addEventListener("online", async () => { if (await ping()) show(false); });
+  document.addEventListener("visibilitychange", async () => {
+    if (document.visibilityState !== "visible") return;
+    if (!(await ping())) { if (!dismissed) show(true); } else if (bar?.classList.contains("show") && !bar.classList.contains("on-line")) show(false);
+  });
+  if (!navigator.onLine) window.addEventListener("DOMContentLoaded", () => show(true));
+})();
